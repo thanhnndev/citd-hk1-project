@@ -51,14 +51,78 @@ assert.match(localePage, /getTranslations\(['"]Landing['"]\)/, 'Locale page must
 assert.match(localePage, /notFound\(\)/, 'Locale page must reject invalid locales with notFound()');
 assert.match(localePage, /id=['"]hero['"]/, 'Temporary landing page must expose the hero section anchor');
 
-for (const locale of ['vi', 'en']) {
-  const messages = JSON.parse(readFileSync(path.join(projectRoot, `messages/${locale}.json`), 'utf8'));
+const requiredLandingSections = [
+  'hero',
+  'problem',
+  'solution',
+  'responsibleAI',
+  'algorithmShowcase',
+  'techStack',
+  'demo'
+];
+
+function describeShape(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => describeShape(item));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, describeShape(value[key])])
+    );
+  }
+
+  return typeof value;
+}
+
+function getPath(value, keyPath) {
+  return keyPath.split('.').reduce((current, segment) => current?.[segment], value);
+}
+
+const landingMessages = Object.fromEntries(
+  ['vi', 'en'].map((locale) => [
+    locale,
+    JSON.parse(readFileSync(path.join(projectRoot, `messages/${locale}.json`), 'utf8')).Landing
+  ])
+);
+
+for (const [locale, landing] of Object.entries(landingMessages)) {
+  assert.ok(landing && typeof landing === 'object' && !Array.isArray(landing), `${locale} Landing must be an object`);
+  assert.deepEqual(Object.keys(landing).sort(), requiredLandingSections.toSorted(), `${locale} Landing must expose exactly the seven required sections`);
+
   for (const key of ['hero.title', 'hero.description', 'hero.ctaExplore', 'hero.ctaArchitecture']) {
-    const value = key.split('.').reduce((current, segment) => current?.[segment], messages.Landing);
+    const value = getPath(landing, key);
     assert.equal(typeof value, 'string', `${locale} Landing.${key} must be a string`);
     assert.ok(value.length > 0, `${locale} Landing.${key} must not be empty`);
   }
+
+  const axes = getPath(landing, 'responsibleAI.axes');
+  assert.ok(Array.isArray(axes), `${locale} Landing.responsibleAI.axes must be an array`);
+  assert.equal(axes.length, 5, `${locale} Landing.responsibleAI.axes must include the five Responsible AI axes`);
+  assert.deepEqual(
+    axes.map((axis) => axis.id),
+    ['reliability', 'fairness', 'robustness', 'socialImpact', 'explainability'],
+    `${locale} Landing.responsibleAI.axes must preserve the required axis IDs`
+  );
+
+  const bars = getPath(landing, 'algorithmShowcase.chart.bars');
+  assert.ok(Array.isArray(bars), `${locale} Landing.algorithmShowcase.chart.bars must be an array`);
+  assert.ok(bars.length >= 3, `${locale} Landing.algorithmShowcase.chart.bars must describe algorithm bar data`);
+  for (const bar of bars) {
+    assert.equal(typeof bar.key, 'string', `${locale} algorithm bar key must be a string`);
+    assert.equal(typeof bar.label, 'string', `${locale} algorithm bar label must be a string`);
+    assert.equal(typeof bar.description, 'string', `${locale} algorithm bar description must be accessible copy`);
+    assert.equal(typeof bar.value, 'number', `${locale} algorithm bar value must be numeric`);
+  }
 }
+
+assert.deepEqual(
+  describeShape(landingMessages.vi),
+  describeShape(landingMessages.en),
+  'Vietnamese and English Landing catalogs must have matching recursive structure'
+);
 
 function walk(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

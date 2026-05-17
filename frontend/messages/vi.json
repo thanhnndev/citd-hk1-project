@@ -1,37 +1,212 @@
 {
   "Landing": {
     "hero": {
+      "eyebrow": "Du lịch bền vững cho làng chài Hàm Ninh",
       "title": "Hàm Ninh AI Guide — Bảo tồn Di sản. Hỗ trợ Du lịch. Công bằng cho Ngư dân.",
-      "description": "Hệ thống Multi-Agent AI đầu tiên kết hợp RAG bảo tồn văn hóa và Ensemble Re-ranking bảo vệ sinh kế tiểu thương làng chài Hàm Ninh, Phú Quốc.",
+      "description": "Hệ thống Multi-Agent AI kết hợp RAG bảo tồn văn hóa và Ensemble Re-ranking để hỗ trợ sinh kế địa phương tại làng chài Hàm Ninh, Phú Quốc.",
       "ctaExplore": "Khám phá ngay",
-      "ctaArchitecture": "Xem kiến trúc"
+      "ctaArchitecture": "Xem kiến trúc",
+      "trustBadges": [
+        {
+          "label": "RAG có trích dẫn",
+          "description": "Ưu tiên nguồn văn hóa địa phương có thể kiểm chứng."
+        },
+        {
+          "label": "Re-ranking công bằng",
+          "description": "Đưa nhân tố địa phương vào thứ hạng gợi ý."
+        },
+        {
+          "label": "Hai ngôn ngữ",
+          "description": "Nội dung tiếng Việt và tiếng Anh có cùng cấu trúc."
+        }
+      ]
     },
     "problem": {
-      "title": "Thách thức",
-      "overtourism": "Over-tourism & xói mòn văn hóa",
-      "bias": "Thiên vị kinh tế của nền tảng lớn",
-      "heritage": "Thiếu thông tin di sản địa phương chính xác"
+      "eyebrow": "Bối cảnh",
+      "heading": "Du lịch tăng trưởng nhanh nhưng giá trị địa phương dễ bị bỏ lại",
+      "body": "Khi nền tảng lớn ưu tiên độ phổ biến, câu chuyện văn hóa và sinh kế tiểu thương Hàm Ninh cần một lớp giới thiệu công bằng hơn.",
+      "cards": [
+        {
+          "title": "Over-tourism & xói mòn văn hóa",
+          "description": "Thông tin rời rạc có thể làm du khách chỉ thấy điểm check-in mà bỏ qua lịch sử làng chài.",
+          "metric": "Di sản cần ngữ cảnh"
+        },
+        {
+          "title": "Thiên vị kinh tế nền tảng",
+          "description": "Cơ sở có nhiều review hoặc ngân sách marketing thường nổi bật hơn hộ kinh doanh bản địa.",
+          "metric": "Cần cân bằng top-k"
+        },
+        {
+          "title": "Thiếu nguồn địa phương chính xác",
+          "description": "Câu trả lời về văn hóa cần dựa trên tài liệu và trích dẫn, không chỉ suy đoán của mô hình.",
+          "metric": "RAG + citation"
+        }
+      ]
     },
     "solution": {
-      "title": "Giải pháp",
-      "ragAgent": "RAG Agent — Local Guide",
-      "mapsAgent": "Maps & Service Agent — Concierge",
-      "reranker": "Ensemble Re-ranker — Fairness Engine"
+      "eyebrow": "Giải pháp",
+      "heading": "Một hệ thống nhiều agent kết nối văn hóa, bản đồ và công bằng thuật toán",
+      "body": "Landing page giới thiệu kiến trúc mục tiêu: RAG cho tri thức địa phương, Maps Agent cho dữ liệu địa điểm, và Ensemble Re-ranker cho thứ hạng có trách nhiệm.",
+      "pillars": [
+        {
+          "title": "RAG Agent — Local Guide",
+          "description": "Trả lời câu hỏi văn hóa, lịch sử và ẩm thực bằng nguồn được truy xuất."
+        },
+        {
+          "title": "Maps & Service Agent — Concierge",
+          "description": "Dự kiến kết nối Places API để tìm địa điểm, tuyến đường và thông tin tiếp cận."
+        },
+        {
+          "title": "Ensemble Re-ranker — Fairness Engine",
+          "description": "Kết hợp Random Forest và Gradient Boosting để cân bằng chất lượng, khoảng cách và local_factor."
+        }
+      ]
     },
     "responsibleAI": {
-      "title": "AI có Trách nhiệm — 5 Trục",
-      "reliability": "Độ tin cậy",
-      "fairness": "Công bằng & Xử lý thiên vị",
-      "robustness": "Khả năng chịu lỗi",
-      "socialImpact": "Tác động xã hội",
-      "explainability": "Tính minh bạch"
+      "eyebrow": "AI có trách nhiệm",
+      "heading": "Năm trục kiểm soát từ dữ liệu đến trải nghiệm người dùng",
+      "body": "Mỗi trục gắn với một chỉ số hoặc cơ chế kiểm chứng để giảm rủi ro khi hệ thống chat và bản đồ được triển khai ở các slice sau.",
+      "axes": [
+        {
+          "id": "reliability",
+          "title": "Độ tin cậy",
+          "description": "Câu trả lời văn hóa phải bám nguồn truy xuất và có citation.",
+          "metric": "Faithfulness mục tiêu ≥ 0.85"
+        },
+        {
+          "id": "fairness",
+          "title": "Công bằng & xử lý thiên vị",
+          "description": "Thứ hạng địa điểm xét đến local_factor để hỗ trợ cơ sở bản địa.",
+          "metric": "Local business top-5 ≥ 40%"
+        },
+        {
+          "id": "robustness",
+          "title": "Khả năng chịu lỗi",
+          "description": "Guardrails, topic filter và fallback giúp hệ thống không phụ thuộc một điểm lỗi.",
+          "metric": "Circuit breaker đúng điều kiện"
+        },
+        {
+          "id": "socialImpact",
+          "title": "Tác động xã hội",
+          "description": "Ưu tiên sinh kế tiểu thương, người cao tuổi và khả năng tiếp cận.",
+          "metric": "Metadata địa phương phủ ≥ 80%"
+        },
+        {
+          "id": "explainability",
+          "title": "Tính minh bạch",
+          "description": "Reasoning log, citation và score breakdown giúp người dùng hiểu gợi ý.",
+          "metric": "100% phản hồi có trace mục tiêu"
+        }
+      ]
+    },
+    "algorithmShowcase": {
+      "eyebrow": "Thuật toán",
+      "heading": "Ensemble Re-ranking biến dữ liệu địa điểm thành thứ hạng công bằng hơn",
+      "body": "Minh họa cách Decision Tree phát triển thành Random Forest (bagging), Gradient Boosting (boosting), rồi hợp nhất thành Final Score.",
+      "chart": {
+        "title": "Đóng góp minh họa vào Final Score",
+        "ariaLabel": "Biểu đồ cột minh họa đóng góp của local factor, rating và distance vào điểm cuối.",
+        "description": "Dữ liệu bên dưới là ví dụ giải thích giao diện, không phải kết quả Places API trực tiếp.",
+        "bars": [
+          {
+            "key": "local_factor",
+            "label": "Nhân tố địa phương",
+            "value": 0.42,
+            "description": "Mức độ cơ sở gắn với hộ kinh doanh và nghề truyền thống địa phương."
+          },
+          {
+            "key": "rating",
+            "label": "Đánh giá",
+            "value": 0.33,
+            "description": "Chất lượng cảm nhận từ rating và tín hiệu review đã chuẩn hóa."
+          },
+          {
+            "key": "distance",
+            "label": "Khoảng cách",
+            "value": 0.25,
+            "description": "Độ thuận tiện di chuyển từ vị trí hoặc tuyến tham quan của người dùng."
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Decision Tree",
+          "description": "Học các ngưỡng đơn giản trên rating, khoảng cách và local_factor."
+        },
+        {
+          "title": "Random Forest",
+          "description": "Bagging nhiều cây để giảm variance khi dữ liệu địa điểm nhiễu."
+        },
+        {
+          "title": "Gradient Boosting",
+          "description": "Học tuần tự phần sai lệch còn lại để giảm bias của thứ hạng."
+        },
+        {
+          "title": "Ensemble Score",
+          "description": "Kết hợp 0.6 × RF và 0.4 × GBM thành final_score có giải thích."
+        }
+      ]
     },
     "techStack": {
-      "title": "Công nghệ"
+      "eyebrow": "Công nghệ",
+      "heading": "Stack học thuật nhưng hướng tới vận hành thực tế",
+      "body": "Các thành phần được chọn để hỗ trợ i18n, truy xuất tri thức, agent orchestration, đánh giá RAG và quan sát hệ thống.",
+      "items": [
+        {
+          "name": "Next.js 16",
+          "description": "Frontend App Router, locale routes và landing page responsive."
+        },
+        {
+          "name": "FastAPI",
+          "description": "API gateway cho chat, SSE và health checks."
+        },
+        {
+          "name": "LangGraph",
+          "description": "Điều phối supervisor và worker agents có checkpoint."
+        },
+        {
+          "name": "Qdrant",
+          "description": "Vector database cho RAG văn hóa Hàm Ninh."
+        },
+        {
+          "name": "Google Maps Platform",
+          "description": "Nguồn dữ liệu địa điểm và tuyến đường trong các slice sau."
+        },
+        {
+          "name": "scikit-learn",
+          "description": "Random Forest và Gradient Boosting cho re-ranking."
+        },
+        {
+          "name": "RAGAS",
+          "description": "Đánh giá faithfulness, relevance và context recall."
+        },
+        {
+          "name": "Langfuse",
+          "description": "Trace, latency và chi phí cho luồng agent."
+        }
+      ]
     },
     "demo": {
-      "title": "Trải nghiệm Demo",
-      "cta": "Trải nghiệm ngay"
+      "eyebrow": "Demo",
+      "heading": "Khung trải nghiệm đang được mở dần theo từng slice",
+      "body": "Ở slice hiện tại, landing page mô tả năng lực mục tiêu. Chat, bản đồ và trang kiến trúc sẽ được nối chức năng thật ở các slice tiếp theo.",
+      "primaryCta": "Xem khung demo",
+      "secondaryCta": "Đọc kiến trúc",
+      "note": "Các CTA có thể dẫn tới trang khung hoặc nội dung đang phát triển; không ngụ ý chat/map đã hoạt động đầy đủ trước S03.",
+      "items": [
+        {
+          "title": "Chat có citation",
+          "description": "Dự kiến hiển thị câu trả lời RAG kèm nguồn và reasoning log."
+        },
+        {
+          "title": "Bản đồ có re-ranking",
+          "description": "Dự kiến hiển thị địa điểm từ Places API sau khi tính score công bằng."
+        },
+        {
+          "title": "Kiến trúc minh bạch",
+          "description": "Dự kiến giải thích supervisor, agents, guardrails và observability."
+        }
+      ]
     }
   },
   "Chat": {
