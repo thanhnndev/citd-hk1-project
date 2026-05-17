@@ -1,0 +1,58 @@
+{
+  "Landing": {
+    "hero": {
+      "title": "Ham Ninh AI Guide — Preserve Heritage. Support Tourism. Fairness for Fishermen.",
+      "description": "The first Multi-Agent AI system combining cultural preservation RAG and Ensemble Re-ranking to protect local livelihoods in Ham Ninh fishing village, Phu Quoc.",
+      "ctaExplore": "Explore Now",
+      "ctaArchitecture": "View Architecture"
+    },
+    "problem": {
+      "title": "Challenges",
+      "overtourism": "Over-tourism & cultural erosion",
+      "bias": "Economic bias of major platforms",
+      "heritage": "Lack of accurate local heritage information"
+    },
+    "solution": {
+      "title": "Solution",
+      "ragAgent": "RAG Agent — Local Guide",
+      "mapsAgent": "Maps & Service Agent — Concierge",
+      "reranker": "Ensemble Re-ranker — Fairness Engine"
+    },
+    "responsibleAI": {
+      "title": "Responsible AI — 5 Axes",
+      "reliability": "Reliability",
+      "fairness": "Bias & Fairness",
+      "robustness": "Robustness",
+      "socialImpact": "Social Impact",
+      "explainability": "Explainability"
+    },
+    "techStack": {
+      "title": "Tech Stack"
+    },
+    "demo": {
+      "title": "Try the Demo",
+      "cta": "Try it Now"
+    }
+  },
+  "Chat": {
+    "title": "Chat with AI Guide",
+    "placeholder": "Ask about Ham Ninh...",
+    "send": "Send",
+    "reasoningLog": "Why this suggestion?",
+    "citations": "Sources",
+    "scoreBreakdown": "Score Breakdown"
+  },
+  "Map": {
+    "title": "Ham Ninh Map",
+    "searchPlaceholder": "Search places..."
+  },
+  "Architecture": {
+    "title": "System Architecture"
+  },
+  "Common": {
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "back": "Back",
+    "close": "Close"
+  }
+}

@@ -1,0 +1,40 @@
+# Version control
+.git
+.gitignore
+
+# GSD agent state (never ship to containers)
+.gsd
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist
+build
+.venv
+venv
+
+# Node
+node_modules
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+compose.yaml
+Dockerfile
+.dockerignore

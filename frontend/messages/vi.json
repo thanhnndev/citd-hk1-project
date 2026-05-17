@@ -1,0 +1,58 @@
+{
+  "Landing": {
+    "hero": {
+      "title": "Hàm Ninh AI Guide — Bảo tồn Di sản. Hỗ trợ Du lịch. Công bằng cho Ngư dân.",
+      "description": "Hệ thống Multi-Agent AI đầu tiên kết hợp RAG bảo tồn văn hóa và Ensemble Re-ranking bảo vệ sinh kế tiểu thương làng chài Hàm Ninh, Phú Quốc.",
+      "ctaExplore": "Khám phá ngay",
+      "ctaArchitecture": "Xem kiến trúc"
+    },
+    "problem": {
+      "title": "Thách thức",
+      "overtourism": "Over-tourism & xói mòn văn hóa",
+      "bias": "Thiên vị kinh tế của nền tảng lớn",
+      "heritage": "Thiếu thông tin di sản địa phương chính xác"
+    },
+    "solution": {
+      "title": "Giải pháp",
+      "ragAgent": "RAG Agent — Local Guide",
+      "mapsAgent": "Maps & Service Agent — Concierge",
+      "reranker": "Ensemble Re-ranker — Fairness Engine"
+    },
+    "responsibleAI": {
+      "title": "AI có Trách nhiệm — 5 Trục",
+      "reliability": "Độ tin cậy",
+      "fairness": "Công bằng & Xử lý thiên vị",
+      "robustness": "Khả năng chịu lỗi",
+      "socialImpact": "Tác động xã hội",
+      "explainability": "Tính minh bạch"
+    },
+    "techStack": {
+      "title": "Công nghệ"
+    },
+    "demo": {
+      "title": "Trải nghiệm Demo",
+      "cta": "Trải nghiệm ngay"
+    }
+  },
+  "Chat": {
+    "title": "Trò chuyện với AI Guide",
+    "placeholder": "Nhập câu hỏi về Hàm Ninh...",
+    "send": "Gửi",
+    "reasoningLog": "Tại sao gợi ý này?",
+    "citations": "Nguồn tham khảo",
+    "scoreBreakdown": "Chi tiết điểm số"
+  },
+  "Map": {
+    "title": "Bản đồ Hàm Ninh",
+    "searchPlaceholder": "Tìm địa điểm..."
+  },
+  "Architecture": {
+    "title": "Kiến trúc hệ thống"
+  },
+  "Common": {
+    "loading": "Đang tải...",
+    "error": "Có lỗi xảy ra",
+    "back": "Quay lại",
+    "close": "Đóng"
+  }
+}

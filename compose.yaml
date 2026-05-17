@@ -1,0 +1,101 @@
+# Docker Compose — Ham Ninh AI
+# Canonical filename for Docker Compose v2 (no version field)
+# Infrastructure services with health checks for S02/S03 orchestration.
+
+name: ham-ninh-ai
+
+services:
+  # ── PostgreSQL 18 — Primary relational database ──────────────────────────
+  postgres:
+    image: postgres:18
+    container_name: ham-ninh-postgres
+    ports:
+      - "${HN_POSTGRES_HOST_PORT:-47543}:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ham_ninh
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ham_ninh
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ham_ninh -d ham_ninh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  # ── Redis 8.0 — Semantic cache (ephemeral, no volume) ────────────────────
+  redis:
+    image: redis:8.0
+    container_name: ham-ninh-redis
+    ports:
+      - "${HN_REDIS_HOST_PORT:-47379}:6379"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  # ── Qdrant v1.13.6 — Vector database for RAG embeddings ──────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    container_name: ham-ninh-qdrant
+    ports:
+      - "${HN_QDRANT_REST_HOST_PORT:-46333}:6333"
+      - "${HN_QDRANT_GRPC_HOST_PORT:-46334}:6334"
+    env_file:
+      - .env
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  # ── FastAPI Backend — Application layer ───────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    container_name: ham-ninh-backend
+    ports:
+      - "${HN_BACKEND_HOST_PORT:-48721}:8000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: no
+    networks:
+      - ham_ninh
+
+networks:
+  ham_ninh:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_data:

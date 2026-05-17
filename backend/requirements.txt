@@ -1,0 +1,24 @@
+# Backend Module — Python Dependencies
+# Ham Ninh Sustainable Tourism AI Assistant
+# Python 3.12 recommended
+
+# API Framework
+fastapi==0.136.1
+uvicorn==0.47.0
+
+# Database
+asyncpg==0.31.0
+alembic==1.18.4
+
+# Cache & Session
+redis==7.4.0
+
+# Logging
+structlog==25.5.0
+
+# Rate Limiting
+slowapi==0.1.9
+
+# Schema Validation
+pydantic==2.13.4
+pydantic-settings
