@@ -126,30 +126,37 @@ ham-ninh-ai/
 │   └── DEPLOYMENT.md
 │
 ├── frontend/                        # Next.js 16.2.6 LTS
+│   ├── messages/                    # next-intl message catalogs (KHÔNG đặt trong src/i18n/)
+│   │   ├── vi.json
+│   │   └── en.json
 │   ├── src/
-│   │   ├── app/                     # App Router
-│   │   │   ├── (landing)/           # Route group: Landing Page
-│   │   │   ├── (chat)/              # Route group: Chat Interface
-│   │   │   ├── (map)/               # Route group: Interactive Map
-│   │   │   ├── architecture/        # Kiến trúc hệ thống
-│   │   │   └── api/                 # Route Handlers (proxy → backend)
+│   │   ├── i18n/
+│   │   │   ├── routing.ts           # defineRouting({ locales, defaultLocale, localePrefix })
+│   │   │   └── request.ts           # getRequestConfig — load messages theo locale
+│   │   ├── app/
+│   │   │   ├── [locale]/            # Bắt buộc: mọi page UI nằm dưới dynamic segment locale
+│   │   │   │   ├── layout.tsx       # NextIntlClientProvider + setRequestLocale
+│   │   │   │   ├── page.tsx         # Landing Page (/)
+│   │   │   │   ├── chat/            # /chat
+│   │   │   │   ├── map/             # /map
+│   │   │   │   └── architecture/    # /architecture
+│   │   │   └── api/                 # Route Handlers (ngoài [locale], không qua i18n middleware)
 │   │   ├── components/
 │   │   │   ├── landing/             # HeroSection, ProblemCard, AlgorithmShowcase
 │   │   │   ├── chat/                # ChatWindow, MessageBubble, StreamingText
 │   │   │   ├── map/                 # MapViewer (Google Maps JS SDK)
 │   │   │   ├── reasoning/           # ReasoningLog, CitationCard, ScoreBreakdown
 │   │   │   └── ui/                  # Shared components
-│   │   ├── lib/
-│   │   │   ├── api-client.ts
-│   │   │   ├── sse-stream.ts
-│   │   │   └── types.ts
-│   │   └── i18n/                    # next-intl locales (vi, en)
-│   ├── proxy.ts                     # Next.js 16: network boundary (thay middleware.ts)
-│   ├── next.config.ts
+│   │   └── lib/
+│   │       ├── api-client.ts
+│   │       ├── sse-stream.ts
+│   │       └── types.ts
+│   ├── proxy.ts                     # createMiddleware(routing) — Next.js 16 network boundary
+│   ├── next.config.ts               # createNextIntlPlugin() bọc nextConfig
 │   ├── package.json
 │   └── tsconfig.json
 │
-├── agents/                          # LangGraph 1.1.10 — Multi-Agent Orchestration
+├── agents/                          # LangGraph 1.2.0 — Multi-Agent Orchestration
 │   ├── graph/
 │   │   ├── supervisor.py            # Supervisor Agent + StateGraph
 │   │   ├── rag_agent.py             # RAG Agent (Local Guide Worker)
@@ -176,7 +183,7 @@ ham-ninh-ai/
 │   │   ├── ragas_eval.py            # RAGAS 0.4.3 evaluation
 │   │   └── test_datasets/           # Golden Q&A datasets
 │   ├── checkpointer/
-│   │   └── postgres_saver.py        # LangGraph PostgresSaver
+│   │   └── postgres_saver.py        # AsyncPostgresSaver (langgraph-checkpoint-postgres 3.1.0)
 │   └── requirements.txt
 │
 └── backend/                         # FastAPI 0.136.1 — API Gateway
@@ -200,7 +207,7 @@ ham-ninh-ai/
     │   └── core/
     │       ├── config.py            # Pydantic BaseSettings
     │       └── logging.py           # structlog
-    ├── migrations/                  # Alembic (PostgreSQL 17)
+    ├── migrations/                  # Alembic (PostgreSQL 18)
     ├── tests/
     ├── Dockerfile
     ├── docker-compose.yml
@@ -215,53 +222,62 @@ ham-ninh-ai/
 
 | Package | Phiên bản | Ghi chú |
 |---|---|---|
-| **Next.js** | `16.2.6 LTS` | Latest stable May 2026. Turbopack default (dev + prod). `proxy.ts` thay `middleware.ts`. Cache Components (PPR stable). Agent DevTools experimental (16.2+) |
-| **React** | `19.x` | Bundled với Next.js 16 |
-| **TypeScript** | `5.x` | Strict mode bắt buộc |
-| **Tailwind CSS** | `4.x` | Utility-first, JIT |
-| **Vercel AI SDK** | `4.x` | SSE streaming, `useChat` hook |
-| **next-intl** | `3.x` | i18n (vi / en) |
+| **Next.js** | `16.2.6` | Latest stable (npm, May 2026). Turbopack default. `proxy.ts` thay `middleware.ts`. Cache Components (PPR stable). Agent DevTools experimental (16.2+) |
+| **React** | `19.2.6` | Bundled với Next.js 16 |
+| **TypeScript** | `6.0.3` | Strict mode bắt buộc |
+| **Tailwind CSS** | `4.3.0` | Utility-first, JIT |
+| **Vercel AI SDK** | `6.0.184` | SSE streaming, `useChat` / `@ai-sdk/react` |
+| **next-intl** | `4.12.0` | i18n (vi / en). App Router: `[locale]` segment + `messages/` + `i18n/routing.ts` + `i18n/request.ts` |
 | **Google Maps JS SDK** | `weekly` channel | `@googlemaps/js-api-loader` |
 
 > **Next.js 16 breaking changes cần lưu ý:**
-> - `middleware.ts` deprecated → dùng `proxy.ts` ở root để định nghĩa network boundary
+> - `middleware.ts` deprecated → dùng `proxy.ts` ở root (runtime `nodejs`, không hỗ trợ Edge). Nếu cần Edge cho i18n, giữ `middleware.ts` tạm thời cho đến khi next-intl hỗ trợ đầy đủ `proxy.ts`
 > - Cache phải explicit: dùng `use cache` directive hoặc Cache Components
 > - `experimental.ppr` flag bị xóa hoàn toàn — dùng Cache Components configuration
+>
+> **next-intl 4.x (Context7 / amannn/next-intl):**
+> - Message files: `messages/{locale}.json` (root), **không** `src/i18n/vi.json`
+> - Routing config: `src/i18n/routing.ts` (`defineRouting`)
+> - Request config: `src/i18n/request.ts` (`getRequestConfig`)
+> - Pages: `src/app/[locale]/...` — route groups `(landing)` đặt **bên trong** `[locale]`
+> - `proxy.ts`: `createMiddleware(routing)` + matcher loại trừ `/api`, `/_next`, static files
+> - `next.config.ts`: `createNextIntlPlugin()` (mặc định trỏ `src/i18n/request.ts`)
 
 ### 4.2 Agents
 
 | Package | Phiên bản | Ghi chú |
 |---|---|---|
 | **Python** | `3.12` | Khuyến nghị; scikit-learn 1.8.0 hỗ trợ 3.11–3.14 |
-| **langgraph** | `1.1.10` | GA v1.0 (Oct 2025). Durable state, per-node timeout, `DeltaChannel` (beta), type-safe streaming v2 |
-| **langchain-core** | `1.2.x` | Base abstractions |
-| **qdrant-client** | `1.13.x` | Python SDK tương thích Qdrant server v1.13.x |
-| **semantic-router** | `0.1.x` | Intent routing bằng cosine similarity |
+| **langgraph** | `1.2.0` | PyPI latest. Durable state, `task`/`entrypoint` timeout + `TimeoutPolicy`, `NodeTimeoutError`, `DeltaChannel` (beta) |
+| **langgraph-checkpoint-postgres** | `3.1.0` | `PostgresSaver` / `AsyncPostgresSaver` — tách package riêng, gọi `.setup()` trước compile |
+| **langchain-core** | `1.4.0` | Base abstractions |
+| **qdrant-client** | `1.18.0` | Python SDK; tương thích Qdrant server v1.13.x+ |
+| **semantic-router** | `0.0.20` | Intent routing bằng cosine similarity |
 | **scikit-learn** | `1.8.0` | Dec 2025. Free-threaded CPython support. `RandomForestRegressor`, `GradientBoostingRegressor` |
 | **ragas** | `0.4.3` | Jan 2026. Metrics: Faithfulness, Answer Relevance, Context Recall, Context Precision |
-| **nemoguardrails** | `0.10+` | Input/Output Guardrails |
+| **nemoguardrails** | `0.17.0` | Input/Output Guardrails |
 | **langfuse** | `4.6.1` | May 2026. SDK v4 (full rewrite Mar 2026). Traces, cost, latency |
-| **google-maps-places** | `0.6.0` | Jan 2026. Python client cho Places API (New) v1 |
+| **google-maps-places** | `0.8.0` | Python client cho Places API (New) v1 |
 
 ### 4.3 Backend
 
 | Package | Phiên bản | Ghi chú |
 |---|---|---|
 | **FastAPI** | `0.136.1` | Latest May 2026. Async-first, SSE native, Pydantic v2 |
-| **Pydantic** | `v2.x` | Schema validation, BaseSettings |
-| **Uvicorn** | `0.34+` | ASGI server |
-| **asyncpg** | `0.30+` | Async PostgreSQL driver |
-| **redis** (redis-py) | `7.1.0` | Feb 2026. Async support, semantic caching |
-| **structlog** | `24.x` | Structured logging |
-| **slowapi** | `0.1.x` | Rate limiting middleware |
-| **alembic** | `1.14+` | Database migrations |
+| **Uvicorn** | `0.47.0` | ASGI server |
+| **asyncpg** | `0.31.0` | Async PostgreSQL driver |
+| **redis** (redis-py) | `7.4.0` | Async support, semantic caching |
+| **structlog** | `25.5.0` | Structured logging |
+| **slowapi** | `0.1.9` | Rate limiting middleware |
+| **alembic** | `1.18.4` | Database migrations |
+| **Pydantic** | `2.13.4` | Schema validation, BaseSettings |
 
 ### 4.4 Infrastructure
 
 | Service | Version / Image | Vai trò |
 |---|---|---|
 | **Qdrant** | `v1.13.6` (Docker: `qdrant/qdrant:v1.13.6`) | Vector database. Gridstore storage engine (RocksDB deprecated từ v1.17). HNSW index. REST + gRPC |
-| **PostgreSQL** | `17` | Relational data + LangGraph checkpointing (PostgresSaver) |
+| **PostgreSQL** | `18` (`postgres:18`, patch `18.3` Feb 2026) | Relational data + LangGraph checkpointing (`langgraph-checkpoint-postgres` 3.1.0) |
 | **Redis Open Source** | `8.0` | Tích hợp native Redis Search, JSON, time series. Semantic cache, rate limit, session |
 | **Docker Compose** | `v2.x` | Container orchestration local / staging |
 
@@ -297,7 +313,7 @@ graph TD
     QD["Qdrant v1.13.6\nVector DB\nHNSW + Gridstore"]
     PA["Places API New v1\nplaces.googleapis.com"]
     RT["Routes API v2\nroutes.googleapis.com"]
-    PG["PostgreSQL 17\nRelational + Checkpoint"]
+    PG["PostgreSQL 18\nRelational + Checkpoint"]
     RD["Redis 8.0\nSemantic Cache"]
 
     User -->|HTTPS / SSE| FE
@@ -344,7 +360,7 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    subgraph Graph["LangGraph 1.1.10 — StateGraph"]
+    subgraph Graph["LangGraph 1.2.0 — StateGraph"]
         direction TB
         N1["input_guardrails"]
         N2["semantic_router"]
@@ -594,8 +610,8 @@ flowchart TD
 | ROB-02 | **Topic Filter:** Từ chối query ngoài phạm vi du lịch / văn hóa Hàm Ninh | Precision ≥ 0.95 trên off-topic test set |
 | ROB-03 | **Output Grounding Check:** Maps Agent không trả địa điểm ngoài Places API response | 0% hallucinated locations |
 | ROB-04 | **Circuit Breaker:** Places API timeout > 3s hoặc 3 lỗi liên tiếp → fallback SQLite | Activation 100% đúng điều kiện |
-| ROB-05 | **Durable State (PostgresSaver):** LangGraph checkpoint PostgreSQL 17, phục hồi sau server restart | Recovery test pass 100% |
-| ROB-06 | **Per-node timeout** (LangGraph 1.1+): Maps Agent node timeout 10s; `NodeTimeoutError` → thông báo thân thiện | P99 latency < 8s |
+| ROB-05 | **Durable State (PostgresSaver):** LangGraph checkpoint PostgreSQL 18 (`langgraph-checkpoint-postgres` 3.1.0), phục hồi sau server restart | Recovery test pass 100% |
+| ROB-06 | **Per-node timeout** (LangGraph 1.2+): Maps Agent node timeout 10s; `NodeTimeoutError` → thông báo thân thiện | P99 latency < 8s |
 
 ### 8.4 Trục 4 — Social Impact (Tác động xã hội)
 
@@ -625,16 +641,19 @@ flowchart TD
 
 ## 9. Đặc tả Module Frontend (Next.js 16)
 
-### 9.1 Route Structure (App Router)
+### 9.1 Route Structure (App Router + next-intl 4.x)
+
+URL thực tế có prefix locale (mặc định `localePrefix: 'as-needed'` → locale `vi` có thể không có prefix):
 
 ```mermaid
 graph TD
-    Root["/\nApp Router"]
-    Root --> Landing["/ (Landing Page)\nHeroSection · ProblemCards\nAlgorithmShowcase · TechStack · Demo CTA"]
-    Root --> Chat["/chat\nChatWindow · MapViewer\nReasoningLog · CitationCard · ScoreBreakdown"]
-    Root --> Map["/map\nFull-screen MapViewer · PlaceList"]
-    Root --> Arch["/architecture\nMermaid diagram · Tech stack detail"]
-    Root --> API["/api/...\nRoute Handlers\nproxy → FastAPI backend"]
+    Root["src/app"]
+    Root --> Locale["[locale]/"]
+    Locale --> Landing["/ hoặc /vi\nLanding Page"]
+    Locale --> Chat["/chat\nChatWindow · MapViewer"]
+    Locale --> Map["/map\nMapViewer · PlaceList"]
+    Locale --> Arch["/architecture"]
+    Root --> API["api/\nRoute Handlers → FastAPI\nkhông qua i18n middleware"]
 ```
 
 ### 9.2 Core Components
@@ -654,7 +673,7 @@ graph TD
 
 ### 9.3 Next.js 16 Specific
 
-**`proxy.ts`** (root level): định nghĩa network boundary, proxy `/api/chat` → `backend:8000/chat`.
+**`proxy.ts`** (root level): `createMiddleware(routing)` cho locale detection/redirect; có thể kết hợp rewrite `/api/chat` → `backend:8000/chat` trong cùng file hoặc Route Handler riêng.
 
 **Cache strategy:**
 - `HeroSection`, `AlgorithmShowcase`, `ResponsibleAIGrid` → `use cache` directive (statically cached)
@@ -664,14 +683,48 @@ graph TD
 
 **`agentDevTools`** (experimental 16.2+): AI agents đọc React DevTools và Next.js diagnostics trong dev mode — hữu ích khi debug SSE streaming.
 
-### 9.4 i18n
+### 9.4 i18n (next-intl 4.12.0)
 
-| Locale | File |
-|---|---|
-| `vi` (default) | `src/i18n/vi.json` |
-| `en` | `src/i18n/en.json` |
+| Thành phần | Đường dẫn | Vai trò |
+|---|---|---|
+| Messages `vi` (default) | `messages/vi.json` | ICU message catalog |
+| Messages `en` | `messages/en.json` | ICU message catalog |
+| Routing | `src/i18n/routing.ts` | `defineRouting({ locales: ['vi','en'], defaultLocale: 'vi', localePrefix: 'as-needed' })` |
+| Request config | `src/i18n/request.ts` | `getRequestConfig` — import messages theo locale |
+| Middleware | `proxy.ts` (root) | `createMiddleware(routing)` |
+| Plugin | `next.config.ts` | `createNextIntlPlugin()` |
 
-Dùng `next-intl 3.x` với App Router integration.
+**Ví dụ `routing.ts`:**
+
+```typescript
+import {defineRouting} from 'next-intl/routing';
+
+export const routing = defineRouting({
+  locales: ['vi', 'en'],
+  defaultLocale: 'vi',
+  localePrefix: 'as-needed'
+});
+```
+
+**Ví dụ `request.ts`:**
+
+```typescript
+import {getRequestConfig} from 'next-intl/server';
+import {routing} from './routing';
+
+export default getRequestConfig(async ({requestLocale}) => {
+  let locale = await requestLocale;
+  if (!locale || !routing.locales.includes(locale as 'vi' | 'en')) {
+    locale = routing.defaultLocale;
+  }
+  return {
+    locale,
+    messages: (await import(`../../messages/${locale}.json`)).default
+  };
+});
+```
+
+**Link nội bộ:** dùng `Link` / `useRouter` / `redirect` từ `@/i18n/routing` (hoặc `createNavigation(routing)`), không dùng `next/link` trực tiếp cho page có locale.
 
 ### 9.5 Non-functional Requirements
 
@@ -833,7 +886,7 @@ flowchart TD
 |---|---|---|
 | `backend` | Custom Dockerfile | `8000` |
 | `qdrant` | `qdrant/qdrant:v1.13.6` | `6333` (REST), `6334` (gRPC) |
-| `postgres` | `postgres:17` | `5432` |
+| `postgres` | `postgres:18` | `5432` |
 | `redis` | `redis:8.0` | `6379` |
 
 ---
@@ -916,17 +969,17 @@ sequenceDiagram
 | **Faithfulness** | RAGAS metric: response trung thực với retrieved context |
 | **Field Mask** | Places API (New): chỉ định fields cần trả về, giảm cost |
 | **HNSW** | Hierarchical Navigable Small World — thuật toán index vector |
-| **Per-node timeout** | LangGraph 1.1+: giới hạn thời gian thực thi mỗi node |
+| **Per-node timeout** | LangGraph 1.2+: giới hạn thời gian thực thi mỗi node/task (`TimeoutPolicy`, `NodeTimeoutError`) |
 | **Bootstrap Sample** | Tập mẫu lấy ngẫu nhiên có hoàn lại từ tập gốc (dùng trong Bagging) |
 | **Residual** | Sai lệch còn lại giữa prediction và ground truth (dùng trong Boosting) |
 | **Variance** | Độ nhạy của model với biến động tập huấn luyện |
 | **Bias** | Sai lệch hệ thống giữa prediction trung bình và giá trị thực |
 | **Places API (New)** | Thế hệ mới Google Places API, base URL `places.googleapis.com/v1` |
-| **PostgresSaver** | LangGraph checkpoint provider dùng PostgreSQL |
+| **PostgresSaver** | `langgraph-checkpoint-postgres`: checkpoint provider dùng PostgreSQL 18 |
 | **Cache Components** | Next.js 16: explicit cache control thay implicit caching |
 | **proxy.ts** | Next.js 16: network boundary file thay `middleware.ts` |
 | **Gridstore** | Qdrant v1.13+: storage engine thay thế RocksDB |
-| **DeltaChannel** | LangGraph 1.1+: channel type lưu incremental delta thay full state |
+| **DeltaChannel** | LangGraph 1.2+ (beta): channel type lưu incremental delta thay full state |
 
 ---
 
