@@ -213,6 +213,7 @@ ham-ninh-ai/
     ├── compose.yaml                 # Docker Compose canonical filename (2026)
     ├── .env.example                 # Host ports + secrets (copy → .env)
     └── requirements.txt
+├── Makefile                         # DevOps
 ```
 
 ---
