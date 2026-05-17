@@ -210,7 +210,8 @@ ham-ninh-ai/
     ├── migrations/                  # Alembic (PostgreSQL 18)
     ├── tests/
     ├── Dockerfile
-    ├── docker-compose.yml
+    ├── compose.yaml                 # Docker Compose canonical filename (2026)
+    ├── .env.example                 # Host ports + secrets (copy → .env)
     └── requirements.txt
 ```
 
@@ -279,7 +280,7 @@ ham-ninh-ai/
 | **Qdrant** | `v1.13.6` (Docker: `qdrant/qdrant:v1.13.6`) | Vector database. Gridstore storage engine (RocksDB deprecated từ v1.17). HNSW index. REST + gRPC |
 | **PostgreSQL** | `18` (`postgres:18`, patch `18.3` Feb 2026) | Relational data + LangGraph checkpointing (`langgraph-checkpoint-postgres` 3.1.0) |
 | **Redis Open Source** | `8.0` | Tích hợp native Redis Search, JSON, time series. Semantic cache, rate limit, session |
-| **Docker Compose** | `v2.x` | Container orchestration local / staging |
+| **Docker Compose** | `v2.x` | File **`compose.yaml`** (canonical; `docker-compose.yml` legacy). Không dùng field `version:` |
 
 ### 4.5 Google Maps Platform
 
@@ -673,7 +674,7 @@ graph TD
 
 ### 9.3 Next.js 16 Specific
 
-**`proxy.ts`** (root level): `createMiddleware(routing)` cho locale detection/redirect; có thể kết hợp rewrite `/api/chat` → `backend:8000/chat` trong cùng file hoặc Route Handler riêng.
+**`proxy.ts`** (root level): `createMiddleware(routing)` cho locale detection/redirect; Route Handler `/api/*` proxy → `http://localhost:48721` (host port từ `compose.yaml`, không phải `8000` trên host).
 
 **Cache strategy:**
 - `HeroSection`, `AlgorithmShowcase`, `ResponsibleAIGrid` → `use cache` directive (statically cached)
@@ -880,14 +881,60 @@ flowchart TD
 | Cache hit rate | Redis 8.0 semantic cache |
 | Circuit breaker activation count | Places API failure events |
 
-### 11.5 Infrastructure Docker Compose
+### 11.5 Infrastructure — `compose.yaml`
 
-| Service | Image | Port |
-|---|---|---|
-| `backend` | Custom Dockerfile | `8000` |
-| `qdrant` | `qdrant/qdrant:v1.13.6` | `6333` (REST), `6334` (gRPC) |
-| `postgres` | `postgres:18` | `5432` |
-| `redis` | `redis:8.0` | `6379` |
+> **Tên file (2026):** Docker Compose ưu tiên **`compose.yaml`** (hoặc `compose.yml`). `docker-compose.yml` vẫn được nhận diện nhưng là legacy — dự án chỉ dùng `compose.yaml`.
+
+**Nguyên tắc port:** Trong Docker network, service gọi nhau bằng **cổng container chuẩn** (`8000`, `5432`, …). Chỉ **publish ra host** dùng cổng hiếm (block `47xxx`) để tránh conflict với Postgres/Redis/Qdrant/API dev khác trên máy.
+
+| Service | Image | Container port | Host port (mặc định) | Biến `.env` |
+|---|---|---|---|---|
+| `backend` | Custom Dockerfile | `8000` | **`48721`** | `HN_BACKEND_HOST_PORT` |
+| `postgres` | `postgres:18` | `5432` | **`47543`** | `HN_POSTGRES_HOST_PORT` |
+| `redis` | `redis:8.0` | `6379` | **`47379`** | `HN_REDIS_HOST_PORT` |
+| `qdrant` | `qdrant/qdrant:v1.13.6` | `6333` (REST), `6334` (gRPC) | **`46333`**, **`46334`** | `HN_QDRANT_REST_HOST_PORT`, `HN_QDRANT_GRPC_HOST_PORT` |
+
+**Kết nối từ host (dev):**
+
+| Mục đích | URL |
+|---|---|
+| FastAPI (Swagger) | `http://localhost:48721` |
+| PostgreSQL | `postgresql://...@localhost:47543/ham_ninh` |
+| Redis | `redis://localhost:47379/0` |
+| Qdrant REST | `http://localhost:46333` |
+
+**Kết nối giữa container (không đổi):** `backend` → `postgres:5432`, `redis:6379`, `qdrant:6333`.
+
+**`.env.example` (trích):**
+
+```env
+HN_BACKEND_HOST_PORT=48721
+HN_POSTGRES_HOST_PORT=47543
+HN_REDIS_HOST_PORT=47379
+HN_QDRANT_REST_HOST_PORT=46333
+HN_QDRANT_GRPC_HOST_PORT=46334
+```
+
+**`compose.yaml` (trích `ports`):**
+
+```yaml
+services:
+  backend:
+    ports:
+      - "${HN_BACKEND_HOST_PORT:-48721}:8000"
+  postgres:
+    ports:
+      - "${HN_POSTGRES_HOST_PORT:-47543}:5432"
+  redis:
+    ports:
+      - "${HN_REDIS_HOST_PORT:-47379}:6379"
+  qdrant:
+    ports:
+      - "${HN_QDRANT_REST_HOST_PORT:-46333}:6333"
+      - "${HN_QDRANT_GRPC_HOST_PORT:-46334}:6334"
+```
+
+Lệnh: `docker compose up -d` (tự đọc `compose.yaml` ở thư mục hiện tại).
 
 ---
 
