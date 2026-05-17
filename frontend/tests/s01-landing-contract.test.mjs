@@ -9,6 +9,14 @@ const requiredFiles = [
   'src/app/layout.tsx',
   'src/app/[locale]/layout.tsx',
   'src/app/[locale]/page.tsx',
+  'src/components/landing/section-shell.tsx',
+  'src/components/landing/hero-section.tsx',
+  'src/components/landing/problem-section.tsx',
+  'src/components/landing/solution-section.tsx',
+  'src/components/landing/responsible-ai-section.tsx',
+  'src/components/landing/algorithm-showcase.tsx',
+  'src/components/landing/tech-stack-section.tsx',
+  'src/components/landing/demo-cta-section.tsx',
   'messages/vi.json',
   'messages/en.json'
 ];
@@ -49,7 +57,54 @@ assert.match(localeLayout, /routing\.locales/, 'Locale layout must validate agai
 const localePage = readFileSync(path.join(projectRoot, 'src/app/[locale]/page.tsx'), 'utf8');
 assert.match(localePage, /getTranslations\(['"]Landing['"]\)/, 'Locale page must load Landing messages');
 assert.match(localePage, /notFound\(\)/, 'Locale page must reject invalid locales with notFound()');
-assert.match(localePage, /id=['"]hero['"]/, 'Temporary landing page must expose the hero section anchor');
+assert.match(localePage, /<main\b/, 'Locale page must expose one main landmark');
+assert.equal((localePage.match(/<main\b/g) ?? []).length, 1, 'Locale page must render exactly one main landmark');
+
+const expectedLandingComponents = [
+  'HeroSection',
+  'ProblemSection',
+  'SolutionSection',
+  'ResponsibleAiSection',
+  'AlgorithmShowcase',
+  'TechStackSection',
+  'DemoCtaSection'
+];
+
+for (const component of expectedLandingComponents) {
+  assert.match(localePage, new RegExp(`import \\{ ${component} \\}`), `Locale page must import ${component}`);
+  assert.match(localePage, new RegExp(`<${component}\\b`), `Locale page must render ${component}`);
+}
+
+const expectedSectionIds = [
+  'hero',
+  'problem',
+  'solution',
+  'responsible-ai',
+  'algorithm-showcase',
+  'tech-stack',
+  'demo'
+];
+
+const landingComponentSource = [
+  'src/components/landing/section-shell.tsx',
+  'src/components/landing/hero-section.tsx',
+  'src/components/landing/problem-section.tsx',
+  'src/components/landing/solution-section.tsx',
+  'src/components/landing/responsible-ai-section.tsx',
+  'src/components/landing/algorithm-showcase.tsx',
+  'src/components/landing/tech-stack-section.tsx',
+  'src/components/landing/demo-cta-section.tsx'
+]
+  .map((file) => readFileSync(path.join(projectRoot, file), 'utf8'))
+  .join('\n');
+
+for (const id of expectedSectionIds) {
+  assert.match(landingComponentSource, new RegExp(`id=[{]?['"]${id}['"]`), `Landing components must expose section id: ${id}`);
+}
+
+assert.doesNotMatch(localePage, /\.module\.css/, 'Locale page must not import CSS Modules');
+assert.doesNotMatch(landingComponentSource, /\.module\.css/, 'Landing components must not import CSS Modules');
+assert.doesNotMatch(landingComponentSource, /dangerouslySetInnerHTML/, 'Landing components must not use dangerouslySetInnerHTML');
 
 const requiredLandingSections = [
   'hero',
