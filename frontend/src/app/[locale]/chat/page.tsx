@@ -24,5 +24,9 @@ export default async function ChatPage({ params }: Props) {
     newQuestion: t('newQuestion'),
   };
 
-  return <ChatInterface locale={locale} translations={translations} />;
+  return (
+    <div lang={locale}>
+      <ChatInterface locale={locale} translations={translations} />
+    </div>
+  );
 }

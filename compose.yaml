@@ -88,6 +88,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+    volumes:
+      - ./data:/data:ro
     restart: no
     networks:
       - ham_ninh
