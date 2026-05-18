@@ -239,5 +239,13 @@
     "error": "An error occurred",
     "back": "Back",
     "close": "Close"
+  },
+  "Placeholder": {
+    "comingSoon": "Coming Soon",
+    "statusUnderConstruction": "This page is under construction",
+    "backToLanding": "Back to landing",
+    "chatDescription": "Chat with the AI Guide to explore Ham Ninh's culture, history, and cuisine with citation-backed answers.",
+    "mapDescription": "Interactive map showing Ham Ninh places with fair ranking that prioritizes local businesses.",
+    "architectureDescription": "Explore the multi-agent AI system architecture with RAG, guardrails, and observability."
   }
 }

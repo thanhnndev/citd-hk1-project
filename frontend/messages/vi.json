@@ -239,5 +239,13 @@
     "error": "Có lỗi xảy ra",
     "back": "Quay lại",
     "close": "Đóng"
+  },
+  "Placeholder": {
+    "comingSoon": "Sắp ra mắt",
+    "statusUnderConstruction": "Trang này đang được phát triển",
+    "backToLanding": "Về trang chủ",
+    "chatDescription": "Trò chuyện với AI Guide để khám phá văn hóa, lịch sử và ẩm thực Hàm Ninh với câu trả lời có trích dẫn nguồn.",
+    "mapDescription": "Bản đồ tương tác hiển thị địa điểm Hàm Ninh với xếp hạng công bằng, ưu tiên doanh nghiệp địa phương.",
+    "architectureDescription": "Khám phá kiến trúc hệ thống Multi-Agent AI với RAG, guardrails và quan sát."
   }
 }

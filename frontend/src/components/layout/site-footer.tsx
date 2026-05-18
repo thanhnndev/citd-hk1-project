@@ -14,7 +14,7 @@ const navItems = [
   { href: '/architecture', translationKey: 'architecture' as const },
 ] as const;
 
-export async function SiteFooter({ locale, className }: SiteFooterProps) {
+export async function SiteFooter({ locale: _locale, className }: SiteFooterProps) {
   const t = await getTranslations('Navigation');
   const currentYear = new Date().getFullYear();
 

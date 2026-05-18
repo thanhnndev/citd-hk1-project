@@ -48,7 +48,7 @@ export default async function LocalePage({ params }: LocalePageProps) {
   const demoItems = t.raw('demo.items') as DemoItem[];
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground">
       <HeroSection
         eyebrow={t('hero.eyebrow')}
         title={t('hero.title')}
@@ -98,6 +98,6 @@ export default async function LocalePage({ params }: LocalePageProps) {
         note={t('demo.note')}
         items={demoItems}
       />
-    </main>
+    </div>
   );
 }

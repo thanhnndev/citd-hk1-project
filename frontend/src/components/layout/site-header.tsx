@@ -15,7 +15,7 @@ const navItems = [
   { href: '/architecture', translationKey: 'architecture' as const },
 ] as const;
 
-export async function SiteHeader({ locale, className }: SiteHeaderProps) {
+export async function SiteHeader({ locale: _locale, className }: SiteHeaderProps) {
   const t = await getTranslations('Navigation');
 
   return (
