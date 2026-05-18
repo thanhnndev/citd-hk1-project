@@ -2,6 +2,22 @@
 
 This artifact consolidates the S06/S07 validation-remediation path, the S08 session-durability closure, and the S09 R007 live-evidence attempt for retrying M004 validation. It records the local evidence produced through S09, the exact commands used, current blocked or re-scoped reasons, and the commands needed to rerun validation in a credentialed environment.
 
+## M004 Validation Scope Map
+
+Concrete verifier output in this artifact is authoritative for M004 validation retry and supersedes optimistic historical summary wording from earlier slice summaries. Do not treat R007, session durability, or any roadmap item as passed unless the command evidence below shows the required successful result label; secret values are intentionally not printed.
+
+| Requirement | M004 validation scope | Rationale and acceptance boundary |
+|---|---|---|
+| R006 | In scope | M004 validates the chat endpoint, SSE stream, AgentService orchestration, RAG retrieval path, and conversation-state behavior through the S05/S08 regression and durability evidence. Operational restart durability is accepted only when `scripts/verify-session-durability.py` reports `RESULT=durable_verified`; local memory mode remains `RESULT=rescope_required`. |
+| R007 | In scope | M004 owns embedding/Qdrant hardening and validation evidence for the RAG cultural Q&A pipeline. Local evidence is currently credential-blocked; a live pass requires successful idempotency output showing two `/admin/embed` runs, final 321 Qdrant points, and 1536-dimensional vectors. |
+| R013 | Supporting/pre-existing evidence only | Corpus normalization and citation metadata were established before M004. M004 relies on that corpus as input evidence but does not re-own or revalidate the full normalization requirement in this artifact. |
+| R015 | Supporting/pre-existing evidence only | Grounded answers, citations, and honest no-evidence behavior are supported by M004 chat/RAG tests, but full Responsible AI failure-visibility scope remains broader than this remediation artifact. |
+| R008 | Deferred/out of M004 scope | Google Places, Routes, nearby search, autocomplete, route matrix, and circuit-breaker fallback are deferred roadmap capabilities with no M004 owner. |
+| R009 | Deferred/out of M004 scope | Ensemble re-ranking and local-business fairness targets are deferred to a future ML/fairness milestone and are not validated by M004 evidence. |
+| R010 | Deferred/out of M004 scope | Full Responsible AI 5-axis compliance, Langfuse tracing, prompt-injection guardrails, and fairness audit are deferred beyond M004; this artifact only records the narrower grounding and diagnostic evidence it actually exercised. |
+| R011 | Deferred/out of M004 scope | Admin evaluation, trace, and authenticated ingest endpoints are deferred roadmap work; M004 admin evidence is limited to embedding diagnostics needed for R007. |
+| R012 | Anti-feature/out of scope | Booking, payment, CRM, fine-tuning an LLM from scratch, and native mobile app work remain explicitly out of scope and should not be requested as M004 validation proof. |
+
 ## Validation Remediation Items
 
 | Item | Status | Evidence | Retry Guidance |
