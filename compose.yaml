@@ -76,6 +76,8 @@ services:
       - "${HN_BACKEND_HOST_PORT:-48721}:8000"
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ham_ninh}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ham_ninh}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 5s
