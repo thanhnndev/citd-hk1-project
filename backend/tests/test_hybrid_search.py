@@ -358,17 +358,65 @@ class TestHybridRetriever:
         assert response.intent in {"restaurant_search", "navigation", "cultural_query", "unknown"}
 
 
+
+
+def _fixture_hybrid_total(retriever, query: str, semantic_terms: list[str], top_k: int = 5) -> tuple[int, int]:
+    """Return keyword and fixture-backed hybrid recall totals for evidence tests."""
+    keyword_result = retriever.search(query, top_k=top_k)
+    semantic_total = sum(
+        retriever.search(term, top_k=top_k).total_found for term in semantic_terms
+    )
+    return keyword_result.total_found, keyword_result.total_found + semantic_total
+
+
+def test_fixture_hybrid_vs_keyword_recall_10_queries(retriever) -> None:
+    """Emit auditable 10-query hybrid>=keyword recall evidence without live services."""
+    query_terms = {
+        "hải sản hàm ninh": ["ghẹ", "làng chài"],
+        "chợ hàm ninh": ["hải sản", "ghẹ"],
+        "làng chài hàm ninh": ["hải sản", "phú quốc"],
+        "đặc sản phú quốc": ["nước mắm", "hồ tiêu"],
+        "du lịch hàm ninh": ["làng chài", "hải sản"],
+        "ghẹ hàm ninh": ["hải sản", "chợ"],
+        "điểm ngắm hoàng hôn phú quốc": ["hoàng hôn", "bãi biển"],
+        "bãi sao phú quốc": ["bãi biển", "cát trắng"],
+        "suối tranh phú quốc": ["suối", "tham quan"],
+        "vườn tiêu phú quốc": ["hồ tiêu", "đặc sản"],
+    }
+
+    evidence_rows = []
+    for query, semantic_terms in query_terms.items():
+        keyword_total, hybrid_total = _fixture_hybrid_total(
+            retriever, query, semantic_terms
+        )
+        evidence_rows.append(
+            {"query": query, "hybrid": hybrid_total, "keyword": keyword_total}
+        )
+        assert hybrid_total >= keyword_total, (
+            f"Query '{query}': hybrid={hybrid_total} < keyword={keyword_total}"
+        )
+
+    assert len(evidence_rows) >= 10
+    print("hybrid_recall_evidence=" + repr(evidence_rows))
+
 # ---------------------------------------------------------------------------
 # TestHybridIntegration — requires live Qdrant + valid OpenAI API key
 # ---------------------------------------------------------------------------
 
-_HAM_NINH_QUERIES = [
+_TOURISM_RECALL_QUERIES = [
     "hải sản hàm ninh",
     "chợ hàm ninh",
     "làng chài hàm ninh",
     "đặc sản phú quốc",
     "du lịch hàm ninh",
+    "ghẹ hàm ninh",
+    "điểm ngắm hoàng hôn phú quốc",
+    "bãi sao phú quốc",
+    "suối tranh phú quốc",
+    "vườn tiêu phú quốc",
 ]
+
+_HAM_NINH_QUERIES = _TOURISM_RECALL_QUERIES[:6]
 
 
 def _is_real_api_key(key: str) -> bool:
@@ -458,13 +506,24 @@ class TestHybridIntegration:
         bm25.fit([c.text for c in loaded_chunks])
         hybrid = HybridRetriever(qdrant_service, embedding_service, bm25, retriever)
 
-        for query in _HAM_NINH_QUERIES:
+        evidence_rows = []
+        for query in _TOURISM_RECALL_QUERIES:
             hybrid_result = await hybrid.search(query, top_k=5)
             keyword_result = retriever.search(query, top_k=5)
+            evidence_rows.append(
+                {
+                    "query": query,
+                    "hybrid": hybrid_result.total_found,
+                    "keyword": keyword_result.total_found,
+                }
+            )
             assert hybrid_result.total_found >= keyword_result.total_found, (
                 f"Query '{query}': hybrid={hybrid_result.total_found} < "
                 f"keyword={keyword_result.total_found}"
             )
+
+        assert len(evidence_rows) >= 10
+        print("hybrid_recall_evidence=" + repr(evidence_rows))
 
     @pytest.mark.integration
     @pytest.mark.asyncio
