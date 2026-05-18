@@ -1,4 +1,12 @@
 {
+  "Navigation": {
+    "home": "Home",
+    "chat": "Chat",
+    "map": "Map",
+    "architecture": "Architecture",
+    "localeLabel": "Language",
+    "localeSwitcherLabel": "Select language"
+  },
   "Landing": {
     "hero": {
       "eyebrow": "Sustainable tourism for Ham Ninh fishing village",

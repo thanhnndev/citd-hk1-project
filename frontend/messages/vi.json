@@ -1,4 +1,12 @@
 {
+  "Navigation": {
+    "home": "Trang chủ",
+    "chat": "Trò chuyện",
+    "map": "Bản đồ",
+    "architecture": "Kiến trúc",
+    "localeLabel": "Ngôn ngữ",
+    "localeSwitcherLabel": "Chọn ngôn ngữ"
+  },
   "Landing": {
     "hero": {
       "eyebrow": "Du lịch bền vững cho làng chài Hàm Ninh",
