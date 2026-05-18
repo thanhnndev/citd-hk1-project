@@ -15,8 +15,7 @@ export function LocaleSwitcher() {
   const t = useTranslations("Navigation");
 
   function handleChange(nextLocale: string) {
-    const newPathname = pathname;
-    router.push(`/${nextLocale}${newPathname}`);
+    router.replace(pathname, { locale: nextLocale });
   }
 
   return (
