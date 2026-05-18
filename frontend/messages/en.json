@@ -225,7 +225,12 @@
     "send": "Send",
     "reasoningLog": "Why this suggestion?",
     "citations": "Sources",
-    "scoreBreakdown": "Score Breakdown"
+    "scoreBreakdown": "Score Breakdown",
+    "error": "Unable to reach the assistant. Please try again.",
+    "retry": "Retry",
+    "typing": "Thinking...",
+    "noEvidence": "I couldn't find information about that. Try asking differently.",
+    "newQuestion": "Ask another question"
   },
   "Map": {
     "title": "Ham Ninh Map",
