@@ -14,6 +14,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
+import asyncpg
 import structlog
 
 from app.models.rag import RAGChunk, RetrievalResult
@@ -64,6 +65,73 @@ class InMemoryAgentCheckpointer:
         del history[:-8]
 
 
+
+class PostgresAgentCheckpointer:
+    """Asyncpg-backed checkpointer matching AgentService's session history contract."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+
+    @classmethod
+    async def create(cls, dsn: str) -> "PostgresAgentCheckpointer":
+        pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
+        checkpointer = cls(pool)
+        try:
+            await checkpointer.setup()
+            await checkpointer.load_history("__agent_checkpoint_connectivity__")
+        except Exception:
+            await pool.close()
+            raise
+        return checkpointer
+
+    async def setup(self) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_session_messages (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_agent_session_messages_session_order
+                ON agent_session_messages (session_id, id)
+                """
+            )
+
+    async def load_history(self, session_id: str) -> list[dict[str, str]]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT role, content
+                FROM (
+                    SELECT id, role, content
+                    FROM agent_session_messages
+                    WHERE session_id = $1
+                    ORDER BY id DESC
+                    LIMIT 8
+                ) recent
+                ORDER BY id ASC
+                """,
+                session_id,
+            )
+        return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+    async def save_turn(self, session_id: str, user: str, assistant: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO agent_session_messages (session_id, role, content)
+                VALUES ($1, $2, $3)
+                """,
+                [(session_id, "user", user), (session_id, "assistant", assistant)],
+            )
+
 async def create_agent_checkpointer(database_url: str | None = None) -> tuple[Any, str]:
     """Create a checkpoint backend, falling back to memory when unavailable.
 
@@ -73,11 +141,7 @@ async def create_agent_checkpointer(database_url: str | None = None) -> tuple[An
     dsn = database_url or os.getenv("DATABASE_URL")
     if dsn:
         try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-            saver = AsyncPostgresSaver.from_conn_string(dsn)
-            await saver.setup()
-            return saver, "postgres"
+            return await PostgresAgentCheckpointer.create(dsn), "postgres"
         except Exception as exc:
             logger.warning(
                 "agent.checkpoint_init_failed",
