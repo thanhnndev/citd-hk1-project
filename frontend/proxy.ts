@@ -1,11 +1,12 @@
-import { createMiddleware } from 'next-intl/middleware';
+import createMiddleware from 'next-intl/middleware';
+import type { NextRequest } from 'next/server';
 import { routing } from './src/i18n/routing';
 
 // Next.js 16: proxy.ts replaces middleware.ts as the network boundary file
 // Runtime is 'nodejs' (Edge runtime not supported for proxy.ts)
 const intlMiddleware = createMiddleware(routing);
 
-export default async function proxy(request: Request) {
+export default async function proxy(request: NextRequest) {
   // Skip i18n middleware for /api routes, /_next, and static files
   const url = new URL(request.url);
   const isApiRoute = url.pathname.startsWith('/api');

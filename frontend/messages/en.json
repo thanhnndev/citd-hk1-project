@@ -1,37 +1,222 @@
 {
+  "Navigation": {
+    "home": "Home",
+    "chat": "Chat",
+    "map": "Map",
+    "architecture": "Architecture",
+    "localeLabel": "Language",
+    "localeSwitcherLabel": "Select language",
+    "copyright": "© {year} Ham Ninh AI Guide. Preserving heritage, supporting sustainable tourism.",
+    "tagline": "Built for the community — responsible AI for Ham Ninh fishing village, Phu Quoc."
+  },
   "Landing": {
     "hero": {
+      "eyebrow": "Sustainable tourism for Ham Ninh fishing village",
       "title": "Ham Ninh AI Guide — Preserve Heritage. Support Tourism. Fairness for Fishermen.",
-      "description": "The first Multi-Agent AI system combining cultural preservation RAG and Ensemble Re-ranking to protect local livelihoods in Ham Ninh fishing village, Phu Quoc.",
-      "ctaExplore": "Explore Now",
-      "ctaArchitecture": "View Architecture"
+      "description": "A multi-agent AI concept combining cultural-preservation RAG and ensemble re-ranking to support local livelihoods in Ham Ninh fishing village, Phu Quoc.",
+      "ctaExplore": "Explore now",
+      "ctaArchitecture": "View architecture",
+      "trustBadges": [
+        {
+          "label": "Citation-backed RAG",
+          "description": "Prioritizes verifiable local cultural sources."
+        },
+        {
+          "label": "Fair re-ranking",
+          "description": "Adds local business signals to recommendation order."
+        },
+        {
+          "label": "Bilingual content",
+          "description": "Vietnamese and English content share the same structure."
+        }
+      ]
     },
     "problem": {
-      "title": "Challenges",
-      "overtourism": "Over-tourism & cultural erosion",
-      "bias": "Economic bias of major platforms",
-      "heritage": "Lack of accurate local heritage information"
+      "eyebrow": "Context",
+      "heading": "Tourism can grow quickly while local value is left behind",
+      "body": "When large platforms optimize for popularity, Ham Ninh’s cultural stories and small local businesses need a fairer introduction layer.",
+      "cards": [
+        {
+          "title": "Over-tourism & cultural erosion",
+          "description": "Fragmented information can reduce the village to photo spots without explaining its fishing heritage.",
+          "metric": "Heritage needs context"
+        },
+        {
+          "title": "Platform economic bias",
+          "description": "Businesses with more reviews or marketing budgets often outrank local family-run providers.",
+          "metric": "Top-k needs balance"
+        },
+        {
+          "title": "Missing accurate local sources",
+          "description": "Cultural answers should come from retrieved documents and citations, not model guesswork.",
+          "metric": "RAG + citation"
+        }
+      ]
     },
     "solution": {
-      "title": "Solution",
-      "ragAgent": "RAG Agent — Local Guide",
-      "mapsAgent": "Maps & Service Agent — Concierge",
-      "reranker": "Ensemble Re-ranker — Fairness Engine"
+      "eyebrow": "Solution",
+      "heading": "A multi-agent system connecting culture, maps, and algorithmic fairness",
+      "body": "The landing page introduces the target architecture: RAG for local knowledge, a Maps Agent for place data, and an Ensemble Re-ranker for responsible ranking.",
+      "pillars": [
+        {
+          "title": "RAG Agent — Local Guide",
+          "description": "Answers culture, history, and food questions using retrieved sources."
+        },
+        {
+          "title": "Maps & Service Agent — Concierge",
+          "description": "Planned to connect with Places API for places, routes, and accessibility context."
+        },
+        {
+          "title": "Ensemble Re-ranker — Fairness Engine",
+          "description": "Combines Random Forest and Gradient Boosting to balance quality, distance, and local_factor."
+        }
+      ]
     },
     "responsibleAI": {
-      "title": "Responsible AI — 5 Axes",
-      "reliability": "Reliability",
-      "fairness": "Bias & Fairness",
-      "robustness": "Robustness",
-      "socialImpact": "Social Impact",
-      "explainability": "Explainability"
+      "eyebrow": "Responsible AI",
+      "heading": "Five control axes from data to user experience",
+      "body": "Each axis maps to a metric or verification mechanism that reduces risk as chat and map functionality arrive in later slices.",
+      "axes": [
+        {
+          "id": "reliability",
+          "title": "Reliability",
+          "description": "Cultural answers should stay grounded in retrieved sources and cite them.",
+          "metric": "Faithfulness target ≥ 0.85"
+        },
+        {
+          "id": "fairness",
+          "title": "Bias & fairness",
+          "description": "Place ranking considers local_factor to support local businesses.",
+          "metric": "Local business top-5 ≥ 40%"
+        },
+        {
+          "id": "robustness",
+          "title": "Robustness",
+          "description": "Guardrails, topic filters, and fallbacks reduce dependence on a single failure point.",
+          "metric": "Circuit breaker triggers correctly"
+        },
+        {
+          "id": "socialImpact",
+          "title": "Social impact",
+          "description": "Prioritizes small vendors, elders, and accessibility needs.",
+          "metric": "Local metadata coverage ≥ 80%"
+        },
+        {
+          "id": "explainability",
+          "title": "Explainability",
+          "description": "Reasoning logs, citations, and score breakdowns help users understand recommendations.",
+          "metric": "Goal: 100% traced responses"
+        }
+      ]
+    },
+    "algorithmShowcase": {
+      "eyebrow": "Algorithm",
+      "heading": "Ensemble re-ranking turns place signals into a fairer order",
+      "body": "Shows how a Decision Tree grows into Random Forest bagging, Gradient Boosting, and a final explainable score.",
+      "chart": {
+        "title": "Illustrative contribution to Final Score",
+        "ariaLabel": "Bar chart showing example contributions of local factor, rating, and distance to the final score.",
+        "description": "The values below are interface explanation data, not live Places API results.",
+        "bars": [
+          {
+            "key": "local_factor",
+            "label": "Local factor",
+            "value": 0.42,
+            "description": "How strongly a place is tied to local family businesses and traditional livelihoods."
+          },
+          {
+            "key": "rating",
+            "label": "Rating",
+            "value": 0.33,
+            "description": "Perceived quality from normalized rating and review signals."
+          },
+          {
+            "key": "distance",
+            "label": "Distance",
+            "value": 0.25,
+            "description": "Travel convenience from the user location or planned route."
+          }
+        ]
+      },
+      "steps": [
+        {
+          "title": "Decision Tree",
+          "description": "Learns simple thresholds over rating, distance, and local_factor."
+        },
+        {
+          "title": "Random Forest",
+          "description": "Bags many trees to reduce variance when place data is noisy."
+        },
+        {
+          "title": "Gradient Boosting",
+          "description": "Sequentially learns remaining errors to reduce ranking bias."
+        },
+        {
+          "title": "Ensemble Score",
+          "description": "Combines 0.6 × RF and 0.4 × GBM into an explainable final_score."
+        }
+      ]
     },
     "techStack": {
-      "title": "Tech Stack"
+      "eyebrow": "Tech stack",
+      "heading": "Academic stack, designed for real operation",
+      "body": "The components support i18n, knowledge retrieval, agent orchestration, RAG evaluation, and system observability.",
+      "items": [
+        {
+          "name": "Next.js 16",
+          "description": "Frontend App Router, locale routes, and responsive landing UI."
+        },
+        {
+          "name": "FastAPI",
+          "description": "API gateway for chat, SSE, and health checks."
+        },
+        {
+          "name": "LangGraph",
+          "description": "Supervisor and worker agent orchestration with checkpoints."
+        },
+        {
+          "name": "Qdrant",
+          "description": "Vector database for Ham Ninh cultural RAG."
+        },
+        {
+          "name": "Google Maps Platform",
+          "description": "Place and routing data source in later slices."
+        },
+        {
+          "name": "scikit-learn",
+          "description": "Random Forest and Gradient Boosting for re-ranking."
+        },
+        {
+          "name": "RAGAS",
+          "description": "Evaluates faithfulness, relevance, and context recall."
+        },
+        {
+          "name": "Langfuse",
+          "description": "Traces, latency, and cost for agent workflows."
+        }
+      ]
     },
     "demo": {
-      "title": "Try the Demo",
-      "cta": "Try it Now"
+      "eyebrow": "Demo",
+      "heading": "The experience shell opens progressively by slice",
+      "body": "In this slice, the landing page describes target capabilities. Real chat, map, and architecture functionality will be connected in later slices.",
+      "primaryCta": "View demo shell",
+      "secondaryCta": "Read architecture",
+      "note": "CTAs may lead to scaffold or in-progress pages; they do not imply fully working chat/map behavior before S03.",
+      "items": [
+        {
+          "title": "Citation-backed chat",
+          "description": "Planned to show RAG answers with sources and a reasoning log."
+        },
+        {
+          "title": "Re-ranked map",
+          "description": "Planned to show Places API results after fairness scoring."
+        },
+        {
+          "title": "Transparent architecture",
+          "description": "Planned to explain the supervisor, agents, guardrails, and observability."
+        }
+      ]
     }
   },
   "Chat": {
