@@ -47,6 +47,11 @@ Concrete verifier output in this artifact is authoritative for M004 validation r
 | 13 | `python3 -m py_compile backend/app/services/agent_service.py scripts/verify-session-durability.py` | 0 | S08 final syntax gate passed for the changed service and durability diagnostic | S08/T04 |
 | 14 | `cd backend && pytest -q tests/test_agent_service.py --tb=short` | 0 | S08 final regression gate passed with 9 agent service tests | S08/T04 |
 | 15 | `python3 scripts/verify-session-durability.py` | 0 | S08 final diagnostic matched documented local re-scope: `DATABASE_URL_STATUS=missing`, `CHECKPOINT_MODE=memory`, `RESTART_HISTORY_LEN=0`, and `RESULT=rescope_required` | S08/T04 |
+| 16 | `python3 -m py_compile scripts/verify-embedding-idempotency.py scripts/verify-session-durability.py` | 0 | S10 final syntax gate passed for both diagnostic scripts | S10/T04 |
+| 17 | `cd backend && pytest -q tests/test_agent_service.py --tb=short` | 0 | S10 final regression gate passed with 9 agent service tests | S10/T04 |
+| 18 | `cd backend && pytest -q tests/test_embedding_search.py -m integration --tb=short -rs` | 0 | S10 final integration selection remained credential-blocked: 6 skipped with `OPENAI_API_KEY is missing or fake`, 17 deselected; no credentialed semantic integration passing claimed | S10/T04 |
+| 19 | `python3 scripts/verify-session-durability.py` | 0 | S10 final diagnostic remained explicit memory re-scope: `RELOADED_CHECKPOINT_MODE=memory`, `RELOADED_CHECKPOINTER_CLASS=InMemoryAgentCheckpointer`, and `RESULT=rescope_required`; not a `RESULT=durable_verified` pass | S10/T04 |
+| 20 | `rg -n "M004 validation scope|RESULT=credential_blocked|RESULT=rescope_required|RESULT=durable_verified|R008|R009|R010|R011|out of scope|deferred|credentialed semantic integration passing|live-passed" docs/M004-REMEDIATION-EVIDENCE.md .gsd/REQUIREMENTS.md` | 0 | S10 final text consistency gate found scope labels, result labels, deferred roadmap requirements, out-of-scope language, and live-proof guardrails | S10/T04 |
 
 ## R007 S09 Live Evidence Outcome
 
