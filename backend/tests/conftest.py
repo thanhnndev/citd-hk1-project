@@ -7,6 +7,8 @@ import pytest
 
 from app.services.corpus_loader import load_corpus
 from app.services.retriever import Retriever
+from app.services.qdrant_service import QdrantService
+from app.services.embedding_service import EmbeddingService
 
 # Ensure required env vars are set before any app module imports.
 # Settings requires OPENAI_API_KEY, GOOGLE_PLACES_API_KEY, GOOGLE_ROUTES_API_KEY.
@@ -42,3 +44,15 @@ def sample_queries():
 def retriever(loaded_chunks):
     """Provide a ready Retriever instance over the full corpus."""
     return Retriever(loaded_chunks)
+
+
+@pytest.fixture(scope="session")
+def qdrant_service():
+    """QdrantService pointed at the test Qdrant instance."""
+    return QdrantService(url=os.environ.get("QDRANT_URL", "http://localhost:46333"))
+
+
+@pytest.fixture(scope="session")
+def embedding_service():
+    """EmbeddingService — only usable in integration tests with a real API key."""
+    return EmbeddingService()

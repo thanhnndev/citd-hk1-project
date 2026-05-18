@@ -183,8 +183,74 @@ class GroundedAnswerService:
     def __init__(self, retriever: Retriever) -> None:
         self._retriever = retriever
 
+    def answer_from_chunks(
+        self,
+        chunks: list[RAGChunk],
+        citations: list[Citation],
+        query: str,
+        language: str = "vi",
+        session_id: str | None = None,
+    ) -> ChatResponse:
+        """Compose a grounded answer from pre-fetched chunks and citations.
+
+        Skips the retrieval step — use this when the caller has already
+        awaited HybridRetriever.search_with_citations() and wants to hand
+        off the result synchronously.
+
+        Args:
+            chunks: Pre-retrieved RAGChunk objects (already ranked).
+            citations: Corresponding Citation objects for the chunks.
+            query: Original user query (used for intent detection and logging).
+            language: Preferred response language ("vi" or "en").
+            session_id: Opaque session identifier for correlation.
+
+        Returns:
+            ChatResponse with message, citations, intent, latency_ms, etc.
+        """
+        t0 = time.perf_counter()
+        sid = session_id or ""
+        intent = detect_intent(query)
+
+        if not chunks:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info(
+                "no_evidence query=%s intent=%s", query, intent,
+                extra={"session_id": sid, "language": language},
+            )
+            return ChatResponse(
+                session_id=sid,
+                message=_no_evidence_message(language),
+                citations=[],
+                places=[],
+                intent=intent,
+                langfuse_trace_id=None,
+                latency_ms=round(elapsed, 3),
+            )
+
+        if language.lower() == "en":
+            message = compose_answer_en(query, chunks)
+        else:
+            message = compose_answer_vi(query, chunks)
+
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "answer_composed query=%s intent=%s chunks=%d latency_ms=%.1f",
+            query, intent, len(chunks), elapsed,
+            extra={"session_id": sid, "language": language},
+        )
+
+        return ChatResponse(
+            session_id=sid,
+            message=message,
+            citations=citations,
+            places=[],
+            intent=intent,
+            langfuse_trace_id=None,
+            latency_ms=round(elapsed, 3),
+        )
+
     # ------------------------------------------------------------------
-    # Public API
+    # Internal helpers (kept here for single-file discoverability)
     # ------------------------------------------------------------------
 
     def answer(

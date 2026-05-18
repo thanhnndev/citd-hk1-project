@@ -24,7 +24,11 @@ from app.routers.admin import router as admin_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
 from app.services.corpus_loader import load_corpus
+from app.services.embedding_service import EmbeddingService
+from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from app.services.langfuse_service import init_langfuse
+from app.services.llm_answer_service import LLMAnswerService
+from app.services.qdrant_service import QdrantService
 from app.services.retriever import Retriever
 
 logger = get_logger(__name__)
@@ -82,6 +86,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error("corpus.load_failed", error=str(exc))
         # Don't crash — retriever will be absent, endpoint returns 503
         app.state.retriever = None
+        chunks = []
+
+    # 4. Wire hybrid retrieval (Qdrant + BM25 + dense embeddings)
+    #    Gracefully degrades to keyword-only if Qdrant/OpenAI unavailable.
+    app.state.hybrid_retriever = None
+    app.state.bm25_vectorizer = None
+    app.state.qdrant_service = None
+    app.state.embedding_service = None
+    app.state.llm_service = None
+
+    if chunks:
+        try:
+            qdrant_service = QdrantService()
+            embedding_service = EmbeddingService()
+
+            bm25 = BM25Vectorizer()
+            bm25.fit([c.text for c in chunks])
+            logger.info(
+                "bm25.fit_complete",
+                vocab_size=bm25.vocab_size,
+                corpus_size=len(chunks),
+            )
+
+            hybrid_retriever = HybridRetriever(
+                qdrant_service=qdrant_service,
+                embedding_service=embedding_service,
+                bm25=bm25,
+                fallback=app.state.retriever,
+            )
+
+            app.state.hybrid_retriever = hybrid_retriever
+            app.state.bm25_vectorizer = bm25
+            app.state.qdrant_service = qdrant_service
+            app.state.embedding_service = embedding_service
+            app.state.llm_service = LLMAnswerService()
+        except Exception as exc:
+            logger.warning("hybrid.init_failed", error=str(exc))
 
     logger.info(
         "app.startup",
@@ -90,6 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         env=settings.APP_ENV,
         langfuse_enabled=_langfuse_cleanup is not None,
         corpus_loaded=app.state.retriever is not None,
+        llm_service_enabled=app.state.llm_service is not None,
     )
 
     yield

@@ -37,9 +37,8 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
-        finally:
-            # Always set the response header so clients can reference it
             response.headers[CORRELATION_HEADER] = correlation_id
+        finally:
             # Clear context vars to prevent leakage between requests
             structlog.contextvars.unbind_contextvars("request_id")
 

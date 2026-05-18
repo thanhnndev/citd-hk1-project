@@ -138,6 +138,16 @@ class Citation(BaseModel):
     )
 
 
+class EmbedResponse(BaseModel):
+    """Response body for the POST /admin/embed endpoint."""
+
+    total_docs: int = Field(description="Number of source documents in corpus")
+    total_chunks: int = Field(description="Number of chunks indexed into Qdrant")
+    vector_dim: int = Field(description="Embedding vector dimension")
+    collection_name: str = Field(description="Qdrant collection name")
+    latency_ms: float = Field(description="Total embed+upsert latency in milliseconds")
+
+
 class ChatResponse(BaseModel):
     """
     Response body for the chat endpoint.
@@ -191,4 +201,11 @@ class ChatResponse(BaseModel):
     )
     latency_ms: float = Field(
         description="Total response latency in milliseconds.",
+    )
+    fallback: bool = Field(
+        default=False,
+        description=(
+            "True when the LLM call failed and the response was composed "
+            "by the deterministic fallback path."
+        ),
     )
