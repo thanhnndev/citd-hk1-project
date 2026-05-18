@@ -66,22 +66,32 @@ def _qdrant_url() -> str:
     return os.environ.get("QDRANT_URL", "http://localhost:46333")
 
 def _skip_without_real_openai_key() -> None:
+    if os.environ.get("RUN_LIVE_EMBEDDING_TESTS") != "1":
+        pytest.skip("Skipping credentialed embedding integration: set RUN_LIVE_EMBEDDING_TESTS=1")
     if not _is_real_api_key():
         pytest.skip("Skipping credentialed embedding integration: OPENAI_API_KEY is missing or fake")
 
 async def _post_admin_embed() -> dict:
-    """Call the real FastAPI /admin/embed path and validate its response contract."""
+    """Call /admin/embed through the configured backend URL or ASGI app."""
     import httpx
-    from app.main import app
 
     api_key = os.environ.get("BACKEND_API_KEY", "test-admin-key")
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        headers={"X-API-Key": api_key},
-    ) as client:
-        resp = await client.post("/admin/embed")
+    backend_url = os.environ.get("BACKEND_URL")
+    headers = {"X-API-Key": api_key}
+
+    if backend_url:
+        async with httpx.AsyncClient(base_url=backend_url.rstrip("/"), headers=headers, timeout=300) as client:
+            resp = await client.post("/admin/embed")
+    else:
+        from app.main import app
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers=headers,
+        ) as client:
+            resp = await client.post("/admin/embed")
 
     assert resp.status_code == 200, f"/admin/embed failed: {resp.status_code} {resp.text}"
     body = resp.json()
@@ -401,6 +411,24 @@ class TestEmbeddingVerifierReadiness:
             spec.loader.exec_module(module)
             assert module.key_status() == "present"
 
+    def test_redacted_openai_key_is_credential_blocked(self):
+        import importlib.util
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[2] / "scripts" / "verify-embedding-idempotency.py"
+        spec = importlib.util.spec_from_file_location("verify_embedding_idempotency_placeholder", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "[REDACTED:openai]"}, clear=False):
+            spec.loader.exec_module(module)
+            assert module.key_status() == "placeholder"
+            assert module.credential_blocked() is True
+
+    def test_masked_openai_key_is_not_real_for_integration_gate(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-proj-abcdefghijklmnopxxxx"}, clear=False):
+            assert _is_real_api_key() is False
+
     def test_fake_openai_key_is_credential_blocked(self):
         import importlib.util
         from pathlib import Path
@@ -438,9 +466,15 @@ class TestEmbeddingIntegration:
 # ---------------------------------------------------------------------------
 
 def _is_real_api_key() -> bool:
-    """Return True when OPENAI_API_KEY looks like a real key."""
-    key = os.environ.get("OPENAI_API_KEY", "")
-    return bool(key) and not key.startswith("fake")
+    """Return True when OPENAI_API_KEY is not empty or a known placeholder."""
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    placeholder_markers = ("fake", "[REDACTED", "REDACTED", "xxxx", "<")
+    placeholder_suffixes = (">", "xxxx")
+    return (
+        bool(key)
+        and not key.startswith(placeholder_markers)
+        and not key.endswith(placeholder_suffixes)
+    )
 
 
 @pytest.mark.integration

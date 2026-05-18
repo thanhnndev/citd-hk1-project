@@ -127,13 +127,24 @@ class QdrantService:
         Returns:
             Raw list of ScoredPoint objects from qdrant-client.
         """
-        results = await self._client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vector,
-            limit=top_k,
-            with_payload=True,
-            with_vectors=True,
-        )
+        if hasattr(self._client, "search"):
+            results = await self._client.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=query_vector,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=True,
+            )
+        else:
+            response = await self._client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                using=DENSE_VECTOR_NAME,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=True,
+            )
+            results = response.points
 
         logger.info(
             "qdrant.search_complete",
@@ -331,8 +342,8 @@ class QdrantService:
 
         return {
             "collection_name": COLLECTION_NAME,
-            "points_count": info.points_count,
-            "vectors_count": info.vectors_count,
+            "points_count": getattr(info, "points_count", None),
+            "vectors_count": getattr(info, "vectors_count", None),
             "dense_vector_name": DENSE_VECTOR_NAME,
             "dense_vector_size": dense_vector_size,
             "dense_vector_distance": dense_vector_distance,

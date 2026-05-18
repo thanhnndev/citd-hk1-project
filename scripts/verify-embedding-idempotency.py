@@ -32,16 +32,20 @@ VERIFY_MODE = os.environ.get("EMBED_VERIFY_MODE", "readiness")
 
 
 def key_status() -> str:
-    key = os.environ.get("OPENAI_API_KEY", "")
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not key:
         return "missing"
     if key.startswith("fake"):
         return "fake"
+    placeholder_markers = ("[REDACTED", "REDACTED", "xxxx", "<")
+    placeholder_suffixes = (">", "xxxx")
+    if key.startswith(placeholder_markers) or key.endswith(placeholder_suffixes):
+        return "placeholder"
     return "present"
 
 
 def credential_blocked() -> bool:
-    return key_status() in {"missing", "fake"}
+    return key_status() in {"missing", "fake", "placeholder"}
 
 
 def request_json(method: str, url: str, timeout: int = 120) -> tuple[int, dict[str, Any]]:
