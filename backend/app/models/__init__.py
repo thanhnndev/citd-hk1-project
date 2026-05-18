@@ -8,13 +8,17 @@ from .response import (
     PlaceResult,
     ScoreBreakdown,
 )
+from .rag import CorpusStats, RAGChunk, RetrievalResult
 
 __all__ = [
     "AccessibilityInfo",
     "ChatRequest",
     "ChatResponse",
     "Citation",
+    "CorpusStats",
     "LatLng",
     "PlaceResult",
+    "RAGChunk",
+    "RetrievalResult",
     "ScoreBreakdown",
 ]
