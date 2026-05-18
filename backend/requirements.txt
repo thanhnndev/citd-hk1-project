@@ -23,9 +23,11 @@ slowapi==0.1.9
 pydantic==2.13.4
 pydantic-settings
 
-# Vector Store & Embeddings
+# Vector Store, Embeddings & Agent Graph
 qdrant-client==1.18.0
 openai==1.82.0
+langgraph>=0.2.60
+langgraph-checkpoint-postgres>=2.0.0
 
 # Testing
 pytest>=8.0

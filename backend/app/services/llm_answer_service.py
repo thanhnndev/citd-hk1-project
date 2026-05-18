@@ -12,6 +12,7 @@ GroundedAnswerService.answer_from_chunks().
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncGenerator
 from typing import List
 
 import openai
@@ -170,13 +171,46 @@ class LLMAnswerService:
             fallback=False,
         )
 
-    async def answer_stream(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        """Streaming variant — to be implemented in S04.
+    async def answer_stream(
+        self,
+        chunks: list[RAGChunk],
+        citations: list[Citation],
+        query: str,
+        language: str,
+        session_id: str,
+    ) -> AsyncGenerator[str, None]:
+        """Yield a grounded answer token-by-token via OpenAI streaming.
 
-        Will yield token chunks via an async generator using
-        ``stream=True`` on the chat completions call.
+        Raises any OpenAI exception to the caller for streaming fallback handling.
         """
-        raise NotImplementedError(
-            "answer_stream() will be implemented in S04 (streaming responses). "
-            "Use answer() for non-streaming responses."
+        t0 = time.perf_counter()
+        total_tokens_sent = 0
+
+        system_prompt = _build_system_prompt(chunks, language)
+        messages: List[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+
+        stream = await self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=512,
+            stream=True,
+        )
+
+        async for chunk in stream:
+            token = chunk.choices[0].delta.content
+            if token:
+                total_tokens_sent += 1
+                yield token
+
+        elapsed = time.perf_counter() - t0
+        latency_ms = round(elapsed * 1000, 3)
+        logger.info(
+            "sse.token_sent",
+            total_tokens_sent=total_tokens_sent,
+            session_id=session_id,
+            latency_ms=latency_ms,
         )

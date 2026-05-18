@@ -1,10 +1,11 @@
 """Tests for POST /chat endpoint wired to GroundedAnswerService."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.response import ChatResponse
 from app.services.corpus_loader import load_corpus
 from app.services.retriever import Retriever
 
@@ -106,6 +107,37 @@ class TestChatEndpointValidation:
         })
         assert r.status_code == 422
 
+
+
+class TestChatEndpointAgentDelegation:
+    def test_post_chat_calls_agent_service_answer(self, client):
+        mock_agent = MagicMock()
+        mock_agent.checkpoint_mode = "test"
+        mock_agent.answer = AsyncMock(return_value=ChatResponse(
+            session_id="agent-post-s1",
+            message="agent response",
+            citations=[],
+            places=[],
+            intent="cultural_query",
+            langfuse_trace_id=None,
+            latency_ms=1.0,
+            fallback=False,
+        ))
+        app.state.agent_service = mock_agent
+
+        r = client.post("/chat", json={
+            "session_id": "agent-post-s1",
+            "message": "Hàm Ninh",
+            "language": "vi",
+        })
+
+        assert r.status_code == 200
+        assert r.json()["message"] == "agent response"
+        mock_agent.answer.assert_awaited_once_with(
+            session_id="agent-post-s1",
+            message="Hàm Ninh",
+            language="vi",
+        )
 
 class TestChatEndpointCorpusNotLoaded:
     """POST /chat returns 503 when retriever is not loaded."""

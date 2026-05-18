@@ -24,6 +24,7 @@ from app.routers.admin import router as admin_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
 from app.services.corpus_loader import load_corpus
+from app.services.agent_service import AgentService, create_agent_checkpointer
 from app.services.embedding_service import EmbeddingService
 from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from app.services.langfuse_service import init_langfuse
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.qdrant_service = None
     app.state.embedding_service = None
     app.state.llm_service = None
+    app.state.agent_service = None
 
     if chunks:
         try:
@@ -124,6 +126,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning("hybrid.init_failed", error=str(exc))
 
+    checkpoint, checkpoint_mode = await create_agent_checkpointer()
+    app.state.agent_service = AgentService(
+        retriever=app.state.retriever,
+        hybrid_retriever=app.state.hybrid_retriever,
+        llm_service=app.state.llm_service,
+        checkpointer=checkpoint,
+        checkpoint_mode=checkpoint_mode,
+    )
+
     logger.info(
         "app.startup",
         title=app.title,
@@ -132,6 +143,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         langfuse_enabled=_langfuse_cleanup is not None,
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
+        agent_service_enabled=app.state.agent_service is not None,
+        checkpoint_mode=checkpoint_mode,
     )
 
     yield

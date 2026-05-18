@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble } from "./message-bubble";
-import { sendChat, type ChatResponse, type Citation } from "@/lib/chat-api";
+import { sendChat, streamChat, type ChatResponse, type Citation } from "@/lib/chat-api";
 import { ArrowUp, RotateCcw, Loader2 } from "lucide-react";
 
 interface Message {
@@ -51,31 +51,118 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       setError(null);
       setLoading(true);
 
-      // Append user message immediately
+      // Append user message and the assistant placeholder that streaming will fill.
       const userMsg: Message = { role: "user", content: messageText };
-      setMessages((prev) => [...prev, userMsg]);
+      const assistantPlaceholder: Message = {
+        role: "assistant",
+        content: "",
+        citations: [],
+      };
+      setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
       setInput("");
 
-      try {
-        const response: ChatResponse = await sendChat(messageText, sessionId, language);
+      const appendToAssistant = (token: string) => {
+        setMessages((prev) => {
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          const lastMessage = next[lastIndex];
 
-        // Determine display text — use noEvidence fallback when message is empty
+          if (!lastMessage || lastMessage.role !== "assistant") {
+            return prev;
+          }
+
+          next[lastIndex] = {
+            ...lastMessage,
+            content: lastMessage.content + token,
+          };
+          return next;
+        });
+      };
+
+      const updateAssistantCitations = (citations: Citation[]) => {
+        setMessages((prev) => {
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          const lastMessage = next[lastIndex];
+
+          if (!lastMessage || lastMessage.role !== "assistant") {
+            return prev;
+          }
+
+          next[lastIndex] = { ...lastMessage, citations };
+          return next;
+        });
+      };
+
+      const removeEmptyAssistantPlaceholder = () => {
+        setMessages((prev) => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage?.role === "assistant" && !lastMessage.content) {
+            return prev.slice(0, -1);
+          }
+          return prev;
+        });
+      };
+
+      const renderPostFallback = async () => {
+        const response: ChatResponse = await sendChat(messageText, sessionId, language);
         const displayText =
           response.message && response.message.trim()
             ? response.message
             : translations.noEvidence;
 
-        const assistantMsg: Message = {
-          role: "assistant",
-          content: displayText,
-          citations: response.citations ?? [],
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
+        setMessages((prev) => {
+          const next = [...prev];
+          const lastIndex = next.length - 1;
+          const lastMessage = next[lastIndex];
+
+          if (lastMessage?.role === "assistant") {
+            next[lastIndex] = {
+              ...lastMessage,
+              content: displayText,
+              citations: response.citations ?? [],
+            };
+            return next;
+          }
+
+          return [
+            ...prev,
+            {
+              role: "assistant",
+              content: displayText,
+              citations: response.citations ?? [],
+            },
+          ];
+        });
+      };
+
+      try {
+        let streamFailed = false;
+        let streamErrorMessage = translations.error;
+
+        await streamChat(messageText, sessionId, language, {
+          onToken: appendToAssistant,
+          onCitations: updateAssistantCitations,
+          onDone: () => setLoading(false),
+          onError: (err) => {
+            streamFailed = true;
+            streamErrorMessage = err;
+          },
+        });
+
+        if (streamFailed) {
+          try {
+            await renderPostFallback();
+          } catch (err) {
+            removeEmptyAssistantPlaceholder();
+            setError(err instanceof Error ? err.message : streamErrorMessage);
+          } finally {
+            setLoading(false);
+          }
+        }
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : translations.error;
-        setError(errorMessage);
-      } finally {
+        removeEmptyAssistantPlaceholder();
+        setError(err instanceof Error ? err.message : translations.error);
         setLoading(false);
       }
     },
@@ -131,15 +218,6 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             typingLabel={translations.typing}
           />
         ))}
-
-        {/* Loading indicator — shown when waiting for assistant */}
-        {loading && messages.length > 0 && messages[messages.length - 1].role === "user" && (
-          <MessageBubble
-            role="assistant"
-            content=""
-            typingLabel={translations.typing}
-          />
-        )}
 
         {/* Error state */}
         {error && (
