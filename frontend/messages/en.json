@@ -5,7 +5,9 @@
     "map": "Map",
     "architecture": "Architecture",
     "localeLabel": "Language",
-    "localeSwitcherLabel": "Select language"
+    "localeSwitcherLabel": "Select language",
+    "copyright": "© {year} Ham Ninh AI Guide. Preserving heritage, supporting sustainable tourism.",
+    "tagline": "Built for the community — responsible AI for Ham Ninh fishing village, Phu Quoc."
   },
   "Landing": {
     "hero": {

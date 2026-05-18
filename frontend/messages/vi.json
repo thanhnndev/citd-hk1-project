@@ -5,7 +5,9 @@
     "map": "Bản đồ",
     "architecture": "Kiến trúc",
     "localeLabel": "Ngôn ngữ",
-    "localeSwitcherLabel": "Chọn ngôn ngữ"
+    "localeSwitcherLabel": "Chọn ngôn ngữ",
+    "copyright": "© {year} Hàm Ninh AI Guide. Bảo tồn di sản, hỗ trợ du lịch bền vững.",
+    "tagline": "Xây dựng vì cộng đồng — AI có trách nhiệm cho làng chài Hàm Ninh, Phú Quốc."
   },
   "Landing": {
     "hero": {
