@@ -307,13 +307,36 @@ class QdrantService:
         return results.points
 
     async def collection_info(self) -> dict:
-        """Return basic health stats for the collection.
-
-        Returns:
-            Dict with points_count and vectors_count keys.
-        """
+        """Return non-payload health stats and named-vector configuration."""
         info = await self._client.get_collection(COLLECTION_NAME)
+        vectors_cfg = info.config.params.vectors
+        dense_vector_size = None
+        dense_vector_distance = None
+        named_vectors = []
+
+        if isinstance(vectors_cfg, dict):
+            named_vectors = sorted(vectors_cfg.keys())
+            dense_cfg = vectors_cfg.get(DENSE_VECTOR_NAME)
+        else:
+            dense_cfg = vectors_cfg
+
+        if dense_cfg is not None:
+            dense_vector_size = getattr(dense_cfg, "size", None)
+            dense_vector_distance = getattr(dense_cfg, "distance", None)
+            if dense_vector_distance is not None:
+                dense_vector_distance = str(dense_vector_distance)
+
+        sparse_cfg = getattr(info.config.params, "sparse_vectors", None)
+        sparse_vectors = sorted(sparse_cfg.keys()) if isinstance(sparse_cfg, dict) else []
+
         return {
+            "collection_name": COLLECTION_NAME,
             "points_count": info.points_count,
             "vectors_count": info.vectors_count,
+            "dense_vector_name": DENSE_VECTOR_NAME,
+            "dense_vector_size": dense_vector_size,
+            "dense_vector_distance": dense_vector_distance,
+            "named_vectors": named_vectors,
+            "sparse_vector_name": SPARSE_VECTOR_NAME,
+            "sparse_vectors": sparse_vectors,
         }

@@ -12,8 +12,13 @@ import structlog
 import openai
 
 from app.core.config import get_settings
+from app.services.qdrant_service import VECTOR_SIZE
 
 logger = structlog.get_logger(__name__)
+
+class EmbeddingValidationError(RuntimeError):
+    """Raised when the embedding provider returns an unusable response shape."""
+
 
 
 class EmbeddingService:
@@ -62,6 +67,34 @@ class EmbeddingService:
             )
 
             batch_vectors = [item.embedding for item in response.data]
+            if len(batch_vectors) != len(batch):
+                logger.error(
+                    "embed.response_count_mismatch",
+                    batch_index=batch_index,
+                    expected_count=len(batch),
+                    actual_count=len(batch_vectors),
+                    model=self.model,
+                )
+                raise EmbeddingValidationError(
+                    "Embedding response count mismatch: "
+                    f"expected {len(batch)}, got {len(batch_vectors)}"
+                )
+
+            for vector_index, vector in enumerate(batch_vectors):
+                if len(vector) != VECTOR_SIZE:
+                    logger.error(
+                        "embed.vector_dimension_mismatch",
+                        batch_index=batch_index,
+                        vector_index=vector_index,
+                        expected_dim=VECTOR_SIZE,
+                        actual_dim=len(vector),
+                        model=self.model,
+                    )
+                    raise EmbeddingValidationError(
+                        "Embedding vector dimension mismatch: "
+                        f"expected {VECTOR_SIZE}, got {len(vector)} "
+                        f"at batch {batch_index} index {vector_index}"
+                    )
             all_vectors.extend(batch_vectors)
 
             logger.info(
