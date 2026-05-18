@@ -7,6 +7,7 @@ router registration, and custom error handlers. Replaces the S02 stub.
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import Depends, FastAPI, Request, status
@@ -21,7 +22,9 @@ from app.middleware.auth import verify_api_key
 from app.routers.admin import router as admin_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
+from app.services.corpus_loader import load_corpus
 from app.services.langfuse_service import init_langfuse
+from app.services.retriever import Retriever
 
 logger = get_logger(__name__)
 
@@ -38,7 +41,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         1. Configure structured logging.
         2. Load and validate settings (fail-fast on missing required env vars).
         3. Initialize Langfuse client if API keys are configured.
-        4. Log ready message with app metadata.
+        4. Load corpus and build retriever, store on app.state.
+        5. Log ready message with app metadata.
 
     Shutdown:
         1. Flush and close Langfuse client.
@@ -56,12 +60,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 2. Initialize Langfuse (graceful skip if keys absent)
     _langfuse_cleanup = init_langfuse(settings)
 
+    # 3. Load corpus and build retriever (project root = backend/../)
+    project_root = Path(__file__).resolve().parents[2]
+    corpus_path = project_root / "data" / "tourism_documents.jsonl"
+
+    try:
+        chunks = load_corpus(str(corpus_path))
+        retriever = Retriever(chunks)
+        app.state.retriever = retriever
+
+        # Compute and log corpus stats
+        source_ids = set(c.source_id for c in chunks)
+        logger.info(
+            "corpus.loaded",
+            total_docs=len(source_ids),
+            total_chunks=len(chunks),
+            corpus_path=str(corpus_path),
+        )
+    except Exception as exc:
+        logger.error("corpus.load_failed", error=str(exc))
+        # Don't crash — retriever will be absent, endpoint returns 503
+        app.state.retriever = None
+
     logger.info(
         "app.startup",
         title=app.title,
         version=app.version,
         env=settings.APP_ENV,
         langfuse_enabled=_langfuse_cleanup is not None,
+        corpus_loaded=app.state.retriever is not None,
     )
 
     yield
