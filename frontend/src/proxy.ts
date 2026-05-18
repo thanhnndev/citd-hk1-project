@@ -1,6 +1,6 @@
 import createMiddleware from 'next-intl/middleware';
 import type { NextRequest } from 'next/server';
-import { routing } from './src/i18n/routing';
+import { routing } from './i18n/routing';
 
 // Next.js 16: proxy.ts replaces middleware.ts as the network boundary file
 // Runtime is 'nodejs' (Edge runtime not supported for proxy.ts)
