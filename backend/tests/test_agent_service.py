@@ -2,7 +2,7 @@ import pytest
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse
-from app.services.agent_service import AgentService, InMemoryAgentCheckpointer
+from app.services.agent_service import AgentService, InMemoryAgentCheckpointer, create_agent_checkpointer
 from app.services.grounded_answer import detect_intent
 from app.services.retriever import citation_from_chunk
 
@@ -107,6 +107,35 @@ async def test_agent_uses_prior_turn_for_follow_up_retrieval(ham_ninh_chunk):
     assert retriever.queries[0] == "Ke ve Ham Ninh"
     assert retriever.queries[1] == "Ke ve Ham Ninh\nNo co gi ngon?"
 
+
+@pytest.mark.asyncio
+async def test_in_memory_checkpoint_is_same_process_only(ham_ninh_chunk):
+    first_retriever = FakeRetriever([ham_ninh_chunk])
+    first_service = AgentService(
+        retriever=first_retriever,
+        llm_service=FakeLLM(),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="memory",
+    )
+    await first_service.answer(session_id="s-agent-restart", message="Ke ve Ham Ninh", language="vi")
+
+    second_retriever = FakeRetriever([ham_ninh_chunk])
+    restarted_service = AgentService(
+        retriever=second_retriever,
+        llm_service=FakeLLM(),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="memory",
+    )
+    await restarted_service.answer(session_id="s-agent-restart", message="No co gi ngon?", language="vi")
+
+    assert second_retriever.queries == ["No co gi ngon?"]
+
+@pytest.mark.asyncio
+async def test_checkpoint_factory_rescopes_to_memory_when_postgres_unavailable():
+    checkpointer, mode = await create_agent_checkpointer("postgresql://invalid:invalid@127.0.0.1:1/missing")
+
+    assert mode == "memory"
+    assert isinstance(checkpointer, InMemoryAgentCheckpointer)
 
 @pytest.mark.asyncio
 async def test_agent_falls_back_when_llm_unavailable(ham_ninh_chunk):
