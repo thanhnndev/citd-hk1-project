@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.middleware.auth import verify_api_key
+from app.middleware.correlation import CorrelationIdMiddleware
 from app.routers.admin import router as admin_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
@@ -111,6 +112,13 @@ app = FastAPI(
 )
 
 
+# ── Correlation ID middleware ────────────────────────────────────────────
+
+# Added early so every log line (including error paths) carries a
+# request_id. Extracts X-Request-ID from the client or generates one.
+app.add_middleware(CorrelationIdMiddleware)
+
+
 # ── CORS middleware ──────────────────────────────────────────────────────
 
 # CORS is added via FastAPI's add_middleware which internally wraps the
@@ -185,7 +193,15 @@ async def http_exception_handler(
     """Handle HTTPException with structured error response.
 
     Returns {"detail", "code", "path"} instead of plain text.
+    Logs the error with correlation ID for traceability.
     """
+    log = get_logger(__name__)
+    log.warning(
+        "http_exception",
+        status_code=exc.status_code,
+        detail=str(exc.detail),
+        path=request.url.path,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -204,6 +220,7 @@ async def validation_exception_handler(
     """Handle request validation errors with structured detail.
 
     Returns per-field error information in a machine-readable format.
+    Logs the validation failure with correlation ID for traceability.
     """
     errors = []
     for error in exc.errors():
@@ -212,6 +229,13 @@ async def validation_exception_handler(
             "message": error["msg"],
             "type": error["type"],
         })
+
+    log = get_logger(__name__)
+    log.warning(
+        "request.validation_error",
+        path=request.url.path,
+        error_count=len(errors),
+    )
 
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

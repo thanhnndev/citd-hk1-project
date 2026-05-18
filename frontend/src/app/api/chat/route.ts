@@ -18,19 +18,32 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
+    // Forward or generate correlation ID for end-to-end tracing
+    const requestId =
+      request.headers.get("x-request-id") ?? crypto.randomUUID();
+
     const backendRes = await fetch(BACKEND_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": requestId,
+      },
       body: JSON.stringify(body),
     });
 
     const data = await backendRes.json();
 
-    return NextResponse.json(data, { status: backendRes.status });
+    const response = NextResponse.json(data, { status: backendRes.status });
+    response.headers.set("x-request-id", requestId);
+    return response;
   } catch {
-    return NextResponse.json(
+    const requestId =
+      request.headers.get("x-request-id") ?? crypto.randomUUID();
+    const response = NextResponse.json(
       { error: "Backend unavailable" },
       { status: 502 },
     );
+    response.headers.set("x-request-id", requestId);
+    return response;
   }
 }
