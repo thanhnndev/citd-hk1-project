@@ -59,7 +59,15 @@ export interface ChatResponse {
   reasoning_log?: string | null;
   intent?: string | null;
   langfuse_trace_id?: string | null;
+  fallback?: boolean;
   latency_ms: number;
+}
+
+export interface StreamChatCallbacks {
+  onToken: (token: string) => void;
+  onCitations: (citations: Citation[]) => void;
+  onDone: () => void;
+  onError: (error: string) => void;
 }
 
 /* ── Error shape returned by the route handler on 502 ──────────────── */
@@ -104,4 +112,78 @@ export async function sendChat(
   }
 
   return (await res.json()) as ChatResponse;
+}
+
+export async function streamChat(
+  message: string,
+  sessionId: string,
+  language: "vi" | "en",
+  callbacks: StreamChatCallbacks,
+): Promise<void> {
+  const params = new URLSearchParams({
+    message,
+    session_id: sessionId,
+    language,
+  });
+
+  const res = await fetch(`/api/chat/stream?${params.toString()}`, {
+    headers: { Accept: "text/event-stream" },
+  });
+
+  if (!res.ok) {
+    callbacks.onError(`Chat stream failed (${res.status})`);
+    return;
+  }
+
+  if (!res.body) {
+    callbacks.onError("No stream body");
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+
+    for (const event of events) {
+      const dataLines = event
+        .split("\n")
+        .filter((line) => line.startsWith("data: "));
+
+      for (const line of dataLines) {
+        const data = line.slice(6);
+
+        if (data === "[DONE]") {
+          callbacks.onDone();
+          return;
+        }
+
+        if (data.startsWith("[CITATIONS] ")) {
+          try {
+            callbacks.onCitations(JSON.parse(data.slice(12)) as Citation[]);
+          } catch {
+            callbacks.onError("Invalid citations payload");
+            return;
+          }
+          continue;
+        }
+
+        if (data.startsWith("[ERROR] ")) {
+          callbacks.onError(data.slice(8));
+          return;
+        }
+
+        callbacks.onToken(data);
+      }
+    }
+  }
 }
