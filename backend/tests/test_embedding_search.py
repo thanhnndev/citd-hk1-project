@@ -6,7 +6,7 @@ Integration tests require a live OpenAI key and Qdrant instance.
 
 import asyncio
 import os
-from typing import List
+from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,8 +15,13 @@ import pytest
 for _key in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
     os.environ.setdefault(_key, "fake-test-key")
 
-from app.services.embedding_service import EmbeddingService
-from app.services.qdrant_service import COLLECTION_NAME, QdrantService
+from app.services.embedding_service import EmbeddingService, EmbeddingValidationError
+from app.services.qdrant_service import (
+    COLLECTION_NAME,
+    DENSE_VECTOR_NAME,
+    VECTOR_SIZE,
+    QdrantService,
+)
 from app.models.rag import RAGChunk
 
 
@@ -31,10 +36,59 @@ def _make_fake_response(vectors: List[List[float]]) -> MagicMock:
     return response
 
 
-def _fake_vectors(n: int, dim: int = 1536) -> List[List[float]]:
+def _fake_vectors(n: int, dim: int = VECTOR_SIZE) -> List[List[float]]:
     """Generate n distinct fake vectors of dimension dim."""
     return [[float(i) / (n * dim)] * dim for i in range(n)]
 
+
+
+EXPECTED_CORPUS_CHUNKS = 321
+
+def _extract_dense_vector(vector: Any) -> list[float]:
+    """Return the dense vector from either unnamed or named Qdrant results."""
+    if isinstance(vector, dict):
+        assert DENSE_VECTOR_NAME in vector, (
+            f"Expected named vector {DENSE_VECTOR_NAME!r}; got keys {sorted(vector.keys())}"
+        )
+        vector = vector[DENSE_VECTOR_NAME]
+    assert isinstance(vector, list), f"Expected dense vector list, got {type(vector).__name__}"
+    return vector
+
+def _assert_collection_info_indexed(info: dict) -> None:
+    """Assert Qdrant reports the expected named dense-vector corpus state."""
+    assert info["collection_name"] == COLLECTION_NAME
+    assert info["points_count"] == EXPECTED_CORPUS_CHUNKS
+    assert info["dense_vector_name"] == DENSE_VECTOR_NAME
+    assert info["dense_vector_size"] == VECTOR_SIZE
+    assert DENSE_VECTOR_NAME in info["named_vectors"], info
+
+def _qdrant_url() -> str:
+    return os.environ.get("QDRANT_URL", "http://localhost:46333")
+
+def _skip_without_real_openai_key() -> None:
+    if not _is_real_api_key():
+        pytest.skip("Skipping credentialed embedding integration: OPENAI_API_KEY is missing or fake")
+
+async def _post_admin_embed() -> dict:
+    """Call the real FastAPI /admin/embed path and validate its response contract."""
+    import httpx
+    from app.main import app
+
+    api_key = os.environ.get("BACKEND_API_KEY", "test-admin-key")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": api_key},
+    ) as client:
+        resp = await client.post("/admin/embed")
+
+    assert resp.status_code == 200, f"/admin/embed failed: {resp.status_code} {resp.text}"
+    body = resp.json()
+    assert body["total_chunks"] == EXPECTED_CORPUS_CHUNKS, body
+    assert body["vector_dim"] == VECTOR_SIZE, body
+    assert body["collection_name"] == COLLECTION_NAME, body
+    return body
 
 # ---------------------------------------------------------------------------
 # Unit tests — batching logic
@@ -71,9 +125,9 @@ class TestEmbedBatching:
 
         # Build per-batch fake vectors so we can verify order preservation.
         batch_vecs = [
-            _fake_vectors(100, dim=4),   # batch 0: indices 0–99
-            _fake_vectors(100, dim=4),   # batch 1: indices 100–199
-            _fake_vectors(50, dim=4),    # batch 2: indices 200–249
+            _fake_vectors(100),   # batch 0: indices 0–99
+            _fake_vectors(100),   # batch 1: indices 100–199
+            _fake_vectors(50),    # batch 2: indices 200–249
         ]
         call_count = 0
 
@@ -101,7 +155,7 @@ class TestEmbedBatching:
         """Exactly BATCH_SIZE texts → one API call, no sleep."""
         svc = EmbeddingService()
         texts = [f"text {i}" for i in range(EmbeddingService.BATCH_SIZE)]
-        fake_vecs = _fake_vectors(EmbeddingService.BATCH_SIZE, dim=4)
+        fake_vecs = _fake_vectors(EmbeddingService.BATCH_SIZE)
 
         with patch.object(
             svc._client.embeddings,
@@ -119,7 +173,7 @@ class TestEmbedBatching:
     async def test_embed_query_returns_single_vector(self):
         """embed_query is a convenience wrapper returning one vector."""
         svc = EmbeddingService()
-        fake_vec = [0.1] * 1536
+        fake_vec = [0.1] * VECTOR_SIZE
 
         with patch.object(
             svc._client.embeddings,
@@ -131,13 +185,42 @@ class TestEmbedBatching:
 
         assert result == fake_vec
         assert isinstance(result, list)
-        assert len(result) == 1536
+        assert len(result) == VECTOR_SIZE
+
+
+    @pytest.mark.asyncio
+    async def test_embed_rejects_response_count_mismatch(self):
+        """Provider responses must include one vector for each input text."""
+        svc = EmbeddingService()
+
+        with patch.object(
+            svc._client.embeddings,
+            "create",
+            new_callable=AsyncMock,
+            return_value=_make_fake_response(_fake_vectors(1)),
+        ):
+            with pytest.raises(EmbeddingValidationError, match="count mismatch"):
+                await svc.embed_texts(["a", "b"])
+
+    @pytest.mark.asyncio
+    async def test_embed_rejects_wrong_vector_dimension(self):
+        """Provider vectors must match the Qdrant dense vector contract."""
+        svc = EmbeddingService()
+
+        with patch.object(
+            svc._client.embeddings,
+            "create",
+            new_callable=AsyncMock,
+            return_value=_make_fake_response([[0.1] * (VECTOR_SIZE - 1)]),
+        ):
+            with pytest.raises(EmbeddingValidationError, match="dimension mismatch"):
+                await svc.embed_texts(["a"])
 
     @pytest.mark.asyncio
     async def test_embed_batching_passes_correct_model(self):
         """API calls use the model from settings."""
         svc = EmbeddingService()
-        fake_vecs = _fake_vectors(2, dim=4)
+        fake_vecs = _fake_vectors(2)
 
         with patch.object(
             svc._client.embeddings,
@@ -181,7 +264,7 @@ class TestQdrantServiceUpsert:
         """upsert_chunks returns the number of points passed in."""
         n = 5
         chunks = [_make_chunk(i) for i in range(n)]
-        vectors = [[float(i)] * 1536 for i in range(n)]
+        vectors = [[float(i)] * VECTOR_SIZE for i in range(n)]
 
         svc = QdrantService(url="http://localhost:6333")
 
@@ -201,7 +284,7 @@ class TestQdrantServiceUpsert:
     async def test_upsert_payload_fields(self):
         """Each upserted point carries all RAGChunk fields in its payload."""
         chunk = _make_chunk(0)
-        vector = [0.1] * 1536
+        vector = [0.1] * VECTOR_SIZE
 
         svc = QdrantService(url="http://localhost:6333")
         mock_upsert = AsyncMock()
@@ -229,7 +312,7 @@ class TestQdrantServiceUpsert:
         """Point IDs are assigned as 0..N-1."""
         n = 3
         chunks = [_make_chunk(i) for i in range(n)]
-        vectors = [[0.0] * 1536 for _ in range(n)]
+        vectors = [[0.0] * VECTOR_SIZE for _ in range(n)]
 
         svc = QdrantService(url="http://localhost:6333")
         mock_upsert = AsyncMock()
@@ -240,6 +323,97 @@ class TestQdrantServiceUpsert:
         points = mock_upsert.call_args.kwargs["points"]
         assert [p.id for p in points] == list(range(n))
 
+
+
+    @pytest.mark.asyncio
+    async def test_collection_info_exposes_named_dense_vector_config(self):
+        """collection_info exposes counts and named dense vector size only."""
+        svc = QdrantService(url="http://localhost:6333")
+
+        dense_cfg = MagicMock()
+        dense_cfg.size = VECTOR_SIZE
+        dense_cfg.distance = "Cosine"
+        params = MagicMock()
+        params.vectors = {DENSE_VECTOR_NAME: dense_cfg}
+        params.sparse_vectors = {"sparse": MagicMock()}
+        config = MagicMock()
+        config.params = params
+        info = MagicMock()
+        info.config = config
+        info.points_count = 321
+        info.vectors_count = 321
+
+        with patch.object(svc._client, "get_collection", AsyncMock(return_value=info)):
+            result = await svc.collection_info()
+
+        assert result["collection_name"] == COLLECTION_NAME
+        assert result["points_count"] == 321
+        assert result["vectors_count"] == 321
+        assert result["dense_vector_name"] == DENSE_VECTOR_NAME
+        assert result["dense_vector_size"] == VECTOR_SIZE
+        assert result["named_vectors"] == [DENSE_VECTOR_NAME]
+
+
+class TestNamedVectorHelpers:
+    """Guard integration assertions against silent named-vector regressions."""
+
+    def test_extract_dense_vector_from_named_result(self):
+        dense = [0.1] * VECTOR_SIZE
+        assert _extract_dense_vector({DENSE_VECTOR_NAME: dense}) == dense
+
+    def test_extract_dense_vector_rejects_missing_dense_key(self):
+        with pytest.raises(AssertionError, match="Expected named vector"):
+            _extract_dense_vector({"other": [0.1]})
+
+    def test_collection_info_asserts_named_dense_shape(self):
+        _assert_collection_info_indexed({
+            "collection_name": COLLECTION_NAME,
+            "points_count": EXPECTED_CORPUS_CHUNKS,
+            "dense_vector_name": DENSE_VECTOR_NAME,
+            "dense_vector_size": VECTOR_SIZE,
+            "named_vectors": [DENSE_VECTOR_NAME],
+        })
+
+    def test_collection_info_rejects_unnamed_schema(self):
+        with pytest.raises(AssertionError):
+            _assert_collection_info_indexed({
+                "collection_name": COLLECTION_NAME,
+                "points_count": EXPECTED_CORPUS_CHUNKS,
+                "dense_vector_name": DENSE_VECTOR_NAME,
+                "dense_vector_size": VECTOR_SIZE,
+                "named_vectors": [],
+            })
+
+
+class TestEmbeddingVerifierReadiness:
+    """Guard the external readiness diagnostic used before live embedding calls."""
+
+    def test_openai_key_status_is_secret_safe(self):
+        import importlib.util
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[2] / "scripts" / "verify-embedding-idempotency.py"
+        spec = importlib.util.spec_from_file_location("verify_embedding_idempotency", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-live-secret-value"}, clear=False):
+            spec.loader.exec_module(module)
+            assert module.key_status() == "present"
+
+    def test_fake_openai_key_is_credential_blocked(self):
+        import importlib.util
+        from pathlib import Path
+
+        script = Path(__file__).resolve().parents[2] / "scripts" / "verify-embedding-idempotency.py"
+        spec = importlib.util.spec_from_file_location("verify_embedding_idempotency_fake", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake-test-key"}, clear=False):
+            spec.loader.exec_module(module)
+            assert module.key_status() == "fake"
+            assert module.credential_blocked() is True
 
 # ---------------------------------------------------------------------------
 # Integration marker (skipped in unit runs)
@@ -252,8 +426,7 @@ class TestEmbeddingIntegration:
     @pytest.mark.asyncio
     async def test_embed_query_real_vector_shape(self):
         """Real API call returns a 1536-dim vector."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
+        _skip_without_real_openai_key()
         svc = EmbeddingService()
         vec = await svc.embed_query("làng chài Hàm Ninh")
         assert len(vec) == 1536
@@ -272,56 +445,37 @@ def _is_real_api_key() -> bool:
 
 @pytest.mark.integration
 class TestEmbeddingIndex:
-    """Prove 321 chunks are indexed in Qdrant with correct vector shape."""
+    """Prove 321 chunks are indexed in Qdrant with correct named-vector shape."""
 
     @pytest.mark.asyncio
-    async def test_collection_exists_after_embed(self):
-        """POST /admin/embed returns 200 with total_chunks=321 and vector_dim=1536."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
+    async def test_embed_endpoint_indexes_named_dense_collection_idempotently(self):
+        """POST /admin/embed twice keeps the live named-vector corpus at 321 points."""
+        _skip_without_real_openai_key()
 
-        import httpx
-        from app.main import app
+        first_body = await _post_admin_embed()
+        assert first_body["total_chunks"] == EXPECTED_CORPUS_CHUNKS
 
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:46333")
-        api_key = os.environ.get("BACKEND_API_KEY", "test-admin-key")
+        svc = QdrantService(url=_qdrant_url())
+        first_info = await svc.collection_info()
+        _assert_collection_info_indexed(first_info)
 
-        async with httpx.AsyncClient(
-            app=app,
-            base_url="http://test",
-            headers={"X-API-Key": api_key},
-        ) as client:
-            resp = await client.post("/admin/embed")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["total_chunks"] == 321
-        assert body["vector_dim"] == 1536
-        assert body["collection_name"] == COLLECTION_NAME
+        second_body = await _post_admin_embed()
+        assert second_body["total_chunks"] == EXPECTED_CORPUS_CHUNKS
+        second_info = await svc.collection_info()
+        _assert_collection_info_indexed(second_info)
+        assert second_info["points_count"] == first_info["points_count"] == EXPECTED_CORPUS_CHUNKS
 
     @pytest.mark.asyncio
-    async def test_all_chunks_indexed(self):
-        """QdrantService.collection_info() reports points_count == 321."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
+    async def test_search_result_exposes_named_dense_vector_dimension(self):
+        """Search result vectors include the 1536-dimensional named dense vector."""
+        _skip_without_real_openai_key()
 
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:46333")
-        svc = QdrantService(url=qdrant_url)
-        info = await svc.collection_info()
-        assert info["points_count"] == 321
-
-    @pytest.mark.asyncio
-    async def test_vector_dimension(self):
-        """Search result vectors are 1536-dimensional."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
-
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:46333")
-        svc = QdrantService(url=qdrant_url)
-        results = await svc.search(query_vector=[0.0] * 1536, top_k=1)
-        assert len(results) >= 1
-        assert len(results[0].vector) == 1536
-
+        await _post_admin_embed()
+        svc = QdrantService(url=_qdrant_url())
+        results = await svc.search(query_vector=[0.0] * VECTOR_SIZE, top_k=1)
+        assert len(results) >= 1, "Expected at least one Qdrant result after embedding"
+        dense = _extract_dense_vector(results[0].vector)
+        assert len(dense) == VECTOR_SIZE
 
 @pytest.mark.integration
 class TestSemanticSearch:
@@ -330,12 +484,12 @@ class TestSemanticSearch:
     @pytest.mark.asyncio
     async def test_ham_ninh_query_returns_relevant_chunks(self):
         """'làng chài Hàm Ninh' query returns ≥3 results mentioning Hàm Ninh."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
+        _skip_without_real_openai_key()
 
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:46333")
+        qdrant_url = _qdrant_url()
         embed_svc = EmbeddingService()
         qdrant_svc = QdrantService(url=qdrant_url)
+        await _post_admin_embed()
 
         query_vec = await embed_svc.embed_query("làng chài Hàm Ninh")
         results = await qdrant_svc.search(query_vec, top_k=5)
@@ -354,12 +508,12 @@ class TestSemanticSearch:
     @pytest.mark.asyncio
     async def test_seafood_query(self):
         """'hải sản Phú Quốc' top result has location containing Phú Quốc."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
+        _skip_without_real_openai_key()
 
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:46333")
+        qdrant_url = _qdrant_url()
         embed_svc = EmbeddingService()
         qdrant_svc = QdrantService(url=qdrant_url)
+        await _post_admin_embed()
 
         query_vec = await embed_svc.embed_query("hải sản Phú Quốc")
         results = await qdrant_svc.search(query_vec, top_k=5)
@@ -373,12 +527,12 @@ class TestSemanticSearch:
     @pytest.mark.asyncio
     async def test_search_returns_five_results(self):
         """Generic tourism query returns exactly top_k=5 results."""
-        if not _is_real_api_key():
-            pytest.skip("Skipping: OPENAI_API_KEY is fake")
+        _skip_without_real_openai_key()
 
-        qdrant_url = os.environ.get("QDRANT_URL", "http://localhost:46333")
+        qdrant_url = _qdrant_url()
         embed_svc = EmbeddingService()
         qdrant_svc = QdrantService(url=qdrant_url)
+        await _post_admin_embed()
 
         query_vec = await embed_svc.embed_query("du lịch Phú Quốc")
         results = await qdrant_svc.search(query_vec, top_k=5)

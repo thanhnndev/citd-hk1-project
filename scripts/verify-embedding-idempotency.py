@@ -4,9 +4,11 @@
 Run from the repository root after exporting a valid OPENAI_API_KEY and ensuring
 Qdrant plus the backend API are reachable. The milestone backend usually listens
 on http://localhost:48721; override BACKEND_URL when using a different port.
-The script intentionally prints a credential-blocked status instead of failing
-when the OpenAI key is absent/fake, so validation can distinguish readiness from
-missing secrets.
+By default the script is a read-only readiness diagnostic and does not call
+/admin/embed. Set EMBED_VERIFY_MODE=idempotency after exporting a valid
+OPENAI_API_KEY to run the two live embed calls. The script intentionally prints
+a credential-blocked status instead of failing when the OpenAI key is absent/fake,
+so validation can distinguish readiness from missing secrets.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION", "tourism_chunks")
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:48721")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:46333")
 BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY", "test-admin-key")
+VERIFY_MODE = os.environ.get("EMBED_VERIFY_MODE", "readiness")
 
 
 def key_status() -> str:
@@ -34,7 +37,7 @@ def key_status() -> str:
         return "missing"
     if key.startswith("fake"):
         return "fake"
-    return f"present_prefix_{key[:7]}_len_{len(key)}"
+    return "present"
 
 
 def credential_blocked() -> bool:
@@ -161,6 +164,7 @@ def main() -> int:
             "expected_points": EXPECTED_POINTS,
             "expected_vector_dim": EXPECTED_VECTOR_DIM,
             "openai_api_key_status": key_status(),
+            "verify_mode": VERIFY_MODE,
         },
     )
 
@@ -172,11 +176,31 @@ def main() -> int:
             "RESULT",
             {
                 "status": "credential_blocked",
-                "rerun": "export OPENAI_API_KEY=<valid key>; ensure Qdrant/backend are running; python3 scripts/verify-embedding-idempotency.py",
+                "rerun": "export OPENAI_API_KEY=<valid key>; ensure Qdrant/backend are running; EMBED_VERIFY_MODE=idempotency python3 scripts/verify-embedding-idempotency.py",
             },
         )
         print("RESULT=credential_blocked")
         return 0
+
+    if VERIFY_MODE != "idempotency":
+        readiness_failures = []
+        if backend_error:
+            readiness_failures.append(backend_error)
+        if before_error:
+            readiness_failures.append(before_error)
+        if before_state is not None:
+            readiness_failures.extend(validate_state(before_state, "readiness"))
+        status_value = "ready" if not readiness_failures else "service_blocked"
+        print_json(
+            "RESULT",
+            {
+                "status": status_value,
+                "rerun": "EMBED_VERIFY_MODE=idempotency python3 scripts/verify-embedding-idempotency.py",
+                "failures": readiness_failures,
+            },
+        )
+        print(f"RESULT={status_value}")
+        return 0 if status_value == "ready" else 1
 
     if backend_error or before_error:
         print_json("FAILURES", [err for err in (backend_error, before_error) if err])
