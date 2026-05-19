@@ -20,6 +20,8 @@ from app.models.places import (
     PlaceToolStatus,
 )
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
+from app.services.ensemble_reranker import EnsembleReranker
+from app.services.feature_extractor import FeatureExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +90,12 @@ class PlaceRecommendationService:
                 fallback=tool_response.status != PlaceToolStatus.EMPTY,
             )
 
-        places = _grounded_results(tool_response.candidates)
+        try:
+            places = _reranked_results(tool_response.candidates, request.query)
+        except Exception as exc:  # noqa: BLE001 - ensemble pipeline fails closed.
+            logger.warning("ensemble_reranking_failed", extra={"error_type": type(exc).__name__})
+            places = _grounded_results(tool_response.candidates)
+
         logger.info(
             "place_recommendation_status",
             extra={"status": tool_response.status.value, "source": tool_response.source.value, "candidate_count": candidate_count, "result_count": len(places)},
@@ -140,44 +147,103 @@ class PlaceRecommendationService:
         )
 
 
-def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
-    candidate_ids = {candidate.place_id for candidate in candidates}
-    results = [_candidate_to_result(candidate) for candidate in candidates]
-    return [result for result in results if result.place_id in candidate_ids]
+def _reranked_results(
+    candidates: list[PlaceCandidate], query: str
+) -> list[PlaceResult]:
+    """Run candidates through FeatureExtractor → EnsembleReranker pipeline."""
+    extractor = FeatureExtractor()
+    feature_dicts = [
+        extractor.extract(candidate, query, user_location=None)
+        for candidate in candidates
+    ]
 
-
-def _candidate_to_result(candidate: PlaceCandidate) -> PlaceResult:
-    rating_score = (candidate.rating or 0.0) / 5.0
-    accessibility_score = candidate.accessibility_score
-    if accessibility_score is None and candidate.accessibility_options:
-        accessibility_score = 1.0 if any(candidate.accessibility_options.values()) else 0.0
-    local_factor = candidate.local_factor if candidate.local_factor is not None else 0.5
-    score = _clamp((0.45 + rating_score + (accessibility_score or 0.5) + local_factor) / 4)
-    return PlaceResult(
-        place_id=candidate.place_id,
-        display_name=candidate.display_name,
-        formatted_address=candidate.formatted_address or candidate.short_formatted_address,
-        location=candidate.location,
-        types=candidate.types,
-        primary_type=candidate.primary_type,
-        rating=candidate.rating,
-        user_rating_count=candidate.user_rating_count,
-        price_level=candidate.price_level,
-        open_now=candidate.open_now,
-        business_status=candidate.business_status,
-        local_factor=local_factor,
-        final_score=score,
-        score_breakdown=ScoreBreakdown(
-            relevance=1.0,
-            proximity=0.5,
-            price=0.5 if candidate.price_level is None else _clamp(1 - (candidate.price_level / 4)),
-            rating=_clamp(rating_score),
-            accessibility=_clamp(accessibility_score or 0.5),
-        ),
-        accessibility_score=accessibility_score,
-        accessibility_warning=candidate.accessibility_warning,
-        google_maps_uri=candidate.google_maps_uri or _maps_url(candidate.place_id),
+    sorted_candidates, score_breakdowns = EnsembleReranker().rerank(
+        candidates, feature_dicts
     )
+
+    results: list[PlaceResult] = []
+    for candidate, breakdown in zip(sorted_candidates, score_breakdowns):
+        accessibility_score = candidate.accessibility_score
+        if accessibility_score is None and candidate.accessibility_options:
+            accessibility_score = (
+                1.0 if any(candidate.accessibility_options.values()) else 0.0
+            )
+
+        results.append(
+            PlaceResult(
+                place_id=candidate.place_id,
+                display_name=candidate.display_name,
+                formatted_address=candidate.formatted_address
+                or candidate.short_formatted_address,
+                location=candidate.location,
+                types=candidate.types,
+                primary_type=candidate.primary_type,
+                rating=candidate.rating,
+                user_rating_count=candidate.user_rating_count,
+                price_level=candidate.price_level,
+                open_now=candidate.open_now,
+                business_status=candidate.business_status,
+                local_factor=candidate.local_factor
+                if candidate.local_factor is not None
+                else 0.5,
+                final_score=breakdown.final_score,
+                score_breakdown=breakdown,
+                accessibility_score=accessibility_score,
+                accessibility_warning=candidate.accessibility_warning,
+                google_maps_uri=candidate.google_maps_uri
+                or _maps_url(candidate.place_id),
+            )
+        )
+
+    return results
+
+
+def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
+    """Fallback path: return candidates with default ensemble ScoreBreakdown."""
+    results: list[PlaceResult] = []
+    for i, candidate in enumerate(candidates):
+        accessibility_score = candidate.accessibility_score
+        if accessibility_score is None and candidate.accessibility_options:
+            accessibility_score = (
+                1.0 if any(candidate.accessibility_options.values()) else 0.0
+            )
+
+        results.append(
+            PlaceResult(
+                place_id=candidate.place_id,
+                display_name=candidate.display_name,
+                formatted_address=candidate.formatted_address
+                or candidate.short_formatted_address,
+                location=candidate.location,
+                types=candidate.types,
+                primary_type=candidate.primary_type,
+                rating=candidate.rating,
+                user_rating_count=candidate.user_rating_count,
+                price_level=candidate.price_level,
+                open_now=candidate.open_now,
+                business_status=candidate.business_status,
+                local_factor=candidate.local_factor
+                if candidate.local_factor is not None
+                else 0.5,
+                final_score=0.5,
+                score_breakdown=ScoreBreakdown(
+                    tree1_locality=0.5,
+                    tree2_proximity=0.5,
+                    tree3_quality=0.5,
+                    s_bag=0.5,
+                    delta1_fairness=0.0,
+                    delta2_access=0.0,
+                    final_score=0.5,
+                    rank=i + 1,
+                ),
+                accessibility_score=accessibility_score,
+                accessibility_warning=candidate.accessibility_warning,
+                google_maps_uri=candidate.google_maps_uri
+                or _maps_url(candidate.place_id),
+            )
+        )
+
+    return results
 
 
 def _maps_url(place_id: str) -> str:

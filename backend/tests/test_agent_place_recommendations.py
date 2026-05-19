@@ -19,7 +19,16 @@ def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
         price_level=2,
         local_factor=0.8,
         final_score=0.9,
-        score_breakdown=ScoreBreakdown(relevance=1.0, proximity=0.5, price=0.5, rating=0.92, accessibility=0.5),
+        score_breakdown=ScoreBreakdown(
+            tree1_locality=0.9,
+            tree2_proximity=0.8,
+            tree3_quality=0.85,
+            s_bag=0.85,
+            delta1_fairness=0.0,
+            delta2_access=0.0,
+            final_score=0.9,
+            rank=1,
+        ),
         accessibility_score=0.5,
         google_maps_uri="https://maps.example/ham-ninh-seafood",
     )
