@@ -8,22 +8,35 @@ from app.models.request import LatLng
 
 
 class ScoreBreakdown(BaseModel):
-    """Individual scoring components for a recommended place."""
+    """Ensemble scoring components for the 3-tree reranker pipeline.
 
-    relevance: float = Field(
-        description="How well the place matches the user's intent (0-1)."
+    Replaces the legacy 5-field schema (relevance, proximity, price, rating,
+    accessibility) with the ensemble schema defined in REQUIREMENTS.md §7.8.
+    """
+
+    tree1_locality: float = Field(
+        description="Tree 1 locality-first score (0-1).",
     )
-    proximity: float = Field(
-        description="Normalized distance score relative to user location (0-1)."
+    tree2_proximity: float = Field(
+        description="Tree 2 proximity-first score (0-1).",
     )
-    price: float = Field(
-        description="Price alignment score with user budget (0-1)."
+    tree3_quality: float = Field(
+        description="Tree 3 quality-first score (0-1).",
     )
-    rating: float = Field(
-        description="Normalized Google Maps rating score (0-1)."
+    s_bag: float = Field(
+        description="Bagged average of the 3 tree scores (0-1).",
     )
-    accessibility: float = Field(
-        description="Accessibility compliance score (0-1)."
+    delta1_fairness: float = Field(
+        description="Applied fairness correction: η × Δ1 (can be negative).",
+    )
+    delta2_access: float = Field(
+        description="Applied accessibility correction: η × Δ2.",
+    )
+    final_score: float = Field(
+        description="Clipped final score F2, bounded to [0, 1].",
+    )
+    rank: int = Field(
+        description="1-based rank after stable sort by final_score descending.",
     )
 
 
@@ -65,11 +78,14 @@ class PlaceResult(BaseModel):
                     "local_factor": 0.8,
                     "final_score": 0.87,
                     "score_breakdown": {
-                        "relevance": 0.95,
-                        "proximity": 0.80,
-                        "price": 0.90,
-                        "rating": 0.85,
-                        "accessibility": 0.75,
+                        "tree1_locality": 0.90,
+                        "tree2_proximity": 0.65,
+                        "tree3_quality": 0.75,
+                        "s_bag": 0.767,
+                        "delta1_fairness": -0.045,
+                        "delta2_access": 0.0,
+                        "final_score": 0.72,
+                        "rank": 1,
                     },
                     "accessibility_score": 0.75,
                     "google_maps_uri": "https://maps.google.com/?q=ChIJ123abc",
