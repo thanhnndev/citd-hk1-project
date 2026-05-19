@@ -112,7 +112,7 @@
     "algorithmShowcase": {
       "eyebrow": "Thuật toán",
       "heading": "Ensemble Re-ranking biến dữ liệu địa điểm thành thứ hạng công bằng hơn",
-      "body": "Minh họa cách Decision Tree phát triển thành Random Forest (bagging), Gradient Boosting (boosting), rồi hợp nhất thành Final Score.",
+      "body": "Minh họa cách 3 cây quyết định dựa trên quy tắc định sẵn được kết hợp qua bagging và các stump hiệu chỉnh thành một điểm số cuối cùng có thể giải thích — không cần huấn luyện.",
       "chart": {
         "title": "Đóng góp minh họa vào Final Score",
         "ariaLabel": "Biểu đồ cột minh họa đóng góp của local factor, rating và distance vào điểm cuối.",
@@ -144,9 +144,9 @@
           },
           {
             "key": "delta1_fairness",
-            "label": "Điều chỉnh công bằng (+5%)",
-            "value": 0.05,
-            "description": "Bù điểm ưu tiên hộ kinh doanh bản địa, hỗ trợ sinh kế tiểu thương."
+            "label": "Điều chỉnh công bằng (phạt chuỗi cửa hàng)",
+            "value": -0.045,
+            "description": "Phạt các cơ sở chuỗi (η × -0.15) để giảm lợi thế xếp hạng của họ và hỗ trợ tiểu thương địa phương."
           },
           {
             "key": "delta2_access",
@@ -164,20 +164,20 @@
       },
       "steps": [
         {
-          "title": "Decision Tree",
-          "description": "Học các ngưỡng đơn giản trên rating, khoảng cách và local_factor."
+          "title": "Cây quyết định",
+          "description": "Ngưỡng định sẵn trên rating, khoảng cách và local_factor — mỗi cây áp dụng một quy tắc ưu tiên đơn giản."
         },
         {
-          "title": "Random Forest",
-          "description": "Bagging nhiều cây để giảm variance khi dữ liệu địa điểm nhiễu."
+          "title": "Bagging: Trung bình 3 cây",
+          "description": "Trung bình cộng 3 cây viết tay để ổn định điểm số và giảm phương sai từ một cây đơn lẻ."
         },
         {
-          "title": "Gradient Boosting",
-          "description": "Học tuần tự phần sai lệch còn lại để giảm bias của thứ hạng."
+          "title": "Stump hiệu chỉnh: công bằng + tiếp cận",
+          "description": "Áp dụng 2 hiệu chỉnh do chuyên gia định nghĩa: phạt chuỗi cửa hàng về công bằng, thưởng cho tính tiếp cận."
         },
         {
-          "title": "Ensemble Score",
-          "description": "Kết hợp 0.6 × RF và 0.4 × GBM thành final_score có giải thích."
+          "title": "Điểm cuối: clip và xếp hạng",
+          "description": "Giới hạn kết quả trong [0,1] và gán xếp hạng thứ 1-based — hoàn toàn có thể giải thích, không cần huấn luyện."
         }
       ]
     },
