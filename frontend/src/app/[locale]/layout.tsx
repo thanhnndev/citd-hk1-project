@@ -24,7 +24,7 @@ export default async function LocaleLayout({ children, params }: LocaleLayoutPro
   setRequestLocale(locale);
 
   return (
-    <html lang={locale} suppressHydrationWarning>
+    <html lang={locale} suppressHydrationWarning data-scroll-behavior="smooth">
       <body className="flex min-h-screen flex-col">
         <NextIntlClientProvider>
           <SiteHeader locale={locale} />
