@@ -68,7 +68,7 @@
         },
         {
           "title": "Ensemble Re-ranker — Fairness Engine",
-          "description": "Combines Random Forest and Gradient Boosting to balance quality, distance, and local_factor."
+          "description": "Combines 3 pre-defined rule-based decision trees via bagging, plus 2 correction stumps, to balance quality, distance, and local_factor — no training required."
         }
       ]
     },
@@ -207,8 +207,8 @@
           "description": "Place and routing data source in later slices."
         },
         {
-          "name": "scikit-learn",
-          "description": "Random Forest and Gradient Boosting for re-ranking."
+          "name": "Pre-defined Ensemble",
+          "description": "Hand-written decision trees with bagging and correction stumps for explainable re-ranking — no ML training."
         },
         {
           "name": "RAGAS",

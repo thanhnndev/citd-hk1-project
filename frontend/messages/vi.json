@@ -68,7 +68,7 @@
         },
         {
           "title": "Ensemble Re-ranker — Fairness Engine",
-          "description": "Kết hợp Random Forest và Gradient Boosting để cân bằng chất lượng, khoảng cách và local_factor."
+          "description": "Kết hợp 3 cây quyết định dựa trên quy tắc định sẵn qua kỹ thuật bagging và 2 stump hiệu chỉnh để cân bằng chất lượng, khoảng cách và local_factor — không cần huấn luyện."
         }
       ]
     },
@@ -207,8 +207,8 @@
           "description": "Nguồn dữ liệu địa điểm và tuyến đường trong các slice sau."
         },
         {
-          "name": "scikit-learn",
-          "description": "Random Forest và Gradient Boosting cho re-ranking."
+          "name": "Ensemble định sẵn",
+          "description": "Cây quyết định viết tay với bagging và stump hiệu chỉnh cho re-ranking có thể giải thích — không cần huấn luyện ML."
         },
         {
           "name": "RAGAS",
