@@ -29,6 +29,8 @@ from app.services.embedding_service import EmbeddingService
 from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from app.services.langfuse_service import init_langfuse
 from app.services.llm_answer_service import LLMAnswerService
+from app.services.place_recommendation_service import PlaceRecommendationService
+from app.services.places_service import GooglePlacesService
 from app.services.qdrant_service import QdrantService
 from app.services.retriever import Retriever
 
@@ -96,7 +98,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.qdrant_service = None
     app.state.embedding_service = None
     app.state.llm_service = None
+    app.state.places_service = None
+    app.state.place_recommendation_service = None
     app.state.agent_service = None
+
+    try:
+        places_service = GooglePlacesService(settings=settings)
+        app.state.places_service = places_service
+        app.state.place_recommendation_service = PlaceRecommendationService(places_service)
+        logger.info("places.recommendation_configured", provider="google_places")
+    except Exception as exc:
+        logger.warning("places.recommendation_init_failed", error_type=type(exc).__name__)
 
     if chunks:
         try:
@@ -133,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         llm_service=app.state.llm_service,
         checkpointer=checkpoint,
         checkpoint_mode=checkpoint_mode,
+        place_recommendation_service=app.state.place_recommendation_service,
     )
 
     logger.info(
@@ -144,10 +157,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
         agent_service_enabled=app.state.agent_service is not None,
+        place_recommendation_enabled=app.state.place_recommendation_service is not None,
         checkpoint_mode=checkpoint_mode,
     )
 
     yield
+
+    places_service = getattr(app.state, "places_service", None)
+    places_client = getattr(places_service, "_client", None)
+    close_client = getattr(places_client, "aclose", None)
+    if close_client is not None:
+        await close_client()
 
     # Shutdown phase
     if _langfuse_cleanup:

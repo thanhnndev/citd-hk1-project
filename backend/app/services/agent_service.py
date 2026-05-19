@@ -19,8 +19,9 @@ import structlog
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse, Citation
-from app.services.grounded_answer import GroundedAnswerService
+from app.services.grounded_answer import GroundedAnswerService, detect_intent
 from app.services.retriever import Retriever
+from app.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 
 try:  # LangGraph is optional in unit tests until dependencies are installed.
     from langgraph.graph import END, StateGraph
@@ -45,6 +46,7 @@ class AgentState(TypedDict, total=False):
     citations: list[Citation]
     response: ChatResponse
     fallback_reason: str | None
+    intent: str | None
 
 
 @dataclass
@@ -162,11 +164,13 @@ class AgentService:
         llm_service: Any | None = None,
         checkpointer: Any | None = None,
         checkpoint_mode: Literal["memory", "postgres", "test"] = "memory",
+        place_recommendation_service: Any | None = None,
     ) -> None:
         self._retriever = retriever
         self._hybrid_retriever = hybrid_retriever
         self._llm_service = llm_service
         self._fallback_service = GroundedAnswerService(retriever) if retriever is not None else None
+        self._place_recommendation_service = place_recommendation_service
         self._checkpointer = checkpointer or InMemoryAgentCheckpointer()
         self.checkpoint_mode = checkpoint_mode
         self._graph = self._build_graph()
@@ -223,7 +227,18 @@ class AgentService:
             checkpoint_mode=self.checkpoint_mode,
             retrieval_count=len(citations),
         )
-        if self._llm_service is not None:
+        if self._is_place_intent(state):
+            response = await self._answer_place_intent(state)
+            answer_text = response.message
+            citations = response.citations
+            yield answer_text
+            logger.info(
+                "agent.stream_place_recommendation",
+                session_id=session_id,
+                result_count=len(response.places),
+                fallback=response.fallback,
+            )
+        elif self._llm_service is not None:
             try:
                 async for token in self._llm_service.answer_stream(
                     chunks=state.get("chunks", []),
@@ -272,6 +287,7 @@ class AgentService:
             "history": history,
             "retrieval_query": retrieval_query,
             "fallback_reason": None,
+            "intent": detect_intent(message),
         }
 
     async def _retrieve_node(self, state: AgentState) -> AgentState:
@@ -306,6 +322,18 @@ class AgentService:
         return state
 
     async def _answer_node(self, state: AgentState) -> AgentState:
+        if self._is_place_intent(state):
+            state["response"] = await self._answer_place_intent(state)
+            logger.info(
+                "agent.node_complete",
+                phase="place_recommendation",
+                session_id=state["session_id"],
+                intent=state.get("intent"),
+                result_count=len(state["response"].places),
+                fallback=state["response"].fallback,
+            )
+            return state
+
         if self._llm_service is not None:
             try:
                 response = await self._llm_service.answer(
@@ -331,6 +359,54 @@ class AgentService:
             fallback=state["response"].fallback,
         )
         return state
+
+    def _is_place_intent(self, state: AgentState) -> bool:
+        intent = state.get("intent") or detect_intent(state["message"])
+        if intent in {"restaurant_search", "navigation"}:
+            return True
+        lower = state["message"].lower()
+        recommendation_terms = ("recommend", "gợi ý", "đề xuất", "dịch vụ", "service", "place", "địa điểm")
+        ham_ninh_terms = ("hàm ninh", "ham ninh")
+        return any(term in lower for term in recommendation_terms) and any(term in lower for term in ham_ninh_terms)
+
+    async def _answer_place_intent(self, state: AgentState) -> ChatResponse:
+        if self._place_recommendation_service is None:
+            state["fallback_reason"] = "place_recommendation_unavailable"
+            return ChatResponse(
+                session_id=state["session_id"],
+                message="Place recommendations are unavailable because the server Places service is not configured.",
+                citations=[],
+                places=[],
+                reasoning_log="place_recommendation status=unavailable source=none candidate_count=0 result_count=0",
+                intent=PLACE_RECOMMENDATION_INTENT,
+                langfuse_trace_id=None,
+                latency_ms=0.0,
+                fallback=True,
+            )
+        try:
+            return await self._place_recommendation_service.recommend(
+                query=state["message"],
+                language=state["language"],
+                session_id=state["session_id"],
+            )
+        except Exception as exc:  # noqa: BLE001 - service boundary must fail closed.
+            state["fallback_reason"] = "place_recommendation_error"
+            logger.warning(
+                "agent.place_recommendation_fallback",
+                session_id=state["session_id"],
+                reason=type(exc).__name__,
+            )
+            return ChatResponse(
+                session_id=state["session_id"],
+                message="Place recommendations are temporarily unavailable. Please try again shortly.",
+                citations=[],
+                places=[],
+                reasoning_log="place_recommendation status=upstream_error source=none candidate_count=0 result_count=0",
+                intent=PLACE_RECOMMENDATION_INTENT,
+                langfuse_trace_id=None,
+                latency_ms=0.0,
+                fallback=True,
+            )
 
     async def _compose_fallback(self, state: AgentState, reason: str) -> ChatResponse:
         if self._fallback_service is None:

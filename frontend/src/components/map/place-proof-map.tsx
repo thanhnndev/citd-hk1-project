@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ExternalLink, Loader2, MapPin, Navigation, Search, ShieldAlert, Star } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ExternalLink, Loader2, Navigation, Search, ShieldAlert, Star } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -101,7 +101,7 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
     };
   }, [pinnedPlaces]);
 
-  async function runSearch(nextQuery: string) {
+  const runSearch = useCallback(async (nextQuery: string) => {
     const prompt = nextQuery.trim() || translations.defaultQuery;
     setRequestState("loading");
     setErrorMessage(null);
@@ -117,13 +117,11 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
       setErrorMessage(error instanceof Error ? error.message : translations.error);
       setRequestState("error");
     }
-  }
+  }, [language, sessionId, translations.defaultQuery, translations.error]);
 
   useEffect(() => {
     void runSearch(translations.defaultQuery);
-    // Run once per mounted locale page; manual queries drive subsequent POSTs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, translations.defaultQuery]);
+  }, [runSearch, translations.defaultQuery]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
