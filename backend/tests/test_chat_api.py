@@ -7,13 +7,14 @@ Covers:
 - Language-specific responses (en vs vi)
 - Intent detection via keyword matching
 - 503 graceful degradation when corpus is not loaded
+- Place intent returns ensemble-scored PlaceResult list with full ScoreBreakdown
 """
 
 from __future__ import annotations
 
 import json
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -507,3 +508,162 @@ class TestChatEndpointCorpusNotLoaded:
                 "language": "vi",
             })
             assert r.status_code == 503, f"Expected 503 for query: {q}"
+
+
+# ---------------------------------------------------------------------------
+# TestChatPlaceIntent
+# ---------------------------------------------------------------------------
+
+class TestChatPlaceIntent:
+    """POST /chat with a place-intent query returns an ensemble-scored
+    PlaceResult list via mocked AgentService.answer().
+
+    Verifies the full HTTP response shape including:
+    - places[] with final_score, score_breakdown (8 ensemble fields), and rank
+    - Rank ordering (places[0].final_score > places[1].final_score)
+    - score_breakdown.rank == 1 for the top result
+    - intent == 'place_recommendation'
+    """
+
+    def _make_place_result(
+        self,
+        *,
+        place_id: str,
+        display_name: str,
+        final_score: float,
+        rank: int,
+        tree1: float = 0.9,
+        tree2: float = 0.7,
+        tree3: float = 0.8,
+    ) -> "PlaceResult":
+        """Helper to construct a PlaceResult with a full ensemble ScoreBreakdown."""
+        from app.models.response import PlaceResult, ScoreBreakdown
+
+        s_bag = round((tree1 + tree2 + tree3) / 3, 4)
+        delta1 = round(final_score - s_bag, 4)
+
+        sb = ScoreBreakdown(
+            tree1_locality=tree1,
+            tree2_proximity=tree2,
+            tree3_quality=tree3,
+            s_bag=s_bag,
+            delta1_fairness=delta1,
+            delta2_access=0.0,
+            final_score=final_score,
+            rank=rank,
+        )
+
+        return PlaceResult(
+            place_id=place_id,
+            display_name=display_name,
+            formatted_address="123 Đường Biển, Phú Quốc, Kiên Giang",
+            location={"lat": 10.1794, "lng": 104.0491},
+            types=["restaurant", "seafood_restaurant"],
+            primary_type="seafood_restaurant",
+            rating=4.5,
+            user_rating_count=128,
+            price_level=2,
+            open_now=True,
+            business_status="OPERATIONAL",
+            local_factor=0.8,
+            final_score=final_score,
+            score_breakdown=sb,
+            accessibility_score=0.75,
+            google_maps_uri=f"https://maps.google.com/?q={place_id}",
+        )
+
+    def test_place_intent_returns_ensemble_scores(self, client):
+        """Mocked AgentService.answer returns 2 PlaceResult objects with
+        ensemble ScoreBreakdown; POST /chat returns them with correct shape."""
+        from app.models.response import ChatResponse, PlaceResult
+
+        place_a = self._make_place_result(
+            place_id="ChIJ_HamNinh_001",
+            display_name="Nhà hàng Biển Xanh",
+            final_score=0.87,
+            rank=1,
+            tree1=0.92,
+            tree2=0.65,
+            tree3=0.78,
+        )
+        place_b = self._make_place_result(
+            place_id="ChIJ_HamNinh_002",
+            display_name="Quán Hải Sản Ngọc Anh",
+            final_score=0.72,
+            rank=2,
+            tree1=0.70,
+            tree2=0.80,
+            tree3=0.65,
+        )
+
+        mock_response = ChatResponse(
+            session_id="s-place-01",
+            message="Dưới đây là các nhà hàng gợi ý cho bạn tại Hàm Ninh.",
+            citations=[],
+            places=[place_a, place_b],
+            reasoning_log="place_recommendation source=google candidate_count=2 result_count=2",
+            intent="place_recommendation",
+            langfuse_trace_id=None,
+            latency_ms=245.3,
+            fallback=False,
+        )
+
+        with patch.object(
+            client.app.state.agent_service,
+            "answer",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            r = client.post("/chat", json={
+                "session_id": "s-place-01",
+                "message": "Nhà hàng ở Hàm Ninh",
+                "language": "vi",
+            })
+
+        assert r.status_code == 200
+        body = r.json()
+
+        # --- places count ---
+        assert len(body["places"]) == 2
+
+        # --- rank ordering: first place has higher final_score ---
+        assert body["places"][0]["final_score"] > body["places"][1]["final_score"]
+
+        # --- score_breakdown field presence and types ---
+        sb0 = body["places"][0]["score_breakdown"]
+        ensemble_fields = [
+            "tree1_locality", "tree2_proximity", "tree3_quality",
+            "s_bag", "delta1_fairness", "delta2_access",
+            "final_score", "rank",
+        ]
+        for field_name in ensemble_fields:
+            assert field_name in sb0, f"Missing ensemble field: {field_name}"
+
+        # --- score_breakdown types ---
+        for numeric_field in ensemble_fields:
+            if numeric_field == "rank":
+                assert isinstance(sb0[numeric_field], int), f"rank should be int"
+            else:
+                assert isinstance(sb0[numeric_field], (int, float)), \
+                    f"{numeric_field} should be numeric"
+
+        # --- rank == 1 for top result ---
+        assert sb0["rank"] == 1
+
+        # --- final_score consistency: score_breakdown.final_score == top-level final_score ---
+        assert sb0["final_score"] == body["places"][0]["final_score"]
+
+        # --- intent ---
+        assert "intent" in body
+        assert body["intent"] == "place_recommendation"
+
+        # --- second place rank == 2 ---
+        assert body["places"][1]["score_breakdown"]["rank"] == 2
+
+        # --- place identity fields ---
+        assert body["places"][0]["place_id"] == "ChIJ_HamNinh_001"
+        assert body["places"][0]["display_name"] == "Nhà hàng Biển Xanh"
+        assert isinstance(body["places"][0]["types"], list)
+        assert "restaurant" in body["places"][0]["types"]
+        assert isinstance(body["places"][0]["local_factor"], float)
+        assert "google_maps_uri" in body["places"][0]
