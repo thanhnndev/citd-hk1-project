@@ -112,7 +112,7 @@
     "algorithmShowcase": {
       "eyebrow": "Algorithm",
       "heading": "Ensemble re-ranking turns place signals into a fairer order",
-      "body": "Shows how a Decision Tree grows into Random Forest bagging, Gradient Boosting, and a final explainable score.",
+      "body": "Shows how 3 pre-defined rule-based decision trees are combined via bagging and correction stumps into a final explainable score — no training required.",
       "chart": {
         "title": "Illustrative contribution to Final Score",
         "ariaLabel": "Bar chart showing example contributions of local factor, rating, and distance to the final score.",
@@ -144,9 +144,9 @@
           },
           {
             "key": "delta1_fairness",
-            "label": "Fairness adjustment (+5%)",
-            "value": 0.05,
-            "description": "Bonus for local family-run businesses to support small-vendor livelihoods."
+            "label": "Fairness adjustment (penalty for chains)",
+            "value": -0.045,
+            "description": "Penalty applied to chain businesses (η × -0.15) to reduce their ranking advantage and support small local vendors."
           },
           {
             "key": "delta2_access",
@@ -165,19 +165,19 @@
       "steps": [
         {
           "title": "Decision Tree",
-          "description": "Learns simple thresholds over rating, distance, and local_factor."
+          "description": "Pre-defined thresholds over rating, distance, and local_factor — each tree applies a simple priority rule."
         },
         {
-          "title": "Random Forest",
-          "description": "Bags many trees to reduce variance when place data is noisy."
+          "title": "Bagging: Average of 3 trees",
+          "description": "Averages all 3 hand-written trees via simple mean to stabilize scores and reduce single-tree variance."
         },
         {
-          "title": "Gradient Boosting",
-          "description": "Sequentially learns remaining errors to reduce ranking bias."
+          "title": "Correction stumps: fairness + accessibility",
+          "description": "Applies 2 expert-defined corrections: fairness penalty for chain businesses, bonus for accessibility features."
         },
         {
-          "title": "Ensemble Score",
-          "description": "Combines 0.6 × RF and 0.4 × GBM into an explainable final_score."
+          "title": "Final score: clip and rank",
+          "description": "Clips the result to [0,1] and assigns a 1-based rank — fully explainable, no training needed."
         }
       ]
     },
