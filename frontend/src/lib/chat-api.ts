@@ -24,11 +24,14 @@ export interface ChatRequest {
 /* ── Response shapes (backend: ChatResponse, Citation, PlaceResult) ── */
 
 export interface ScoreBreakdown {
-  relevance: number;
-  proximity: number;
-  price: number;
-  rating: number;
-  accessibility: number;
+  tree1_locality: number;
+  tree2_proximity: number;
+  tree3_quality: number;
+  s_bag: number;
+  delta1_fairness: number;
+  delta2_access: number;
+  final_score: number;
+  rank: number;
 }
 
 export interface PlaceResult {
