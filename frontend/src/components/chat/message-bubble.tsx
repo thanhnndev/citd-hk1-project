@@ -1,20 +1,30 @@
 "use client";
 
 import { CitationCard } from "./citation-card";
-import type { Citation } from "@/lib/chat-api";
+import { PlaceCard } from "./place-card";
+import type { Citation, PlaceResult } from "@/lib/chat-api";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
+  places?: PlaceResult[];
   typingLabel?: string;
+  placeTranslations?: {
+    placeResultsHeading: string;
+    viewOnMap: string;
+    scoreLabel: string;
+    noRating: string;
+  };
 }
 
 export function MessageBubble({
   role,
   content,
   citations,
+  places,
   typingLabel = "Thinking...",
+  placeTranslations,
 }: MessageBubbleProps) {
   const isUser = role === "user";
 
@@ -43,6 +53,20 @@ export function MessageBubble({
             {citations.map((citation, i) => (
               <CitationCard key={i} citation={citation} />
             ))}
+          </div>
+        )}
+
+        {/* Place cards — only for assistant messages with places */}
+        {!isUser && places && places.length > 0 && placeTranslations && (
+          <div className="mt-3" role="region" aria-label={placeTranslations.placeResultsHeading}>
+            <p className="text-xs font-medium text-muted-foreground mb-2">
+              {placeTranslations.placeResultsHeading}
+            </p>
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin" aria-label={placeTranslations.placeResultsHeading}>
+              {places.slice(0, 5).map((place) => (
+                <PlaceCard key={place.place_id} place={place} translations={placeTranslations} />
+              ))}
+            </div>
           </div>
         )}
       </div>

@@ -3,13 +3,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble } from "./message-bubble";
-import { sendChat, streamChat, type ChatResponse, type Citation } from "@/lib/chat-api";
+import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult } from "@/lib/chat-api";
 import { ArrowUp, RotateCcw, Loader2 } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
+  places?: PlaceResult[];
 }
 
 interface ChatInterfaceProps {
@@ -24,6 +25,10 @@ interface ChatInterfaceProps {
     citations: string;
     noEvidence: string;
     newQuestion: string;
+    placeResultsHeading?: string;
+    viewOnMap?: string;
+    scoreLabel?: string;
+    noRating?: string;
   };
 }
 
@@ -121,6 +126,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               ...lastMessage,
               content: displayText,
               citations: response.citations ?? [],
+              places: response.places ?? [],
             };
             return next;
           }
@@ -131,6 +137,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               role: "assistant",
               content: displayText,
               citations: response.citations ?? [],
+              places: response.places ?? [],
             },
           ];
         });
@@ -215,7 +222,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             role={msg.role}
             content={msg.content}
             citations={msg.citations}
+            places={msg.places}
             typingLabel={translations.typing}
+            placeTranslations={{
+              placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
+              viewOnMap: translations.viewOnMap ?? "View on Map",
+              scoreLabel: translations.scoreLabel ?? "Score",
+              noRating: translations.noRating ?? "No rating",
+            }}
           />
         ))}
 

@@ -22,6 +22,10 @@ export default async function ChatPage({ params }: Props) {
     citations: t('citations'),
     noEvidence: t('noEvidence'),
     newQuestion: t('newQuestion'),
+    placeResultsHeading: t('placeResultsHeading'),
+    viewOnMap: t('viewOnMap'),
+    scoreLabel: t('scoreLabel'),
+    noRating: t('noRating'),
   };
 
   return (

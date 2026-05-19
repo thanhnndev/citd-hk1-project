@@ -119,22 +119,46 @@
         "description": "Dữ liệu bên dưới là ví dụ giải thích giao diện, không phải kết quả Places API trực tiếp.",
         "bars": [
           {
-            "key": "local_factor",
-            "label": "Nhân tố địa phương",
-            "value": 0.42,
-            "description": "Mức độ cơ sở gắn với hộ kinh doanh và nghề truyền thống địa phương."
+            "key": "tree1_locality",
+            "label": "Cây quyết định 1: Ưu tiên địa phương",
+            "value": 0.78,
+            "description": "Cây quyết định đầu tiên chấm điểm dựa trên mức độ gắn với cộng đồng địa phương."
           },
           {
-            "key": "rating",
-            "label": "Đánh giá",
-            "value": 0.33,
-            "description": "Chất lượng cảm nhận từ rating và tín hiệu review đã chuẩn hóa."
+            "key": "tree2_proximity",
+            "label": "Cây quyết định 2: Ưu tiên khoảng cách",
+            "value": 0.65,
+            "description": "Cây quyết định thứ hai ưu tiên các địa điểm gần vị trí hoặc tuyến tham quan."
           },
           {
-            "key": "distance",
-            "label": "Khoảng cách",
-            "value": 0.25,
-            "description": "Độ thuận tiện di chuyển từ vị trí hoặc tuyến tham quan của người dùng."
+            "key": "tree3_quality",
+            "label": "Cây quyết định 3: Ưu tiên chất lượng",
+            "value": 0.58,
+            "description": "Cây quyết định thứ ba đánh giá chất lượng từ rating và phản hồi khách tham quan."
+          },
+          {
+            "key": "s_bag",
+            "label": "Bagging: Trung bình 3 cây",
+            "value": 0.67,
+            "description": "Kết hợp 3 cây bằng kỹ thuật bagging để giảm phương sai và tăng ổn định."
+          },
+          {
+            "key": "delta1_fairness",
+            "label": "Điều chỉnh công bằng (+5%)",
+            "value": 0.05,
+            "description": "Bù điểm ưu tiên hộ kinh doanh bản địa, hỗ trợ sinh kế tiểu thương."
+          },
+          {
+            "key": "delta2_access",
+            "label": "Điều chỉnh tiếp cận (+3%)",
+            "value": 0.03,
+            "description": "Bù điểm cho địa điểm có khả năng tiếp cận cao, hỗ trợ du khách khuyết tật."
+          },
+          {
+            "key": "final_score",
+            "label": "Điểm cuối cùng",
+            "value": 0.75,
+            "description": "Kết quả ensemble cuối cùng — tổng hợp bagging và các điều chỉnh công bằng, tiếp cận."
           }
         ]
       },
@@ -230,7 +254,11 @@
     "retry": "Thử lại",
     "typing": "Đang trả lời...",
     "noEvidence": "Tôi chưa tìm thấy thông tin về câu hỏi này. Hãy thử hỏi theo cách khác.",
-    "newQuestion": "Hỏi thêm"
+    "newQuestion": "Hỏi thêm",
+    "placeResultsHeading": "Địa điểm gợi ý",
+    "viewOnMap": "Xem trên Bản đồ",
+    "scoreLabel": "Điểm số",
+    "noRating": "Chưa có đánh giá"
   },
   "Map": {
     "title": "Bản đồ kiểm chứng địa điểm Hàm Ninh",

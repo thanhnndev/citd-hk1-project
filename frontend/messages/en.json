@@ -119,22 +119,46 @@
         "description": "The values below are interface explanation data, not live Places API results.",
         "bars": [
           {
-            "key": "local_factor",
-            "label": "Local factor",
-            "value": 0.42,
-            "description": "How strongly a place is tied to local family businesses and traditional livelihoods."
+            "key": "tree1_locality",
+            "label": "Tree 1: Locality-first",
+            "value": 0.78,
+            "description": "First decision tree scores based on how strongly a place supports local community and livelihoods."
           },
           {
-            "key": "rating",
-            "label": "Rating",
-            "value": 0.33,
-            "description": "Perceived quality from normalized rating and review signals."
+            "key": "tree2_proximity",
+            "label": "Tree 2: Proximity-first",
+            "value": 0.65,
+            "description": "Second decision tree prioritizes places near the user's location or planned route."
           },
           {
-            "key": "distance",
-            "label": "Distance",
-            "value": 0.25,
-            "description": "Travel convenience from the user location or planned route."
+            "key": "tree3_quality",
+            "label": "Tree 3: Quality-first",
+            "value": 0.58,
+            "description": "Third decision tree evaluates quality from ratings and visitor feedback."
+          },
+          {
+            "key": "s_bag",
+            "label": "Bagging: Average of 3 trees",
+            "value": 0.67,
+            "description": "Combines all 3 trees via bagging to reduce variance and increase stability."
+          },
+          {
+            "key": "delta1_fairness",
+            "label": "Fairness adjustment (+5%)",
+            "value": 0.05,
+            "description": "Bonus for local family-run businesses to support small-vendor livelihoods."
+          },
+          {
+            "key": "delta2_access",
+            "label": "Accessibility adjustment (+3%)",
+            "value": 0.03,
+            "description": "Bonus for places with high accessibility, supporting visitors with disabilities."
+          },
+          {
+            "key": "final_score",
+            "label": "Final score",
+            "value": 0.75,
+            "description": "The final ensemble result — combining bagged tree scores with fairness and accessibility adjustments."
           }
         ]
       },
@@ -230,7 +254,11 @@
     "retry": "Retry",
     "typing": "Thinking...",
     "noEvidence": "I couldn't find information about that. Try asking differently.",
-    "newQuestion": "Ask another question"
+    "newQuestion": "Ask another question",
+    "placeResultsHeading": "Recommended Places",
+    "viewOnMap": "View on Map",
+    "scoreLabel": "Score",
+    "noRating": "No rating"
   },
   "Map": {
     "title": "Ham Ninh Place Proof Map",
