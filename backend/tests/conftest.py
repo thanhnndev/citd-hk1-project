@@ -12,7 +12,7 @@ from app.services.embedding_service import EmbeddingService
 
 # Ensure required app secrets are set before any app module imports.
 # Google credentials are optional and should remain absent unless a test opts in.
-os.environ.setdefault("OPENAI_API_KEY", "fake-test-key")
+os.environ["OPENAI_API_KEY"] = "fake-test-key"
 
 
 def _resolve_corpus_path() -> str:
