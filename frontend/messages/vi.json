@@ -292,7 +292,113 @@
     "responseNote": "Ghi chú của trợ lý"
   },
   "Architecture": {
-    "title": "Kiến trúc hệ thống"
+    "title": "Kiến trúc hệ thống",
+    "overview": {
+      "eyebrow": "Thiết kế hệ thống",
+      "heading": "Trợ lý AI đa agent cho làng chài Hàm Ninh",
+      "body": "Kiến trúc kết hợp Retrieval-Augmented Generation cho tri thức văn hóa, Google Places API cho thông tin địa điểm, ensemble re-ranking cho công bằng, và điều phối agent dựa trên LangGraph — tất cả được phục vụ qua frontend Next.js song ngữ với khả năng quan sát toàn diện.",
+      "cards": [
+        {
+          "title": "Luồng dữ liệu",
+          "description": "Người dùng → Frontend → Bộ điều phối Agent → Worker (RAG, Maps) → SSE Streaming → Phản hồi"
+        }
+      ]
+    },
+    "ragPipeline": {
+      "eyebrow": "Truy xuất tri thức",
+      "heading": "RAG Pipeline — Hỏi đáp văn hóa có trích dẫn",
+      "body": "Câu trả lời về văn hóa, lịch sử và ẩm thực Hàm Ninh được neo vào tài liệu truy xuất — không phải suy đoán của mô hình. Mỗi câu trả lời bao gồm trích dẫn và được đánh giá bởi RAGAS về độ trung thực và liên quan.",
+      "cards": [
+        {
+          "title": "Kho tài liệu",
+          "description": "Tài liệu văn hóa được chuẩn hóa, phân đoạn và embedding vào Qdrant vector store để tìm kiếm tương đồng nhanh."
+        },
+        {
+          "title": "Tìm kiếm vector",
+          "description": "Truy vấn người dùng được embedding và so khớp với kho tài liệu qua top-k similarity với ngưỡng tùy chỉnh."
+        },
+        {
+          "title": "Câu trả lời có căn cứ",
+          "description": "LLM sinh câu trả lời dựa trên ngữ cảnh truy xuất, kèm trích dẫn inline về tài liệu nguồn."
+        }
+      ]
+    },
+    "mapsApi": {
+      "eyebrow": "Thông tin địa điểm",
+      "heading": "Maps & Places API — Dữ liệu địa điểm thực tế",
+      "body": "Google Places API (New) cung cấp tìm kiếm gần đây, tìm kiếm theo văn bản, chi tiết địa điểm và autocomplete. Routes API hỗ trợ computeRouteMatrix cho gợi ý nhạy cảm khoảng cách. Circuit breaker đảm bảo graceful fallback khi API không khả dụng.",
+      "cards": [
+        {
+          "title": "Khám phá địa điểm",
+          "description": "Nearby search và text search tìm nhà hàng, dịch vụ và điểm văn hóa gần làng chài Hàm Ninh."
+        },
+        {
+          "title": "Lập kế hoạch tuyến đường",
+          "description": "computeRouteMatrix tính khoảng cách giữa vị trí người dùng và địa điểm ứng viên cho xếp hạng nhạy cảm khoảng cách."
+        },
+        {
+          "title": "Xử lý dự phòng",
+          "description": "Circuit breaker phát hiện lỗi API và trả kết quả dự phòng thay vì trang lỗi."
+        }
+      ]
+    },
+    "ensembleReranker": {
+      "eyebrow": "Công cụ công bằng",
+      "heading": "Ensemble Re-ranking — Chấm điểm công bằng và giải thích được",
+      "body": "Ba cây quyết định dựa trên quy tắc (Ưu tiên địa phương, Ưu tiên khoảng cách, Ưu tiên chất lượng) được kết hợp qua bagging. Hai correction stump áp dụng phạt công bằng cho chuỗi cửa hàng và thưởng tiếp cận. local_factor đảm bảo ≥40% địa điểm địa phương xuất hiện trong top-5.",
+      "cards": [
+        {
+          "title": "Cây quyết định",
+          "description": "Cây Ưu tiên địa phương, Khoảng cách và Chất lượng chấm điểm bằng quy tắc viết tay — không cần huấn luyện."
+        },
+        {
+          "title": "Stump hiệu chỉnh",
+          "description": "Phạt công bằng giảm thứ hạng chuỗi cửa hàng; thưởng tiếp cận cho địa điểm thân thiện người khuyết tật."
+        },
+        {
+          "title": "Ràng buộc công bằng",
+          "description": "local_factor tăng điểm doanh nghiệp địa phương để ít nhất 40% kết quả top-5 là cơ sở cộng đồng."
+        }
+      ]
+    },
+    "orchestration": {
+      "eyebrow": "Giám sát",
+      "heading": "Điều phối Agent — Mô hình giám sát LangGraph",
+      "body": "Bộ giám sát LangGraph điều phối các worker agent chuyên biệt: RAG Agent cho câu trả lời văn hóa và Maps & Service Agent cho dữ liệu địa điểm. Guardrails lọc đầu vào không an toàn, SSE streaming phân phối phản hồi chat theo thời gian thực với session durability.",
+      "cards": [
+        {
+          "title": "Mô hình giám sát",
+          "description": "Bộ giám sát định tuyến truy vấn đến worker agent phù hợp — RAG cho văn hóa, Maps cho địa điểm."
+        },
+        {
+          "title": "Phản hồi streaming",
+          "description": "Server-Sent Events (SSE) phân phối streaming ở cấp token cho trải nghiệm chat mượt mà."
+        },
+        {
+          "title": "Trạng thái session",
+          "description": "LangGraph checkpoints bảo tồn lịch sử hội thoại và trạng thái agent qua các phiên."
+        }
+      ]
+    },
+    "frontendShell": {
+      "eyebrow": "Nền tảng",
+      "heading": "Frontend Shell & Quan sát hệ thống",
+      "body": "Next.js 16 App Router vận hành frontend với next-intl cho hỗ trợ song ngữ (Tiếng Việt/Tiếng Anh). Langfuse theo dõi luồng agent, health endpoints giám sát trạng thái hệ thống, và UI responsive đảm bảo khả năng tiếp cận trên mọi thiết bị.",
+      "cards": [
+        {
+          "title": "App Shell",
+          "description": "Next.js 16 với App Router, layout responsive và tăng cường dần dần từ landing page đến chat/map đầy đủ."
+        },
+        {
+          "title": "Hỗ trợ i18n",
+          "description": "next-intl cung cấp locale routing, file thông dịch và dịch server-side cho toàn bộ UI text tiếng Việt và tiếng Anh."
+        },
+        {
+          "title": "Quan sát hệ thống",
+          "description": "Langfuse traces, health endpoints và structured logging cung cấp khả năng hiển thị hiệu năng agent và sức khỏe hệ thống."
+        }
+      ]
+    }
   },
   "Common": {
     "loading": "Đang tải...",

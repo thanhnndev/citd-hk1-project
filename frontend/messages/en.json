@@ -292,7 +292,113 @@
     "responseNote": "Assistant note"
   },
   "Architecture": {
-    "title": "System Architecture"
+    "title": "System Architecture",
+    "overview": {
+      "eyebrow": "System Design",
+      "heading": "Multi-agent AI assistant for Ham Ninh fishing village",
+      "body": "The architecture combines Retrieval-Augmented Generation for cultural knowledge, Google Places API for location intelligence, ensemble re-ranking for fairness, and LangGraph-based agent orchestration — all served through a bilingual Next.js frontend with full observability.",
+      "cards": [
+        {
+          "title": "Data Flow",
+          "description": "User → Frontend → Agent Orchestrator → Workers (RAG, Maps) → SSE Streaming → Response"
+        }
+      ]
+    },
+    "ragPipeline": {
+      "eyebrow": "Knowledge Retrieval",
+      "heading": "RAG Pipeline — Citation-backed cultural Q&A",
+      "body": "Answers about Ham Ninh's culture, history, and cuisine are grounded in retrieved documents — not model guesswork. Every answer includes citations and is evaluated by RAGAS for faithfulness and relevance.",
+      "cards": [
+        {
+          "title": "Document Corpus",
+          "description": "Cultural documents are normalized, chunked, and embedded into a Qdrant vector store for fast similarity search."
+        },
+        {
+          "title": "Vector Search",
+          "description": "User queries are embedded and matched against the corpus using top-k similarity with configurable thresholds."
+        },
+        {
+          "title": "Grounded Answers",
+          "description": "The LLM generates answers anchored in retrieved context, with inline citations back to source documents."
+        }
+      ]
+    },
+    "mapsApi": {
+      "eyebrow": "Location Intelligence",
+      "heading": "Maps & Places API — Real-world place data",
+      "body": "Google Places API (New) provides nearby search, text search, place details, and autocomplete. Routes API powers computeRouteMatrix for distance-aware recommendations. A circuit breaker ensures graceful fallback when the API is unavailable.",
+      "cards": [
+        {
+          "title": "Place Discovery",
+          "description": "Nearby search and text search find restaurants, services, and cultural sites near Ham Ninh fishing village."
+        },
+        {
+          "title": "Route Planning",
+          "description": "computeRouteMatrix calculates distances between user location and candidate places for proximity-aware ranking."
+        },
+        {
+          "title": "Fallback Handling",
+          "description": "Circuit breaker detects API failures and returns curated fallback results instead of error pages."
+        }
+      ]
+    },
+    "ensembleReranker": {
+      "eyebrow": "Fairness Engine",
+      "heading": "Ensemble Re-ranking — Fair and explainable scoring",
+      "body": "Three pre-defined rule-based decision trees (Locality-first, Proximity-first, Quality-first) are combined via bagging. Two correction stumps apply fairness penalties for chains and accessibility bonuses. The local_factor ensures ≥40% local businesses appear in the top-5 results.",
+      "cards": [
+        {
+          "title": "Decision Trees",
+          "description": "Locality-first, Proximity-first, and Quality-first trees score places using hand-written rules — no training required."
+        },
+        {
+          "title": "Correction Stumps",
+          "description": "Fairness penalty reduces chain business rankings; accessibility bonus rewards places with disability-friendly features."
+        },
+        {
+          "title": "Fairness Constraint",
+          "description": "The local_factor boosts local businesses so at least 40% of top-5 results are community-run establishments."
+        }
+      ]
+    },
+    "orchestration": {
+      "eyebrow": "Supervisor",
+      "heading": "Agent Orchestration — LangGraph supervisor pattern",
+      "body": "A LangGraph supervisor coordinates specialized worker agents: the RAG Agent for cultural answers and the Maps & Service Agent for place data. Guardrails filter unsafe inputs, and SSE streaming delivers real-time chat responses with session durability.",
+      "cards": [
+        {
+          "title": "Supervisor Pattern",
+          "description": "The supervisor routes queries to the right worker agent based on intent — RAG for culture, Maps for places."
+        },
+        {
+          "title": "Streaming Responses",
+          "description": "Server-Sent Events (SSE) deliver token-level streaming for a responsive chat experience."
+        },
+        {
+          "title": "Session State",
+          "description": "LangGraph checkpoints preserve conversation history and agent state across session boundaries."
+        }
+      ]
+    },
+    "frontendShell": {
+      "eyebrow": "Platform",
+      "heading": "Frontend Shell & Observability",
+      "body": "Next.js 16 App Router powers the frontend with next-intl for bilingual support (English/Vietnamese). Langfuse traces agent workflows, health endpoints monitor system status, and responsive UI ensures accessibility across devices.",
+      "cards": [
+        {
+          "title": "App Shell",
+          "description": "Next.js 16 with App Router, responsive layout, and progressive enhancement from landing page to full chat/map."
+        },
+        {
+          "title": "i18n Support",
+          "description": "next-intl provides locale routing, message files, and server-side translation for all UI text in English and Vietnamese."
+        },
+        {
+          "title": "System Observability",
+          "description": "Langfuse traces, health endpoints, and structured logging provide visibility into agent performance and system health."
+        }
+      ]
+    }
   },
   "Common": {
     "loading": "Loading...",
