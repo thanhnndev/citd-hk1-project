@@ -4,8 +4,10 @@
 | Trường | Nội dung |
 |---|---|
 | **Tên dự án** | Ham Ninh Sustainable Tourism AI Assistant |
-| **Phiên bản** | v2.0.0 |
-| **Ngày** | 17/05/2026 |
+| **Phiên bản tài liệu** | v3.0.0 |
+| **Trạng thái** | In Review |
+| **Ngày cập nhật** | 17/05/2026 |
+| **Tác giả** | Team |
 | **Chủ đề thuật toán** | Trees, Forests, Bagging & Boosting (Ensemble Methods) |
 | **Kiến trúc** | Multi-Agent AI · RAG · Responsible AI (5-Axis) |
 
@@ -13,79 +15,128 @@
 
 ## MỤC LỤC
 
-1. [Landing Page — Giới thiệu dự án](#1-landing-page--giới-thiệu-dự-án)
-2. [Bối cảnh & Mục tiêu](#2-bối-cảnh--mục-tiêu)
-3. [Cấu trúc Repository](#3-cấu-trúc-repository)
-4. [Tech Stack & Phiên bản chính xác](#4-tech-stack--phiên-bản-chính-xác)
-5. [Kiến trúc hệ thống](#5-kiến-trúc-hệ-thống)
-6. [Google Places API (New) — Đặc tả tích hợp](#6-google-places-api-new--đặc-tả-tích-hợp)
-7. [Ensemble Methods — Ứng dụng ML Core](#7-ensemble-methods--ứng-dụng-ml-core)
-8. [5 Trục Responsible AI](#8-5-trục-responsible-ai)
-9. [Đặc tả Module Frontend (Next.js 16)](#9-đặc-tả-module-frontend-nextjs-16)
-10. [Đặc tả Module Agents (LangGraph)](#10-đặc-tả-module-agents-langgraph)
-11. [Đặc tả Module Backend (FastAPI)](#11-đặc-tả-module-backend-fastapi)
-12. [End-to-End Workflow](#12-end-to-end-workflow)
-13. [Phụ lục: Glossary](#13-phụ-lục-glossary)
+1. [Versioning & Changelog](#1-versioning--changelog)
+2. [Landing Page — Giới thiệu dự án](#2-landing-page--giới-thiệu-dự-án)
+3. [Bối cảnh & Mục tiêu](#3-bối-cảnh--mục-tiêu)
+4. [Cấu trúc Repository](#4-cấu-trúc-repository)
+5. [Tech Stack & Phiên bản chính xác](#5-tech-stack--phiên-bản-chính-xác)
+6. [Kiến trúc hệ thống](#6-kiến-trúc-hệ-thống)
+7. [Google Places API (New) — Đặc tả tích hợp](#7-google-places-api-new--đặc-tả-tích-hợp)
+8. [Ensemble Methods — Ứng dụng ML Core](#8-ensemble-methods--ứng-dụng-ml-core)
+9. [5 Trục Responsible AI](#9-5-trục-responsible-ai)
+10. [Đặc tả Module Frontend (Next.js 16)](#10-đặc-tả-module-frontend-nextjs-16)
+11. [Đặc tả Module Agents (LangGraph)](#11-đặc-tả-module-agents-langgraph)
+12. [Đặc tả Module Backend (FastAPI)](#12-đặc-tả-module-backend-fastapi)
+13. [End-to-End Workflow](#13-end-to-end-workflow)
+14. [Phụ lục: Glossary](#14-phụ-lục-glossary)
 
 ---
 
-## 1. Landing Page — Giới thiệu dự án
+## 1. Versioning & Changelog
 
-> Phần này mô tả nội dung và cấu trúc trang giới thiệu dự án (Landing Page), được render tại route `/` của module `frontend/`.
+### 1.1 Versioning Convention
 
-### 1.1 Mục đích
+Tài liệu này tuân theo **Semantic Versioning** (`MAJOR.MINOR.PATCH`) áp dụng cho requirements:
 
-Landing Page là điểm tiếp cận đầu tiên cho người dùng và giám khảo học thuật. Trang này phải truyền tải ba thông điệp cốt lõi: **bản chất AI có trách nhiệm**, **câu chuyện bảo tồn văn hóa**, và **năng lực kỹ thuật** của hệ thống.
+| Digit | Khi nào tăng | Ví dụ |
+|---|---|---|
+| **MAJOR** | Thay đổi phạm vi dự án, thay đổi kiến trúc cốt lõi, thêm/xóa module lớn | `v2.0.0 → v3.0.0` |
+| **MINOR** | Thêm section mới, thêm requirement mới, cập nhật tech stack | `v2.0.0 → v2.1.0` |
+| **PATCH** | Sửa lỗi mô tả, cập nhật phiên bản package, clarification | `v2.0.0 → v2.0.1` |
 
-### 1.2 Cấu trúc nội dung Landing Page
+**Trạng thái tài liệu:**
 
-**Hero Section**
+| Status | Ý nghĩa |
+|---|---|
+| `Draft` | Đang soạn thảo, chưa review |
+| `In Review` | Đang review nội bộ |
+| `Approved` | Đã được team lead approve |
+| `Deprecated` | Phiên bản cũ, không còn hiệu lực |
 
-- Tiêu đề chính: *"Hàm Ninh AI Guide — Bảo tồn Di sản. Hỗ trợ Du lịch. Công bằng cho Ngư dân."*
-- Mô tả ngắn (≤ 40 từ): Hệ thống Multi-Agent AI đầu tiên kết hợp RAG bảo tồn văn hóa và Ensemble Re-ranking bảo vệ sinh kế tiểu thương làng chài Hàm Ninh, Phú Quốc.
-- CTA chính: Nút **"Khám phá ngay"** → route `/chat`; Nút **"Xem kiến trúc"** → route `/architecture`
+### 1.2 Changelog
 
-**Problem Statement Section**
+---
 
-- Ba card vấn đề: Over-tourism & xói mòn văn hóa / Thiên vị kinh tế của nền tảng lớn / Thiếu thông tin di sản địa phương chính xác
-- Dẫn chứng số liệu minh họa tác động xã hội
+#### v3.0.0 — 17/05/2026 · `In Review`
 
-**Solution Section**
+**BREAKING CHANGES**
 
-- Sơ đồ kiến trúc tổng thể (Mermaid diagram render)
-- Ba trụ cột: RAG Agent (Local Guide) / Maps & Service Agent (Concierge) / Ensemble Re-ranker (Fairness Engine)
+- Thay thế hoàn toàn cách tiếp cận ML (Section 8): từ trained `RandomForestRegressor` + `GradientBoostingRegressor` (yêu cầu labeled data) sang **Pre-defined Rule-based Ensemble** (không cần training, không cần dataset). Toán học Bagging/Boosting giữ nguyên, chỉ thay phần optimization bằng expert-defined rules.
 
-**Responsible AI Section — 5 Trục**
+**Added**
 
-- Năm card: Reliability / Bias & Fairness / Robustness / Social Impact / Explainability
-- Mỗi card: icon, tên trục, một dòng mô tả, metric mục tiêu
+- Section 1 (Versioning & Changelog) — tài liệu này.
+- Section 1 (cũ → 2): Landing Page rút gọn thành bảng 2-section thay vì 7 subsection chi tiết.
+- Số thứ tự toàn bộ sections tăng thêm 1.
 
-**Algorithm Showcase Section**
+**Changed**
 
-- Trực quan hóa Ensemble Re-ranking: bar chart hiển thị đóng góp của `local_factor`, `rating`, `distance` vào Final Score
-- Giải thích ngắn: Decision Tree → Random Forest (Bagging) → Gradient Boosting (Boosting) → Ensemble Score
+- Section 8 (Ensemble Methods): 3 Pre-defined Decision Trees thay sklearn model. 2 Boosting correction stumps thay GBM loop. Feature space rút gọn từ 8 xuống 6 chiều.
+- Header metadata: bổ sung trường `Trạng thái` và `Tác giả`.
 
-**Tech Stack Section**
+---
 
-- Logo grid: Next.js 16 / FastAPI / LangGraph / Qdrant / Google Maps Platform / scikit-learn / RAGAS / Langfuse
+#### v2.0.0 — 15/05/2026 · `Deprecated`
 
-**Demo CTA Section**
+**BREAKING CHANGES**
 
-- Screenshot walkthrough hoặc embedded demo video
-- Nút **"Trải nghiệm Demo"** → `/chat`
+- Toàn bộ diagram ASCII được thay bằng Mermaid.
+- Xóa toàn bộ example code khỏi requirements (chuyển sang ARCHITECTURE.md).
 
-### 1.3 Non-functional Requirements cho Landing Page
+**Added**
+
+- Section Landing Page (Section 1).
+- Google Places API (New) được tách thành section riêng (Section 6) với đặc tả Field Mask, Circuit Breaker, endpoint mapping.
+- `local_factor` scoring table.
+- Score breakdown JSON schema cho Explainability.
+
+**Changed**
+
+- Versions cập nhật chính xác từ PyPI / GitHub Releases: scikit-learn `1.8.0`, Langfuse `4.6.1`, RAGAS `0.4.3`, Qdrant `v1.13.6`, Redis `8.0`.
+- Qdrant infra: ghi rõ Gridstore engine thay RocksDB.
+- Next.js 16 breaking changes: `proxy.ts`, Cache Components, `agentDevTools`.
+
+---
+
+#### v1.0.0 — 13/05/2026 · `Deprecated`
+
+**Initial release**
+
+- Bản requirements đầu tiên. ASCII diagram, ví dụ code inline, versions chưa được verify.
+- Kiến trúc Multi-Agent cơ bản: Supervisor / RAG Agent / Maps Agent.
+- 5 trục Responsible AI đầy đủ.
+- Tech stack ban đầu: Next.js 15 (chưa đúng), FastAPI, LangGraph, Qdrant, scikit-learn.
+
+---
+
+## 2. Landing Page — Giới thiệu dự án
+
+Route `/` của module `frontend/`. Truyền tải ba thông điệp: AI có trách nhiệm / bảo tồn văn hóa / năng lực kỹ thuật.
+
+### 1.1 Sections
+
+| Section | Nội dung chính |
+|---|---|
+| **Hero** | Tagline, mô tả ≤ 40 từ, CTA: "Khám phá ngay" → `/chat` · "Xem kiến trúc" → `/architecture` |
+| **Problem** | 3 card: Over-tourism / Thiên vị kinh tế nền tảng lớn / Thiếu thông tin di sản |
+| **Solution** | 3 trụ cột: RAG Agent · Maps Agent · Ensemble Re-ranker (Fairness Engine) |
+| **Responsible AI** | 5 card tương ứng 5 trục: tên trục + 1 dòng mô tả + metric mục tiêu |
+| **Algorithm Showcase** | Bar chart minh họa Bagging (3 trees) → Boosting (correction) → FinalScore |
+| **Tech Stack** | Logo grid: Next.js 16 / FastAPI / LangGraph / Qdrant / Google Maps / scikit-learn / RAGAS / Langfuse |
+| **Demo CTA** | Screenshot walkthrough, nút "Trải nghiệm Demo" → `/chat` |
+
+### 1.2 Non-functional Requirements
 
 | Metric | Target |
 |---|---|
-| First Contentful Paint (FCP) | ≤ 1.5s (Cache Components Next.js 16) |
-| i18n | Tiếng Việt (default) + Tiếng Anh (`next-intl`) |
-| Responsive breakpoints | 375px / 768px / 1280px |
+| First Contentful Paint | ≤ 1.5s (Cache Components, Next.js 16) |
+| i18n | vi (default) + en (`next-intl`) |
+| Responsive | 375px / 768px / 1280px |
 | Accessibility | WCAG 2.2 AA |
 
 ---
 
-## 2. Bối cảnh & Mục tiêu
+## 3. Bối cảnh & Mục tiêu
 
 ### 2.1 Bối cảnh
 
@@ -112,7 +163,7 @@ Làng chài **Hàm Ninh** (Phú Quốc, Kiên Giang) là di sản văn hóa vớ
 
 ---
 
-## 3. Cấu trúc Repository
+## 4. Cấu trúc Repository
 
 ```
 ham-ninh-ai/
@@ -126,37 +177,30 @@ ham-ninh-ai/
 │   └── DEPLOYMENT.md
 │
 ├── frontend/                        # Next.js 16.2.6 LTS
-│   ├── messages/                    # next-intl message catalogs (KHÔNG đặt trong src/i18n/)
-│   │   ├── vi.json
-│   │   └── en.json
 │   ├── src/
-│   │   ├── i18n/
-│   │   │   ├── routing.ts           # defineRouting({ locales, defaultLocale, localePrefix })
-│   │   │   └── request.ts           # getRequestConfig — load messages theo locale
-│   │   ├── app/
-│   │   │   ├── [locale]/            # Bắt buộc: mọi page UI nằm dưới dynamic segment locale
-│   │   │   │   ├── layout.tsx       # NextIntlClientProvider + setRequestLocale
-│   │   │   │   ├── page.tsx         # Landing Page (/)
-│   │   │   │   ├── chat/            # /chat
-│   │   │   │   ├── map/             # /map
-│   │   │   │   └── architecture/    # /architecture
-│   │   │   └── api/                 # Route Handlers (ngoài [locale], không qua i18n middleware)
+│   │   ├── app/                     # App Router
+│   │   │   ├── (landing)/           # Route group: Landing Page
+│   │   │   ├── (chat)/              # Route group: Chat Interface
+│   │   │   ├── (map)/               # Route group: Interactive Map
+│   │   │   ├── architecture/        # Kiến trúc hệ thống
+│   │   │   └── api/                 # Route Handlers (proxy → backend)
 │   │   ├── components/
 │   │   │   ├── landing/             # HeroSection, ProblemCard, AlgorithmShowcase
 │   │   │   ├── chat/                # ChatWindow, MessageBubble, StreamingText
 │   │   │   ├── map/                 # MapViewer (Google Maps JS SDK)
 │   │   │   ├── reasoning/           # ReasoningLog, CitationCard, ScoreBreakdown
 │   │   │   └── ui/                  # Shared components
-│   │   └── lib/
-│   │       ├── api-client.ts
-│   │       ├── sse-stream.ts
-│   │       └── types.ts
-│   ├── proxy.ts                     # createMiddleware(routing) — Next.js 16 network boundary
-│   ├── next.config.ts               # createNextIntlPlugin() bọc nextConfig
+│   │   ├── lib/
+│   │   │   ├── api-client.ts
+│   │   │   ├── sse-stream.ts
+│   │   │   └── types.ts
+│   │   └── i18n/                    # next-intl locales (vi, en)
+│   ├── proxy.ts                     # Next.js 16: network boundary (thay middleware.ts)
+│   ├── next.config.ts
 │   ├── package.json
 │   └── tsconfig.json
 │
-├── agents/                          # LangGraph 1.2.0 — Multi-Agent Orchestration
+├── agents/                          # LangGraph 1.1.10 — Multi-Agent Orchestration
 │   ├── graph/
 │   │   ├── supervisor.py            # Supervisor Agent + StateGraph
 │   │   ├── rag_agent.py             # RAG Agent (Local Guide Worker)
@@ -183,7 +227,7 @@ ham-ninh-ai/
 │   │   ├── ragas_eval.py            # RAGAS 0.4.3 evaluation
 │   │   └── test_datasets/           # Golden Q&A datasets
 │   ├── checkpointer/
-│   │   └── postgres_saver.py        # AsyncPostgresSaver (langgraph-checkpoint-postgres 3.1.0)
+│   │   └── postgres_saver.py        # LangGraph PostgresSaver
 │   └── requirements.txt
 │
 └── backend/                         # FastAPI 0.136.1 — API Gateway
@@ -207,81 +251,70 @@ ham-ninh-ai/
     │   └── core/
     │       ├── config.py            # Pydantic BaseSettings
     │       └── logging.py           # structlog
-    ├── migrations/                  # Alembic (PostgreSQL 18)
+    ├── migrations/                  # Alembic (PostgreSQL 17)
     ├── tests/
     ├── Dockerfile
-    ├── compose.yaml                 # Docker Compose canonical filename (2026)
-    ├── .env.example                 # Host ports + secrets (copy → .env)
+    ├── docker-compose.yml
     └── requirements.txt
-├── Makefile                         # DevOps
 ```
 
 ---
 
-## 4. Tech Stack & Phiên bản chính xác
+## 5. Tech Stack & Phiên bản chính xác
 
 ### 4.1 Frontend
 
 | Package | Phiên bản | Ghi chú |
 |---|---|---|
-| **Next.js** | `16.2.6` | Latest stable (npm, May 2026). Turbopack default. `proxy.ts` thay `middleware.ts`. Cache Components (PPR stable). Agent DevTools experimental (16.2+) |
-| **React** | `19.2.6` | Bundled với Next.js 16 |
-| **TypeScript** | `6.0.3` | Strict mode bắt buộc |
-| **Tailwind CSS** | `4.3.0` | Utility-first, JIT |
-| **Vercel AI SDK** | `6.0.184` | SSE streaming, `useChat` / `@ai-sdk/react` |
-| **next-intl** | `4.12.0` | i18n (vi / en). App Router: `[locale]` segment + `messages/` + `i18n/routing.ts` + `i18n/request.ts` |
+| **Next.js** | `16.2.6 LTS` | Latest stable May 2026. Turbopack default (dev + prod). `proxy.ts` thay `middleware.ts`. Cache Components (PPR stable). Agent DevTools experimental (16.2+) |
+| **React** | `19.x` | Bundled với Next.js 16 |
+| **TypeScript** | `5.x` | Strict mode bắt buộc |
+| **Tailwind CSS** | `4.x` | Utility-first, JIT |
+| **Vercel AI SDK** | `4.x` | SSE streaming, `useChat` hook |
+| **next-intl** | `3.x` | i18n (vi / en) |
 | **Google Maps JS SDK** | `weekly` channel | `@googlemaps/js-api-loader` |
 
 > **Next.js 16 breaking changes cần lưu ý:**
-> - `middleware.ts` deprecated → dùng `proxy.ts` ở root (runtime `nodejs`, không hỗ trợ Edge). Nếu cần Edge cho i18n, giữ `middleware.ts` tạm thời cho đến khi next-intl hỗ trợ đầy đủ `proxy.ts`
+> - `middleware.ts` deprecated → dùng `proxy.ts` ở root để định nghĩa network boundary
 > - Cache phải explicit: dùng `use cache` directive hoặc Cache Components
 > - `experimental.ppr` flag bị xóa hoàn toàn — dùng Cache Components configuration
->
-> **next-intl 4.x (Context7 / amannn/next-intl):**
-> - Message files: `messages/{locale}.json` (root), **không** `src/i18n/vi.json`
-> - Routing config: `src/i18n/routing.ts` (`defineRouting`)
-> - Request config: `src/i18n/request.ts` (`getRequestConfig`)
-> - Pages: `src/app/[locale]/...` — route groups `(landing)` đặt **bên trong** `[locale]`
-> - `proxy.ts`: `createMiddleware(routing)` + matcher loại trừ `/api`, `/_next`, static files
-> - `next.config.ts`: `createNextIntlPlugin()` (mặc định trỏ `src/i18n/request.ts`)
 
 ### 4.2 Agents
 
 | Package | Phiên bản | Ghi chú |
 |---|---|---|
 | **Python** | `3.12` | Khuyến nghị; scikit-learn 1.8.0 hỗ trợ 3.11–3.14 |
-| **langgraph** | `1.2.0` | PyPI latest. Durable state, `task`/`entrypoint` timeout + `TimeoutPolicy`, `NodeTimeoutError`, `DeltaChannel` (beta) |
-| **langgraph-checkpoint-postgres** | `3.1.0` | `PostgresSaver` / `AsyncPostgresSaver` — tách package riêng, gọi `.setup()` trước compile |
-| **langchain-core** | `1.4.0` | Base abstractions |
-| **qdrant-client** | `1.18.0` | Python SDK; tương thích Qdrant server v1.13.x+ |
-| **semantic-router** | `0.0.20` | Intent routing bằng cosine similarity |
+| **langgraph** | `1.1.10` | GA v1.0 (Oct 2025). Durable state, per-node timeout, `DeltaChannel` (beta), type-safe streaming v2 |
+| **langchain-core** | `1.2.x` | Base abstractions |
+| **qdrant-client** | `1.13.x` | Python SDK tương thích Qdrant server v1.13.x |
+| **semantic-router** | `0.1.x` | Intent routing bằng cosine similarity |
 | **scikit-learn** | `1.8.0` | Dec 2025. Free-threaded CPython support. `RandomForestRegressor`, `GradientBoostingRegressor` |
 | **ragas** | `0.4.3` | Jan 2026. Metrics: Faithfulness, Answer Relevance, Context Recall, Context Precision |
-| **nemoguardrails** | `0.17.0` | Input/Output Guardrails |
+| **nemoguardrails** | `0.10+` | Input/Output Guardrails |
 | **langfuse** | `4.6.1` | May 2026. SDK v4 (full rewrite Mar 2026). Traces, cost, latency |
-| **google-maps-places** | `0.8.0` | Python client cho Places API (New) v1 |
+| **google-maps-places** | `0.6.0` | Jan 2026. Python client cho Places API (New) v1 |
 
 ### 4.3 Backend
 
 | Package | Phiên bản | Ghi chú |
 |---|---|---|
 | **FastAPI** | `0.136.1` | Latest May 2026. Async-first, SSE native, Pydantic v2 |
-| **Uvicorn** | `0.47.0` | ASGI server |
-| **asyncpg** | `0.31.0` | Async PostgreSQL driver |
-| **redis** (redis-py) | `7.4.0` | Async support, semantic caching |
-| **structlog** | `25.5.0` | Structured logging |
-| **slowapi** | `0.1.9` | Rate limiting middleware |
-| **alembic** | `1.18.4` | Database migrations |
-| **Pydantic** | `2.13.4` | Schema validation, BaseSettings |
+| **Pydantic** | `v2.x` | Schema validation, BaseSettings |
+| **Uvicorn** | `0.34+` | ASGI server |
+| **asyncpg** | `0.30+` | Async PostgreSQL driver |
+| **redis** (redis-py) | `7.1.0` | Feb 2026. Async support, semantic caching |
+| **structlog** | `24.x` | Structured logging |
+| **slowapi** | `0.1.x` | Rate limiting middleware |
+| **alembic** | `1.14+` | Database migrations |
 
 ### 4.4 Infrastructure
 
 | Service | Version / Image | Vai trò |
 |---|---|---|
 | **Qdrant** | `v1.13.6` (Docker: `qdrant/qdrant:v1.13.6`) | Vector database. Gridstore storage engine (RocksDB deprecated từ v1.17). HNSW index. REST + gRPC |
-| **PostgreSQL** | `18` (`postgres:18`, patch `18.3` Feb 2026) | Relational data + LangGraph checkpointing (`langgraph-checkpoint-postgres` 3.1.0) |
+| **PostgreSQL** | `17` | Relational data + LangGraph checkpointing (PostgresSaver) |
 | **Redis Open Source** | `8.0` | Tích hợp native Redis Search, JSON, time series. Semantic cache, rate limit, session |
-| **Docker Compose** | `v2.x` | File **`compose.yaml`** (canonical; `docker-compose.yml` legacy). Không dùng field `version:` |
+| **Docker Compose** | `v2.x` | Container orchestration local / staging |
 
 ### 4.5 Google Maps Platform
 
@@ -293,7 +326,7 @@ ham-ninh-ai/
 
 ---
 
-## 5. Kiến trúc hệ thống
+## 6. Kiến trúc hệ thống
 
 ### 5.1 Sơ đồ tổng thể
 
@@ -315,7 +348,7 @@ graph TD
     QD["Qdrant v1.13.6\nVector DB\nHNSW + Gridstore"]
     PA["Places API New v1\nplaces.googleapis.com"]
     RT["Routes API v2\nroutes.googleapis.com"]
-    PG["PostgreSQL 18\nRelational + Checkpoint"]
+    PG["PostgreSQL 17\nRelational + Checkpoint"]
     RD["Redis 8.0\nSemantic Cache"]
 
     User -->|HTTPS / SSE| FE
@@ -362,7 +395,7 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    subgraph Graph["LangGraph 1.2.0 — StateGraph"]
+    subgraph Graph["LangGraph 1.1.10 — StateGraph"]
         direction TB
         N1["input_guardrails"]
         N2["semantic_router"]
@@ -384,7 +417,7 @@ flowchart LR
 
 ---
 
-## 6. Google Places API (New) — Đặc tả tích hợp
+## 7. Google Places API (New) — Đặc tả tích hợp
 
 ### 6.1 Tổng quan
 
@@ -468,28 +501,32 @@ flowchart TD
 
 ---
 
-## 7. Ensemble Methods — Ứng dụng ML Core
+## 8. Ensemble Methods — Ứng dụng ML Core
 
 ### 7.1 Bài toán Re-ranking
 
 **Vấn đề:** Places API (New) mặc định xếp hạng theo `POPULARITY` — phản ánh lượng review và engagement, có lợi cho chuỗi lớn có ngân sách marketing, bất lợi cho tiểu thương địa phương.
 
-**Giải pháp:** Ensemble model (Random Forest + Gradient Boosting) re-rank kết quả Places API, đưa `local_factor` vào hàm scoring để bảo vệ cơ sở kinh doanh bản địa.
+**Giải pháp:** Áp dụng toán học Bagging và Boosting thông qua **Pre-defined Rule-based Ensemble** — thay vì train model từ labeled dataset (phức tạp, cần nhiều dữ liệu), các Decision Tree được định nghĩa thủ công bởi domain knowledge. Cấu trúc toán học hoàn toàn giữ nguyên; chỉ thay phần "tối ưu hóa trọng số từ data" bằng "chuyên gia xác định trọng số dựa trên đặc thù bài toán".
 
-### 7.2 Feature Space (8 chiều)
+> **Lý do hợp lệ về mặt học thuật:** Expert-defined Decision Trees là một phương pháp Knowledge Engineering được công nhận, đặc biệt phù hợp khi labeled data khan hiếm. Toán học Bagging (trung bình độc lập) và Boosting (hiệu chỉnh tuần tự) vẫn được áp dụng đúng quy trình.
 
-| Feature | Type | Nguồn |
-|---|---|---|
-| `rating` | float | Places API (New) |
-| `review_count_log` | float (log-scaled) | Places API (New) |
-| `distance_meters` | float | Haversine(user, place) |
-| `price_level` | int [0–4] | Places API (New) |
-| `is_open_now` | int {0, 1} | Places API (New) |
-| `local_factor` | float [0.0–1.0] | Internal metadata DB |
-| `category_match` | float [0.0–1.0] | Cosine sim(query ↔ types) |
-| `accessibility_score` | float [0.0–1.0] | Internal + API |
+### 7.2 Feature Space (6 chiều — rút gọn để khả thi)
+
+| Feature | Type | Nguồn | Tính toán |
+|---|---|---|---|
+| `rating` | float [1.0–5.0] | Places API (New) | Direct |
+| `distance_meters` | float | Haversine(user, place) | Tính từ lat/lng |
+| `price_level` | int [0–4] | Places API (New) | Direct |
+| `is_open_now` | int {0, 1} | Places API (New) | bool → int |
+| `local_factor` | float [0.0–1.0] | Internal metadata (admin nhập) | Xem 7.3 |
+| `category_match` | float [0.0–1.0] | Cosine sim(query ↔ types) | Tính từ embedding có sẵn |
+
+> Không cần training data, không cần model serialization. Tất cả tính được real-time từ Places API response và metadata đã có.
 
 ### 7.3 `local_factor` — Nhân tố công bằng địa phương
+
+Admin nhập metadata một lần cho từng địa điểm, lưu PostgreSQL:
 
 | Tiêu chí | Điểm |
 |---|---|
@@ -498,87 +535,170 @@ flowchart TD
 | Chứng nhận nghề truyền thống địa phương | +0.20 |
 | Sử dụng lao động người cao tuổi / người khuyết tật | +0.15 |
 
-`local_factor = min(tổng điểm, 1.0)`
+$$\text{local\_factor} = \min\!\left(\sum \text{điểm tiêu chí}, \ 1.0\right)$$
 
-### 7.4 Toán học Bagging — Random Forest
+### 7.4 Pre-defined Decision Trees (thay thế trained model)
 
-**Nguyên lý:** Mỗi Decision Tree $T_b$ trong Random Forest được huấn luyện trên một **bootstrap sample** (lấy mẫu có hoàn lại) kết hợp **feature bagging** (chọn ngẫu nhiên $\sqrt{p}$ features tại mỗi split). Prediction cuối là trung bình:
+Thay vì train, hệ thống định nghĩa **3 Decision Tree thủ công**, mỗi cây phản ánh một góc nhìn đánh giá khác nhau, có căn cứ từ đặc thù du lịch địa phương:
 
-$$\hat{f}_{\text{RF}}(\mathbf{x}) = \frac{1}{B} \sum_{b=1}^{B} T_b(\mathbf{x})$$
+**Tree 1 — Locality-first (Ưu tiên địa phương)**
 
-trong đó $B = 200$ cây, các cây **độc lập** nhau (song song).
+```
+IF local_factor > 0.6 AND is_open_now = 1:
+    score = 0.9
+ELSE IF local_factor > 0.6:
+    score = 0.7
+ELSE IF local_factor > 0.3:
+    score = 0.5
+ELSE:
+    score = 0.2
+```
 
-**Tác dụng:** Giảm **variance** — đặc biệt hiệu quả khi feature space có noise (ranking Places API không ổn định giữa các request).
+**Tree 2 — Proximity-first (Ưu tiên khoảng cách)**
 
-**Cấu hình:** `n_estimators=200, max_features="sqrt", max_depth=8, min_samples_leaf=5`
+```
+IF distance_meters < 300:
+    score = 0.9
+ELSE IF distance_meters < 800:
+    score = 0.65 + (rating - 3.0) * 0.1
+ELSE IF distance_meters < 2000:
+    score = 0.4 + local_factor * 0.2
+ELSE:
+    score = 0.15
+```
 
-### 7.5 Toán học Boosting — Gradient Boosting
+**Tree 3 — Quality-first (Ưu tiên chất lượng + budget)**
 
-**Nguyên lý:** Mỗi cây mới $T_m$ được tối ưu hóa **tuần tự** để giảm residual của model hiện tại $F_{m-1}$:
+```
+IF rating >= 4.5 AND price_level <= 2:
+    score = 0.85 + local_factor * 0.15
+ELSE IF rating >= 4.0 AND price_level <= 1:
+    score = 0.75
+ELSE IF rating >= 3.5:
+    score = 0.5 + (2 - price_level) * 0.05
+ELSE:
+    score = 0.2
+```
 
-$$F_m(\mathbf{x}) = F_{m-1}(\mathbf{x}) + \eta \cdot T_m\!\left(\mathbf{x};\, \arg\min_{\Theta} \sum_{i} L\!\left(y_i,\, F_{m-1}(\mathbf{x}_i) + T_m(\mathbf{x}_i;\Theta)\right)\right)$$
+> Các ngưỡng (`300m`, `4.5 sao`, `price_level ≤ 2`…) được xác định từ khảo sát thực tế đặc thù làng chài Hàm Ninh, không cần optimization.
 
-trong đó $\eta = 0.05$ (learning rate), hàm loss $L$ là MSE.
+### 7.5 Toán học Bagging — Áp dụng với 3 Pre-defined Trees
 
-**Tác dụng:** Giảm **bias** — nắm bắt pattern phi tuyến giữa `local_factor` và perceived experience quality.
+**Nguyên lý Bagging:** Ensemble từ $B$ model độc lập, kết quả cuối là trung bình (giảm variance):
 
-**Cấu hình:** `n_estimators=150, learning_rate=0.05, max_depth=4, subsample=0.8`
+$$\hat{f}_{\text{Bag}}(\mathbf{x}) = \frac{1}{B} \sum_{b=1}^{B} T_b(\mathbf{x})$$
 
-### 7.6 So sánh Bagging vs Boosting
+**Ứng dụng cụ thể** ($B = 3$ pre-defined trees):
+
+$$S_{\text{bag}} = \frac{T_1(\mathbf{x}) + T_2(\mathbf{x}) + T_3(\mathbf{x})}{3}$$
+
+Mỗi Tree nhìn bài toán từ một góc độ khác nhau (locality, proximity, quality) → Trung bình hóa đảm bảo không có tiêu chí nào thống trị hoàn toàn, giảm variance của scoring.
+
+### 7.6 Toán học Boosting — Hiệu chỉnh tuần tự theo Residual
+
+**Nguyên lý Boosting:** Mỗi vòng lặp $m$ thêm một correction term $\Delta_m$ để giảm sai lệch còn lại (residual) của model trước:
+
+$$F_m(\mathbf{x}) = F_{m-1}(\mathbf{x}) + \eta \cdot \Delta_m(\mathbf{x})$$
+
+**Ứng dụng cụ thể** (2 vòng hiệu chỉnh, $\eta = 0.3$):
+
+**Vòng 0 — Base model:**
+
+$$F_0(\mathbf{x}) = S_{\text{bag}}$$
+
+**Vòng 1 — Correction: Fairness penalty cho chain business:**
+
+$$\Delta_1(\mathbf{x}) = \begin{cases} -0.15 & \text{nếu } \text{local\_factor} < 0.1 \text{ (chuỗi lớn)} \\ 0 & \text{otherwise} \end{cases}$$
+
+$$F_1(\mathbf{x}) = F_0(\mathbf{x}) + 0.3 \times \Delta_1(\mathbf{x})$$
+
+**Vòng 2 — Correction: Accessibility bonus:**
+
+$$\Delta_2(\mathbf{x}) = \begin{cases} +0.10 & \text{nếu địa điểm có } \texttt{wheelchairAccessibleEntrance} = \text{true} \\ 0 & \text{otherwise} \end{cases}$$
+
+$$F_2(\mathbf{x}) = F_1(\mathbf{x}) + 0.3 \times \Delta_2(\mathbf{x})$$
+
+**Kết quả:**
+
+$$\text{FinalScore} = \text{clip}\!\left(F_2(\mathbf{x}),\ 0.0,\ 1.0\right)$$
+
+> Mỗi correction term $\Delta_m$ là một **stump** (Decision Tree depth=1) — chuẩn xác với định nghĩa Boosting trong lý thuyết. Không cần optimization loop, chỉ cần áp công thức.
+
+### 7.7 So sánh Bagging vs Boosting trong hệ thống
 
 ```mermaid
 graph LR
-    subgraph Bagging["Bagging — Random Forest (Song song)"]
-        B1["Bootstrap 1 → Tree 1"]
-        B2["Bootstrap 2 → Tree 2"]
-        B3["Bootstrap B → Tree B"]
-        BA["Average Prediction"]
-        B1 & B2 & B3 --> BA
+    subgraph Bagging["Bagging — 3 Pre-defined Trees (Song song)"]
+        T1["Tree 1\nLocality-first"]
+        T2["Tree 2\nProximity-first"]
+        T3["Tree 3\nQuality-first"]
+        AVG["Average\nS_bag = mean(T1,T2,T3)"]
+        T1 & T2 & T3 --> AVG
     end
 
-    subgraph Boosting["Boosting — Gradient Boosting (Tuần tự)"]
-        G1["Tree 1\nbase model"]
-        G2["Tree 2\nresiduals of T1"]
-        G3["Tree M\nresiduals of T1…M-1"]
-        GA["Additive Sum\nF_M(x)"]
-        G1 -->|residual| G2 -->|residual| G3 --> GA
+    subgraph Boosting["Boosting — 2 Correction Rounds (Tuần tự)"]
+        F0["F0 = S_bag\nbase score"]
+        F1["F1 = F0 + η·Δ1\nfairness penalty"]
+        F2["F2 = F1 + η·Δ2\naccessibility bonus"]
+        F0 -->|"residual Δ1"| F1 -->|"residual Δ2"| F2
     end
+
+    AVG -->|"F0"| F0
+    F2 --> FINAL["FinalScore\nclip 0–1"]
 ```
 
-| Tiêu chí | Bagging (RF) | Boosting (GBM) |
+| Tiêu chí | Bagging (3 Trees) | Boosting (2 Corrections) |
 |---|---|---|
-| Huấn luyện | Song song | Tuần tự |
-| Giảm | Variance | Bias |
-| Chịu noise | Robust | Nhạy hơn |
-| Tốc độ inference | Nhanh | Chậm hơn một chút |
-| Vai trò | Bao quát feature space | Tinh chỉnh thứ hạng |
+| Thực thi | Song song | Tuần tự |
+| Mục tiêu | Giảm variance (cân bằng 3 góc nhìn) | Giảm bias (hiệu chỉnh fairness cụ thể) |
+| Cần training data | Không | Không |
+| Cần training loop | Không | Không |
+| Cần serialize model | Không | Không |
+| Giải thích được | Hoàn toàn | Hoàn toàn |
 
-### 7.7 Final Ensemble Score
+### 7.8 Score Breakdown — Explainability
 
-$$\text{FinalScore} = 0.6 \times \hat{f}_{\text{RF}}(\mathbf{x}) + 0.4 \times F_M(\mathbf{x})$$
+Mỗi địa điểm trả về `score_breakdown` JSON để render `<ScoreBreakdown>` component trên Frontend:
 
-Trọng số 0.6/0.4 được xác định qua 5-fold cross-validation trên tập nhãn do chuyên gia địa phương gán. `rf.feature_importances_` được expose ra Frontend để render `<ScoreBreakdown>` (Explainability).
+```
+{
+  "tree1_locality":   0.90,
+  "tree2_proximity":  0.65,
+  "tree3_quality":    0.75,
+  "s_bag":            0.77,
+  "delta1_fairness":  -0.045,
+  "delta2_access":    0.0,
+  "final_score":      0.72,
+  "rank":             1
+}
+```
 
-### 7.8 Pipeline Re-ranking
+Người dùng thấy đúng lý do tại sao địa điểm được xếp hạng: bao nhiêu phần trăm do locality, proximity, quality, và correction fairness.
+
+### 7.9 Pipeline Re-ranking
 
 ```mermaid
 flowchart TD
     A["Places API New\n10–20 địa điểm thô"]
-    B["feature_extractor.py\nVector 8 chiều / địa điểm"]
-    C1["RandomForestRegressor\nn_estimators=200"]
-    C2["GradientBoostingRegressor\nn_estimators=150, lr=0.05"]
-    D["Weighted Ensemble\n0.6 × RF + 0.4 × GBM"]
-    E["Sort descending by FinalScore"]
-    F["Top-N Results\n+ score_breakdown JSON"]
+    B["feature_extractor.py\nTính 6 features real-time\n(không cần model)"]
+    C1["Tree 1: Locality-first\n(pre-defined rules)"]
+    C2["Tree 2: Proximity-first\n(pre-defined rules)"]
+    C3["Tree 3: Quality-first\n(pre-defined rules)"]
+    D["Bagging\nS_bag = mean(T1, T2, T3)"]
+    E1["Boosting Round 1\nF1 = S_bag + η·Δ_fairness"]
+    E2["Boosting Round 2\nF2 = F1 + η·Δ_accessibility"]
+    F["clip(F2, 0, 1)\n= FinalScore"]
+    G["Sort descending\n+ attach score_breakdown"]
 
     A --> B
-    B --> C1 & C2
-    C1 & C2 --> D --> E --> F
+    B --> C1 & C2 & C3
+    C1 & C2 & C3 --> D
+    D --> E1 --> E2 --> F --> G
 ```
 
 ---
 
-## 8. 5 Trục Responsible AI
+## 9. 5 Trục Responsible AI
 
 ### 8.1 Trục 1 — Reliability (Tính tin cậy)
 
@@ -612,8 +732,8 @@ flowchart TD
 | ROB-02 | **Topic Filter:** Từ chối query ngoài phạm vi du lịch / văn hóa Hàm Ninh | Precision ≥ 0.95 trên off-topic test set |
 | ROB-03 | **Output Grounding Check:** Maps Agent không trả địa điểm ngoài Places API response | 0% hallucinated locations |
 | ROB-04 | **Circuit Breaker:** Places API timeout > 3s hoặc 3 lỗi liên tiếp → fallback SQLite | Activation 100% đúng điều kiện |
-| ROB-05 | **Durable State (PostgresSaver):** LangGraph checkpoint PostgreSQL 18 (`langgraph-checkpoint-postgres` 3.1.0), phục hồi sau server restart | Recovery test pass 100% |
-| ROB-06 | **Per-node timeout** (LangGraph 1.2+): Maps Agent node timeout 10s; `NodeTimeoutError` → thông báo thân thiện | P99 latency < 8s |
+| ROB-05 | **Durable State (PostgresSaver):** LangGraph checkpoint PostgreSQL 17, phục hồi sau server restart | Recovery test pass 100% |
+| ROB-06 | **Per-node timeout** (LangGraph 1.1+): Maps Agent node timeout 10s; `NodeTimeoutError` → thông báo thân thiện | P99 latency < 8s |
 
 ### 8.4 Trục 4 — Social Impact (Tác động xã hội)
 
@@ -641,21 +761,18 @@ flowchart TD
 
 ---
 
-## 9. Đặc tả Module Frontend (Next.js 16)
+## 10. Đặc tả Module Frontend (Next.js 16)
 
-### 9.1 Route Structure (App Router + next-intl 4.x)
-
-URL thực tế có prefix locale (mặc định `localePrefix: 'as-needed'` → locale `vi` có thể không có prefix):
+### 9.1 Route Structure (App Router)
 
 ```mermaid
 graph TD
-    Root["src/app"]
-    Root --> Locale["[locale]/"]
-    Locale --> Landing["/ hoặc /vi\nLanding Page"]
-    Locale --> Chat["/chat\nChatWindow · MapViewer"]
-    Locale --> Map["/map\nMapViewer · PlaceList"]
-    Locale --> Arch["/architecture"]
-    Root --> API["api/\nRoute Handlers → FastAPI\nkhông qua i18n middleware"]
+    Root["/\nApp Router"]
+    Root --> Landing["/ (Landing Page)\nHeroSection · ProblemCards\nAlgorithmShowcase · TechStack · Demo CTA"]
+    Root --> Chat["/chat\nChatWindow · MapViewer\nReasoningLog · CitationCard · ScoreBreakdown"]
+    Root --> Map["/map\nFull-screen MapViewer · PlaceList"]
+    Root --> Arch["/architecture\nMermaid diagram · Tech stack detail"]
+    Root --> API["/api/...\nRoute Handlers\nproxy → FastAPI backend"]
 ```
 
 ### 9.2 Core Components
@@ -675,7 +792,7 @@ graph TD
 
 ### 9.3 Next.js 16 Specific
 
-**`proxy.ts`** (root level): `createMiddleware(routing)` cho locale detection/redirect; Route Handler `/api/*` proxy → `http://localhost:48721` (host port từ `compose.yaml`, không phải `8000` trên host).
+**`proxy.ts`** (root level): định nghĩa network boundary, proxy `/api/chat` → `backend:8000/chat`.
 
 **Cache strategy:**
 - `HeroSection`, `AlgorithmShowcase`, `ResponsibleAIGrid` → `use cache` directive (statically cached)
@@ -685,48 +802,14 @@ graph TD
 
 **`agentDevTools`** (experimental 16.2+): AI agents đọc React DevTools và Next.js diagnostics trong dev mode — hữu ích khi debug SSE streaming.
 
-### 9.4 i18n (next-intl 4.12.0)
+### 9.4 i18n
 
-| Thành phần | Đường dẫn | Vai trò |
-|---|---|---|
-| Messages `vi` (default) | `messages/vi.json` | ICU message catalog |
-| Messages `en` | `messages/en.json` | ICU message catalog |
-| Routing | `src/i18n/routing.ts` | `defineRouting({ locales: ['vi','en'], defaultLocale: 'vi', localePrefix: 'as-needed' })` |
-| Request config | `src/i18n/request.ts` | `getRequestConfig` — import messages theo locale |
-| Middleware | `proxy.ts` (root) | `createMiddleware(routing)` |
-| Plugin | `next.config.ts` | `createNextIntlPlugin()` |
+| Locale | File |
+|---|---|
+| `vi` (default) | `src/i18n/vi.json` |
+| `en` | `src/i18n/en.json` |
 
-**Ví dụ `routing.ts`:**
-
-```typescript
-import {defineRouting} from 'next-intl/routing';
-
-export const routing = defineRouting({
-  locales: ['vi', 'en'],
-  defaultLocale: 'vi',
-  localePrefix: 'as-needed'
-});
-```
-
-**Ví dụ `request.ts`:**
-
-```typescript
-import {getRequestConfig} from 'next-intl/server';
-import {routing} from './routing';
-
-export default getRequestConfig(async ({requestLocale}) => {
-  let locale = await requestLocale;
-  if (!locale || !routing.locales.includes(locale as 'vi' | 'en')) {
-    locale = routing.defaultLocale;
-  }
-  return {
-    locale,
-    messages: (await import(`../../messages/${locale}.json`)).default
-  };
-});
-```
-
-**Link nội bộ:** dùng `Link` / `useRouter` / `redirect` từ `@/i18n/routing` (hoặc `createNavigation(routing)`), không dùng `next/link` trực tiếp cho page có locale.
+Dùng `next-intl 3.x` với App Router integration.
 
 ### 9.5 Non-functional Requirements
 
@@ -741,7 +824,7 @@ export default getRequestConfig(async ({requestLocale}) => {
 
 ---
 
-## 10. Đặc tả Module Agents (LangGraph)
+## 11. Đặc tả Module Agents (LangGraph)
 
 ### 10.1 Intent Classification — Semantic Router
 
@@ -811,7 +894,7 @@ flowchart TD
 
 ---
 
-## 11. Đặc tả Module Backend (FastAPI)
+## 12. Đặc tả Module Backend (FastAPI)
 
 ### 11.1 API Endpoints
 
@@ -882,64 +965,18 @@ flowchart TD
 | Cache hit rate | Redis 8.0 semantic cache |
 | Circuit breaker activation count | Places API failure events |
 
-### 11.5 Infrastructure — `compose.yaml`
+### 11.5 Infrastructure Docker Compose
 
-> **Tên file (2026):** Docker Compose ưu tiên **`compose.yaml`** (hoặc `compose.yml`). `docker-compose.yml` vẫn được nhận diện nhưng là legacy — dự án chỉ dùng `compose.yaml`.
-
-**Nguyên tắc port:** Trong Docker network, service gọi nhau bằng **cổng container chuẩn** (`8000`, `5432`, …). Chỉ **publish ra host** dùng cổng hiếm (block `47xxx`) để tránh conflict với Postgres/Redis/Qdrant/API dev khác trên máy.
-
-| Service | Image | Container port | Host port (mặc định) | Biến `.env` |
-|---|---|---|---|---|
-| `backend` | Custom Dockerfile | `8000` | **`48721`** | `HN_BACKEND_HOST_PORT` |
-| `postgres` | `postgres:18` | `5432` | **`47543`** | `HN_POSTGRES_HOST_PORT` |
-| `redis` | `redis:8.0` | `6379` | **`47379`** | `HN_REDIS_HOST_PORT` |
-| `qdrant` | `qdrant/qdrant:v1.13.6` | `6333` (REST), `6334` (gRPC) | **`46333`**, **`46334`** | `HN_QDRANT_REST_HOST_PORT`, `HN_QDRANT_GRPC_HOST_PORT` |
-
-**Kết nối từ host (dev):**
-
-| Mục đích | URL |
-|---|---|
-| FastAPI (Swagger) | `http://localhost:48721` |
-| PostgreSQL | `postgresql://...@localhost:47543/ham_ninh` |
-| Redis | `redis://localhost:47379/0` |
-| Qdrant REST | `http://localhost:46333` |
-
-**Kết nối giữa container (không đổi):** `backend` → `postgres:5432`, `redis:6379`, `qdrant:6333`.
-
-**`.env.example` (trích):**
-
-```env
-HN_BACKEND_HOST_PORT=48721
-HN_POSTGRES_HOST_PORT=47543
-HN_REDIS_HOST_PORT=47379
-HN_QDRANT_REST_HOST_PORT=46333
-HN_QDRANT_GRPC_HOST_PORT=46334
-```
-
-**`compose.yaml` (trích `ports`):**
-
-```yaml
-services:
-  backend:
-    ports:
-      - "${HN_BACKEND_HOST_PORT:-48721}:8000"
-  postgres:
-    ports:
-      - "${HN_POSTGRES_HOST_PORT:-47543}:5432"
-  redis:
-    ports:
-      - "${HN_REDIS_HOST_PORT:-47379}:6379"
-  qdrant:
-    ports:
-      - "${HN_QDRANT_REST_HOST_PORT:-46333}:6333"
-      - "${HN_QDRANT_GRPC_HOST_PORT:-46334}:6334"
-```
-
-Lệnh: `docker compose up -d` (tự đọc `compose.yaml` ở thư mục hiện tại).
+| Service | Image | Port |
+|---|---|---|
+| `backend` | Custom Dockerfile | `8000` |
+| `qdrant` | `qdrant/qdrant:v1.13.6` | `6333` (REST), `6334` (gRPC) |
+| `postgres` | `postgres:17` | `5432` |
+| `redis` | `redis:8.0` | `6379` |
 
 ---
 
-## 12. End-to-End Workflow
+## 13. End-to-End Workflow
 
 ```mermaid
 sequenceDiagram
@@ -987,7 +1024,7 @@ sequenceDiagram
 
 ---
 
-## 13. Phụ lục: Glossary
+## 14. Phụ lục: Glossary
 
 | Thuật ngữ | Giải thích |
 |---|---|
@@ -1017,17 +1054,17 @@ sequenceDiagram
 | **Faithfulness** | RAGAS metric: response trung thực với retrieved context |
 | **Field Mask** | Places API (New): chỉ định fields cần trả về, giảm cost |
 | **HNSW** | Hierarchical Navigable Small World — thuật toán index vector |
-| **Per-node timeout** | LangGraph 1.2+: giới hạn thời gian thực thi mỗi node/task (`TimeoutPolicy`, `NodeTimeoutError`) |
+| **Per-node timeout** | LangGraph 1.1+: giới hạn thời gian thực thi mỗi node |
 | **Bootstrap Sample** | Tập mẫu lấy ngẫu nhiên có hoàn lại từ tập gốc (dùng trong Bagging) |
 | **Residual** | Sai lệch còn lại giữa prediction và ground truth (dùng trong Boosting) |
 | **Variance** | Độ nhạy của model với biến động tập huấn luyện |
 | **Bias** | Sai lệch hệ thống giữa prediction trung bình và giá trị thực |
 | **Places API (New)** | Thế hệ mới Google Places API, base URL `places.googleapis.com/v1` |
-| **PostgresSaver** | `langgraph-checkpoint-postgres`: checkpoint provider dùng PostgreSQL 18 |
+| **PostgresSaver** | LangGraph checkpoint provider dùng PostgreSQL |
 | **Cache Components** | Next.js 16: explicit cache control thay implicit caching |
 | **proxy.ts** | Next.js 16: network boundary file thay `middleware.ts` |
 | **Gridstore** | Qdrant v1.13+: storage engine thay thế RocksDB |
-| **DeltaChannel** | LangGraph 1.2+ (beta): channel type lưu incremental delta thay full state |
+| **DeltaChannel** | LangGraph 1.1+: channel type lưu incremental delta thay full state |
 
 ---
 
