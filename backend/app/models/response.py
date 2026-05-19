@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.request import LatLng
+
 
 class ScoreBreakdown(BaseModel):
     """Individual scoring components for a recommended place."""
@@ -52,8 +54,14 @@ class PlaceResult(BaseModel):
                     "place_id": "ChIJ123abc",
                     "display_name": "Nhà hàng Biển Xanh",
                     "formatted_address": "123 Đường Biển, Phú Quốc, Kiên Giang",
+                    "location": {"lat": 10.1794, "lng": 104.0491},
+                    "types": ["restaurant", "seafood_restaurant"],
+                    "primary_type": "seafood_restaurant",
                     "rating": 4.5,
+                    "user_rating_count": 128,
                     "price_level": 2,
+                    "open_now": True,
+                    "business_status": "OPERATIONAL",
                     "local_factor": 0.8,
                     "final_score": 0.87,
                     "score_breakdown": {
@@ -76,17 +84,42 @@ class PlaceResult(BaseModel):
         default=None,
         description="Full street address when available.",
     )
+    location: LatLng | None = Field(
+        default=None,
+        description="Exact provider-supplied coordinates, or null when unavailable.",
+    )
+    types: list[str] = Field(
+        default_factory=list,
+        description="Provider-supplied place type tags for filtering and display.",
+    )
+    primary_type: str | None = Field(
+        default=None,
+        description="Provider-supplied primary place type when available.",
+    )
     rating: float | None = Field(
         default=None,
         ge=0.0,
         le=5.0,
         description="Google Maps rating (0-5), or null if unrated.",
     )
+    user_rating_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Number of Google Maps user ratings, or null when unavailable.",
+    )
     price_level: int | None = Field(
         default=None,
         ge=0,
         le=4,
         description="Price level from 0 (free) to 4 (very expensive), or null.",
+    )
+    open_now: bool | None = Field(
+        default=None,
+        description="Whether the venue is currently open, or null when unknown.",
+    )
+    business_status: str | None = Field(
+        default=None,
+        description="Provider-supplied business status when available.",
     )
     local_factor: float = Field(
         description="Locality signal — higher for locally-owned businesses.",

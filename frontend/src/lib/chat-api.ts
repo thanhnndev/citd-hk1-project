@@ -35,8 +35,14 @@ export interface PlaceResult {
   place_id: string;
   display_name: string;
   formatted_address?: string | null;
+  location?: LatLng | null;
+  types: string[];
+  primary_type?: string | null;
   rating?: number | null;
+  user_rating_count?: number | null;
   price_level?: number | null;
+  open_now?: boolean | null;
+  business_status?: string | null;
   local_factor: number;
   final_score: number;
   score_breakdown: ScoreBreakdown;

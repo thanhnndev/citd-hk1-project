@@ -5,7 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.response import ChatResponse
+from app.models.request import LatLng
+from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from app.services.corpus_loader import load_corpus
 from app.services.retriever import Retriever
 
@@ -53,7 +54,10 @@ class TestChatEndpointHappyPath:
             "language": "vi",
         })
         assert r.status_code == 200
-        assert r.json()["intent"] == "restaurant_search"
+        body = r.json()
+        assert body["intent"] == "place_recommendation"
+        assert body["places"] == []
+        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"]
 
     def test_navigation_intent(self, client):
         r = client.post("/chat", json={
@@ -62,7 +66,10 @@ class TestChatEndpointHappyPath:
             "language": "vi",
         })
         assert r.status_code == 200
-        assert r.json()["intent"] == "navigation"
+        body = r.json()
+        assert body["intent"] == "place_recommendation"
+        assert body["places"] == []
+        assert "place_recommendation status=" in body["reasoning_log"]
 
     def test_response_has_all_required_keys(self, client):
         r = client.post("/chat", json={
@@ -117,8 +124,24 @@ class TestChatEndpointAgentDelegation:
             session_id="agent-post-s1",
             message="agent response",
             citations=[],
-            places=[],
-            intent="cultural_query",
+            places=[PlaceResult(
+                place_id="places/pin-ready",
+                display_name="Pin Ready Seafood",
+                formatted_address="Ham Ninh, Phu Quoc",
+                location=LatLng(lat=10.1794, lng=104.0491),
+                types=["restaurant", "seafood_restaurant"],
+                primary_type="seafood_restaurant",
+                rating=4.7,
+                user_rating_count=321,
+                price_level=2,
+                open_now=True,
+                business_status="OPERATIONAL",
+                local_factor=0.8,
+                final_score=0.9,
+                score_breakdown=ScoreBreakdown(relevance=1.0, proximity=0.5, price=0.5, rating=0.94, accessibility=0.5),
+                google_maps_uri="https://maps.example/pin-ready",
+            )],
+            intent="place_recommendation",
             langfuse_trace_id=None,
             latency_ms=1.0,
             fallback=False,
@@ -132,7 +155,14 @@ class TestChatEndpointAgentDelegation:
         })
 
         assert r.status_code == 200
-        assert r.json()["message"] == "agent response"
+        body = r.json()
+        assert body["message"] == "agent response"
+        assert body["places"][0]["location"] == {"lat": 10.1794, "lng": 104.0491}
+        assert body["places"][0]["types"] == ["restaurant", "seafood_restaurant"]
+        assert body["places"][0]["primary_type"] == "seafood_restaurant"
+        assert body["places"][0]["user_rating_count"] == 321
+        assert body["places"][0]["open_now"] is True
+        assert body["places"][0]["business_status"] == "OPERATIONAL"
         mock_agent.answer.assert_awaited_once_with(
             session_id="agent-post-s1",
             message="Hàm Ninh",
