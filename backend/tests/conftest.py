@@ -10,10 +10,9 @@ from app.services.retriever import Retriever
 from app.services.qdrant_service import QdrantService
 from app.services.embedding_service import EmbeddingService
 
-# Ensure required env vars are set before any app module imports.
-# Settings requires OPENAI_API_KEY, GOOGLE_PLACES_API_KEY, GOOGLE_ROUTES_API_KEY.
-for _key in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
-    os.environ.setdefault(_key, "fake-test-key")
+# Ensure required app secrets are set before any app module imports.
+# Google credentials are optional and should remain absent unless a test opts in.
+os.environ.setdefault("OPENAI_API_KEY", "fake-test-key")
 
 
 def _resolve_corpus_path() -> str:

@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
     # ── Google APIs ─────────────────────────────────────────────
-    GOOGLE_PLACES_API_KEY: str
-    GOOGLE_ROUTES_API_KEY: str
+    # Optional: blank values let Places/Routes services fail honestly at runtime.
+    GOOGLE_PLACES_API_KEY: str = ""
+    GOOGLE_ROUTES_API_KEY: str = ""
 
     # ── Langfuse ────────────────────────────────────────────────
     LANGFUSE_PUBLIC_KEY: str = ""
