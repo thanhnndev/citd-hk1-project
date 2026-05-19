@@ -23,6 +23,7 @@ node_modules/
 .next/
 dist/
 build/
+next-env.d.ts
 
 # ── Python ──
 __pycache__/
