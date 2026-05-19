@@ -1,0 +1,18 @@
+{
+  "total_urls": 48,
+  "success": 11,
+  "failed": 0,
+  "valid_documents": 11,
+  "dropped_documents": 37,
+  "documents_by_domain": {
+    "mia.vn": 5,
+    "phuquoc.angiang.gov.vn": 2,
+    "vinwonders.com": 3,
+    "www.vietnamairlines.com": 1
+  },
+  "documents_by_reliability": {
+    "medium": 9,
+    "high": 2
+  },
+  "errors": []
+}
