@@ -24,7 +24,7 @@ export default async function MapPage({ params }: Props) {
     unavailable: t('unavailable'),
     noResults: t('noResults'),
     fallback: t('fallback'),
-    resultCount: t('resultCount'),
+    resultCount: t('resultCount', { count: 0 }),
     detailTitle: t('detailTitle'),
     selectPlace: t('selectPlace'),
     pinReady: t('pinReady'),
