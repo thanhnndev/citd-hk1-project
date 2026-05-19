@@ -233,8 +233,35 @@
     "newQuestion": "Hỏi thêm"
   },
   "Map": {
-    "title": "Bản đồ Hàm Ninh",
-    "searchPlaceholder": "Tìm địa điểm..."
+    "title": "Bản đồ kiểm chứng địa điểm Hàm Ninh",
+    "intro": "Kiểm tra gợi ý địa điểm do agent backend trả về: thẻ kết quả, chi tiết được chọn, tọa độ sẵn sàng ghim và liên kết Google Maps mà không tải SDK bản đồ trên trình duyệt.",
+    "defaultQuery": "Gợi ý nhà hàng hải sản địa phương và điểm kinh doanh gia đình gần làng chài Hàm Ninh có thông tin tiếp cận.",
+    "queryLabel": "Câu hỏi gợi ý địa điểm",
+    "searchPlaceholder": "Hỏi địa điểm hoặc dịch vụ ở Hàm Ninh...",
+    "submit": "Tìm địa điểm",
+    "loading": "Đang kiểm tra gợi ý từ backend...",
+    "error": "Không thể tải lớp kiểm chứng địa điểm.",
+    "unavailable": "Dịch vụ gợi ý hiện chưa sẵn sàng.",
+    "noResults": "Không có kết quả địa điểm được trả về.",
+    "fallback": "Trợ lý đã dùng phản hồi dự phòng:",
+    "resultCount": "{count} kết quả địa điểm từ backend",
+    "detailTitle": "Địa điểm đang chọn",
+    "selectPlace": "Chọn địa điểm",
+    "pinReady": "sẵn sàng ghim",
+    "pinUnavailable": "Không thể ghim: địa điểm này chưa có tọa độ trả về.",
+    "mapsLink": "Mở trong Google Maps",
+    "rating": "Đánh giá",
+    "reviews": "Lượt đánh giá",
+    "openNow": "Đang mở cửa",
+    "closedNow": "Đang đóng cửa",
+    "openUnknown": "Chưa rõ trạng thái mở cửa",
+    "businessStatus": "Trạng thái kinh doanh",
+    "type": "Loại hình",
+    "accessibility": "Khả năng tiếp cận",
+    "address": "Địa chỉ",
+    "coordinates": "Tọa độ",
+    "unknown": "Chưa rõ",
+    "responseNote": "Ghi chú của trợ lý"
   },
   "Architecture": {
     "title": "Kiến trúc hệ thống"

@@ -233,8 +233,35 @@
     "newQuestion": "Ask another question"
   },
   "Map": {
-    "title": "Ham Ninh Map",
-    "searchPlaceholder": "Search places..."
+    "title": "Ham Ninh Place Proof Map",
+    "intro": "Inspect live place recommendations returned by the backend agent: result cards, selected details, pin-ready coordinates, and Google Maps links without loading a browser map SDK.",
+    "defaultQuery": "Recommend local seafood restaurants and family-run places near Ham Ninh fishing village with accessibility details.",
+    "queryLabel": "Place recommendation query",
+    "searchPlaceholder": "Ask for places or services in Ham Ninh...",
+    "submit": "Find places",
+    "loading": "Checking backend recommendations...",
+    "error": "Unable to load place proof.",
+    "unavailable": "The recommendation service is unavailable right now.",
+    "noResults": "No place results were returned.",
+    "fallback": "The assistant used a fallback response:",
+    "resultCount": "{count} backend place results",
+    "detailTitle": "Selected place",
+    "selectPlace": "Select place",
+    "pinReady": "pin ready",
+    "pinUnavailable": "Pin unavailable: coordinates were not returned for this place.",
+    "mapsLink": "Open in Google Maps",
+    "rating": "Rating",
+    "reviews": "Reviews",
+    "openNow": "Open now",
+    "closedNow": "Closed now",
+    "openUnknown": "Open status unknown",
+    "businessStatus": "Business status",
+    "type": "Type",
+    "accessibility": "Accessibility",
+    "address": "Address",
+    "coordinates": "Coordinates",
+    "unknown": "Unknown",
+    "responseNote": "Assistant note"
   },
   "Architecture": {
     "title": "System Architecture"
