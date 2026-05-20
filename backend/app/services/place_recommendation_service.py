@@ -19,6 +19,7 @@ from app.models.places import (
     PlaceToolSource,
     PlaceToolStatus,
 )
+from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from app.services.ensemble_reranker import EnsembleReranker
 from app.services.feature_extractor import FeatureExtractor
@@ -35,12 +36,27 @@ class TextSearchPlacesTool(Protocol):
     async def text_search(self, request: PlaceSearchRequest) -> PlaceToolResponse: ...
 
 
+class RoutesServiceProtocol(Protocol):
+    """Optional routes dependency for enriching candidates with real driving distances."""
+
+    async def enrich_candidates(
+        self, candidates: list[PlaceCandidate], origin: LatLng
+    ) -> list[PlaceCandidate]: ...
+
+
 class PlaceRecommendationService:
     """Build ChatResponse place recommendations that cannot invent place ids."""
 
-    def __init__(self, places_tool: TextSearchPlacesTool, *, max_result_count: int = DEFAULT_MAX_RESULTS) -> None:
+    def __init__(
+        self,
+        places_tool: TextSearchPlacesTool,
+        *,
+        max_result_count: int = DEFAULT_MAX_RESULTS,
+        routes_service: RoutesServiceProtocol | None = None,
+    ) -> None:
         self._places_tool = places_tool
         self._max_result_count = max(1, min(max_result_count, 20))
+        self._routes_service = routes_service
 
     async def recommend(self, *, query: str, language: str = "vi", session_id: str) -> ChatResponse:
         started = time.perf_counter()
@@ -90,11 +106,22 @@ class PlaceRecommendationService:
                 fallback=tool_response.status != PlaceToolStatus.EMPTY,
             )
 
+        # Route enrichment (optional — degrades gracefully)
+        candidates = tool_response.candidates
         try:
-            places = _reranked_results(tool_response.candidates, request.query)
+            if self._routes_service is not None:
+                candidates = await self._routes_service.enrich_candidates(
+                    tool_response.candidates, origin=request.location_bias
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("route_enrichment_failed", extra={"error_type": type(exc).__name__})
+            candidates = tool_response.candidates
+
+        try:
+            places = _reranked_results(candidates, request.query)
         except Exception as exc:  # noqa: BLE001 - ensemble pipeline fails closed.
             logger.warning("ensemble_reranking_failed", extra={"error_type": type(exc).__name__})
-            places = _grounded_results(tool_response.candidates)
+            places = _grounded_results(candidates)
 
         logger.info(
             "place_recommendation_status",

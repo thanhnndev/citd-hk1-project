@@ -33,6 +33,7 @@ from app.services.place_recommendation_service import PlaceRecommendationService
 from app.services.places_service import GooglePlacesService
 from app.services.qdrant_service import QdrantService
 from app.services.retriever import Retriever
+from app.services.routes_service import GoogleRoutesService
 
 logger = get_logger(__name__)
 
@@ -104,8 +105,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     try:
         places_service = GooglePlacesService(settings=settings)
+        routes_service = GoogleRoutesService(settings=settings)
         app.state.places_service = places_service
-        app.state.place_recommendation_service = PlaceRecommendationService(places_service)
+        app.state.place_recommendation_service = PlaceRecommendationService(
+            places_service, routes_service=routes_service
+        )
         logger.info("places.recommendation_configured", provider="google_places")
     except Exception as exc:
         logger.warning("places.recommendation_init_failed", error_type=type(exc).__name__)
