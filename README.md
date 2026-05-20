@@ -92,7 +92,6 @@ Qdrant Vector DB ✅ Sẵn sàng cho RAG
 | AI Agents | LangGraph 1.1 |
 | Vector DB | Qdrant v1.13.6 |
 | Database | PostgreSQL 17, Redis 8.0 |
-| ML | scikit-learn 1.8.0 |
 | Observability | Langfuse 4.6.1 |
 | Evaluation | RAGAS 0.4.3 |
 | Document Processing | Docling (IBM) |
