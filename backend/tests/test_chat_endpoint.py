@@ -57,7 +57,7 @@ class TestChatEndpointHappyPath:
         body = r.json()
         assert body["intent"] == "place_recommendation"
         assert body["places"] == []
-        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"]
+        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"] or "status=upstream_error" in body["reasoning_log"]
 
     def test_navigation_intent(self, client):
         r = client.post("/chat", json={

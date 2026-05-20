@@ -382,28 +382,31 @@ class TestChatEndpointIntent:
     short/gibberish → cultural_query (default for non-keyword queries >= 3 chars)."""
 
     def test_restaurant_keyword_nhà_hàng(self, client):
+        """Restaurant keywords now route through place_recommendation pipeline."""
         r = client.post("/chat", json={
             "session_id": "s-intent-01",
             "message": "nhà hàng ngon ở Hàm Ninh",
             "language": "vi",
         })
-        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["intent"] == "place_recommendation"
 
     def test_restaurant_keyword_hải_sản(self, client):
+        """Restaurant keywords now route through place_recommendation pipeline."""
         r = client.post("/chat", json={
             "session_id": "s-intent-02",
             "message": "ăn hải sản Phú Quốc",
             "language": "vi",
         })
-        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["intent"] == "place_recommendation"
 
     def test_restaurant_english_keyword(self, client):
+        """Restaurant keywords now route through place_recommendation pipeline."""
         r = client.post("/chat", json={
             "session_id": "s-intent-03",
             "message": "best seafood restaurant near me",
             "language": "en",
         })
-        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["intent"] == "place_recommendation"
 
     def test_cultural_query_default(self, client):
         """A general tourism query with no specific keywords → cultural_query."""
