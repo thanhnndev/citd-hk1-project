@@ -2,6 +2,7 @@ import { getTranslations } from 'next-intl/server';
 import { Link } from '@/i18n/routing';
 import { cn } from '@/lib/utils';
 import { LocaleSwitcher } from './locale-switcher';
+import { AuthNav } from './auth-nav';
 
 type SiteHeaderProps = {
   locale: string;
@@ -15,13 +16,13 @@ const navItems = [
   { href: '/architecture', translationKey: 'architecture' as const },
 ] as const;
 
-export async function SiteHeader({ locale: _locale, className }: SiteHeaderProps) {
+export async function SiteHeader({ locale, className }: SiteHeaderProps) {
   const t = await getTranslations('Navigation');
 
   return (
     <header
       className={cn(
-        'sticky top-0 z-50 w-full border-b border-gray-200 bg-white/80 backdrop-blur-md dark:border-gray-700 dark:bg-gray-900/80',
+        'sticky top-0 z-50 w-full border-b border-border/60 bg-background/80 backdrop-blur-md',
         className
       )}
       role="banner"
@@ -33,7 +34,7 @@ export async function SiteHeader({ locale: _locale, className }: SiteHeaderProps
         {/* Logo / Brand */}
         <Link
           href="/"
-          className="flex shrink-0 items-center text-lg font-semibold text-gray-900 transition-colors hover:text-blue-600 dark:text-gray-100 dark:hover:text-blue-400"
+          className="flex shrink-0 items-center text-lg font-semibold text-foreground transition-colors hover:text-primary"
         >
           Hàm Ninh AI
         </Link>
@@ -44,7 +45,7 @@ export async function SiteHeader({ locale: _locale, className }: SiteHeaderProps
             <li key={href}>
               <Link
                 href={href}
-                className="text-sm font-medium text-gray-600 transition-colors hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400"
+                className="text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
               >
                 {t(translationKey)}
               </Link>
@@ -52,8 +53,18 @@ export async function SiteHeader({ locale: _locale, className }: SiteHeaderProps
           ))}
         </ul>
 
-        {/* Locale switcher */}
-        <LocaleSwitcher />
+        {/* Right side: locale switcher + auth */}
+        <div className="flex items-center gap-3">
+          <LocaleSwitcher />
+          <AuthNav
+            locale={locale}
+            translations={{
+              login: t('login'),
+              register: t('register'),
+              logout: t('logout'),
+            }}
+          />
+        </div>
       </nav>
     </header>
   );

@@ -7,5 +7,9 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return children;
+  return (
+    <html suppressHydrationWarning data-scroll-behavior="smooth">
+      <body className="flex min-h-screen flex-col">{children}</body>
+    </html>
+  );
 }

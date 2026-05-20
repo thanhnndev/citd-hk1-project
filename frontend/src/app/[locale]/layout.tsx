@@ -24,14 +24,12 @@ export default async function LocaleLayout({ children, params }: LocaleLayoutPro
   setRequestLocale(locale);
 
   return (
-    <html lang={locale} suppressHydrationWarning data-scroll-behavior="smooth">
-      <body className="flex min-h-screen flex-col">
-        <NextIntlClientProvider>
-          <SiteHeader locale={locale} />
-          <main className="flex-1">{children}</main>
-          <SiteFooter locale={locale} />
-        </NextIntlClientProvider>
-      </body>
-    </html>
+    <NextIntlClientProvider>
+      <SiteHeader locale={locale} />
+      <main className="flex-1" lang={locale}>
+        {children}
+      </main>
+      <SiteFooter locale={locale} />
+    </NextIntlClientProvider>
   );
 }
