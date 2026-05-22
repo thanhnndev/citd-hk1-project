@@ -177,7 +177,7 @@ def _chunk_document(doc: dict) -> list[RAGChunk]:
 
 
 def load_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
-    """Load and chunk the JSONL corpus.
+    """Load and chunk the JSONL corpus (fixed-size heading-aware splitting).
 
     Args:
         path: Path to the JSONL file.
@@ -206,7 +206,29 @@ def load_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON at row {row_num}: {e}") from e
 
-            # Validate required fields
+            # Detect schema: proposition-level uses chunk_id/text,
+            # fixed-size loader uses id/cleaned_content.
+            if "chunk_id" in doc and "text" in doc:
+                # Proposition corpus — no further chunking needed.
+                all_chunks.append(
+                    RAGChunk(
+                        chunk_id=doc["chunk_id"],
+                        source_id=doc["source_id"],
+                        title=doc["title"],
+                        url=doc.get("url") or None,
+                        domain=doc["domain"],
+                        source_type=doc["source_type"],
+                        reliability=doc["reliability"],
+                        language=doc["language"],
+                        location=doc["location"],
+                        text=doc["text"],
+                        chunk_index=doc.get("chunk_index", 0),
+                        total_chunks=doc.get("total_chunks", 1),
+                    )
+                )
+                continue
+
+            # Fixed-size / heading-based loader (document-level schema).
             missing = [field for field in REQUIRED_FIELDS if field not in doc or doc[field] is None]
             if missing:
                 raise ValueError(
@@ -216,6 +238,83 @@ def load_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
             # Chunk the document
             doc_chunks = _chunk_document(doc)
             all_chunks.extend(doc_chunks)
+
+    return all_chunks
+
+
+# Fields that each proposition JSONL row must contain
+_PROP_REQUIRED_FIELDS = (
+    "chunk_id",
+    "source_id",
+    "title",
+    "domain",
+    "source_type",
+    "reliability",
+    "language",
+    "location",
+    "text",
+)
+
+
+def load_proposition_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
+    """Load a proposition-level JSONL corpus directly into RAGChunk objects.
+
+    Each row in the JSONL is one atomic proposition emitted by
+    PropositionChunker.  The file contains `text` directly (not
+    ``cleaned_content``) and may include extra fields such as ``topic``.
+
+    Args:
+        path: Path to the JSONL file.
+
+    Returns:
+        List of RAGChunk objects, one per proposition row.
+
+    Raises:
+        ValueError: If a row is missing a required field or the file is invalid.
+        FileNotFoundError: If the path does not exist.
+    """
+    filepath = Path(path)
+    if not filepath.exists():
+        raise FileNotFoundError(f"Proposition corpus file not found: {path}")
+
+    all_chunks: list[RAGChunk] = []
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        for row_num, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                doc = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON at row {row_num}: {e}") from e
+
+            missing = [
+                field for field in _PROP_REQUIRED_FIELDS
+                if field not in doc or doc[field] is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"Row {row_num} missing required fields: {', '.join(missing)}"
+                )
+
+            all_chunks.append(
+                RAGChunk(
+                    chunk_id=doc["chunk_id"],
+                    source_id=doc["source_id"],
+                    title=doc["title"],
+                    url=doc.get("url") or None,
+                    domain=doc["domain"],
+                    source_type=doc["source_type"],
+                    reliability=doc["reliability"],
+                    language=doc["language"],
+                    location=doc["location"],
+                    text=doc["text"],
+                    chunk_index=doc.get("chunk_index", 0),
+                    total_chunks=doc.get("total_chunks", 1),
+                )
+            )
 
     return all_chunks
 

@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.core.logging import get_logger
 from app.models.response import EmbedResponse
-from app.services.corpus_loader import load_corpus
+from app.services.corpus_loader import load_proposition_corpus
 from app.services.embedding_service import EmbeddingService, EmbeddingValidationError
 from app.services.hybrid_retriever import BM25Vectorizer
 from app.services.qdrant_service import (
@@ -59,7 +59,7 @@ async def embed_corpus(request: Request) -> EmbedResponse:
     logger.info("embed.started", corpus_path=str(corpus_path))
 
     try:
-        chunks = load_corpus(str(corpus_path))
+        chunks = load_proposition_corpus(str(corpus_path))
     except FileNotFoundError as exc:
         logger.error("embed.corpus_not_found", path=str(corpus_path))
         raise HTTPException(
