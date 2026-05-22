@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
+    # Embeddings can use any OpenAI-compatible provider separately from the LLM.
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_BASE_URL: str = ""
+    EMBEDDING_MODEL: str = ""
+    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_BATCH_SIZE: int = 100
 
     # ── Google APIs ─────────────────────────────────────────────
     # Optional: blank values let Places/Routes services fail honestly at runtime.
@@ -44,9 +50,16 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "http://langfuse:3000"
 
     # ── CORS ────────────────────────────────────────────────────
-    CORS_ORIGINS: Annotated[List[str], BeforeValidator(
-        lambda v: [x.strip() for x in v.split(",") if x.strip()] if isinstance(v, str) else v
-    )] = ["http://localhost:3000"]
+    CORS_ORIGINS: Annotated[
+        List[str],
+        BeforeValidator(
+            lambda v: (
+                [x.strip() for x in v.split(",") if x.strip()]
+                if isinstance(v, str)
+                else v
+            )
+        ),
+    ] = ["http://localhost:3000"]
 
     # ── Server ──────────────────────────────────────────────────
     APP_ENV: str = "development"
@@ -71,6 +84,16 @@ class Settings(BaseSettings):
     def qdrant_url(self) -> str:
         """Build Qdrant URL."""
         return "http://qdrant:6333"
+
+    @property
+    def embedding_api_key(self) -> str:
+        """Return the embedding-specific key, falling back to OpenAI."""
+        return self.EMBEDDING_API_KEY or self.OPENAI_API_KEY
+
+    @property
+    def embedding_model(self) -> str:
+        """Return the embedding-specific model, falling back to legacy config."""
+        return self.EMBEDDING_MODEL or self.OPENAI_EMBEDDING_MODEL
 
 
 # Module-level lazy singleton — created on first access via get_settings().

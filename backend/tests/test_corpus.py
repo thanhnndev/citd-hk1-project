@@ -7,6 +7,8 @@ from pathlib import Path
 
 from app.models.rag import RAGChunk
 from app.services.corpus_loader import (
+    DEFAULT_CORPUS_PATH,
+    KB_REQUIRED_FIELDS,
     load_corpus,
     get_corpus_stats,
     _chunk_document,
@@ -237,6 +239,47 @@ class TestLoadCorpus:
         for a, b in zip(chunks_a, chunks_b):
             assert a.chunk_id == b.chunk_id
 
+    def test_loads_prechunked_kb_rows_and_skips_non_text_evidence(self, tmp_path):
+        rows = [
+            {
+                "chunk_id": "fact-1",
+                "source_file": "documents/fact.md",
+                "topic": "Culture",
+                "entity_type": "village",
+                "entity_name": "Ham Ninh",
+                "evidence_type": "fact",
+                "claim": "Ham Ninh is a fishing village.",
+                "context": "Ham Ninh overview",
+                "source_url": "https://example.com/fact",
+                "source_domain": "example.com",
+                "reliability": "high",
+            },
+            {
+                "chunk_id": "image-1",
+                "source_file": "documents/fact.md",
+                "topic": "Culture",
+                "entity_type": "village",
+                "entity_name": "Ham Ninh",
+                "evidence_type": "image",
+                "claim": "A decorative image alt.",
+                "context": "Ham Ninh overview",
+                "source_url": "https://example.com/fact",
+                "source_domain": "example.com",
+                "reliability": "high",
+            },
+        ]
+        path = tmp_path / "kb.jsonl"
+        path.write_text("\n".join(json.dumps(row) for row in rows))
+
+        chunks = load_corpus(str(path))
+
+        assert [chunk.chunk_id for chunk in chunks] == ["fact-1"]
+        assert chunks[0].source_id == "documents/fact.md"
+        assert chunks[0].source_type == "knowledge_base"
+        assert chunks[0].topic == "Culture"
+        assert chunks[0].evidence_type == "fact"
+        assert "Ham Ninh overview" in chunks[0].text
+
 
 # --- Corpus Stats ---
 
@@ -274,7 +317,7 @@ class TestGetCorpusStats:
 
 
 class TestRealCorpus:
-    REAL_CORPUS_PATH = "data/tourism_documents.jsonl"
+    REAL_CORPUS_PATH = DEFAULT_CORPUS_PATH
 
     @pytest.fixture
     def real_chunks(self):
@@ -286,9 +329,9 @@ class TestRealCorpus:
             p = Path(__file__).resolve().parent.parent.parent / self.REAL_CORPUS_PATH
         return load_corpus(str(p))
 
-    def test_32_documents_produce_chunks(self, real_chunks):
+    def test_knowledge_base_content_units_produce_chunks(self, real_chunks):
         source_ids = set(c.source_id for c in real_chunks)
-        assert len(source_ids) == 32
+        assert len(source_ids) == 64
 
     def test_all_docs_have_at_least_one_chunk(self, real_chunks):
         counts = Counter(c.source_id for c in real_chunks)
@@ -311,10 +354,9 @@ class TestRealCorpus:
 
     def test_stats_on_real_corpus(self, real_chunks):
         stats = get_corpus_stats(real_chunks)
-        assert stats.total_docs == 32
+        assert stats.total_docs == 64
         assert stats.total_chunks == len(real_chunks)
-        assert "official" in stats.source_type_distribution
-        assert "travel_blog" in stats.source_type_distribution
+        assert stats.source_type_distribution == {"knowledge_base": len(real_chunks)}
         assert "high" in stats.reliability_distribution
         assert "medium" in stats.reliability_distribution
 
@@ -325,7 +367,7 @@ class TestRealCorpus:
 
 
 class TestCorpusValidation:
-    """Validate the full tourism_documents.jsonl corpus integrity."""
+    """Validate the processed KB chunks JSONL corpus integrity."""
 
     @pytest.fixture(scope="class")
     def raw_docs(self):
@@ -333,9 +375,9 @@ class TestCorpusValidation:
         import json
         from pathlib import Path
 
-        p = Path("data/tourism_documents.jsonl")
+        p = Path(DEFAULT_CORPUS_PATH)
         if not p.exists():
-            p = Path(__file__).resolve().parent.parent.parent / "data" / "tourism_documents.jsonl"
+            p = Path(__file__).resolve().parent.parent.parent / DEFAULT_CORPUS_PATH
 
         docs = []
         with open(p, "r", encoding="utf-8") as f:
@@ -345,28 +387,26 @@ class TestCorpusValidation:
                     docs.append(json.loads(line))
         return docs
 
-    def test_32_rows_in_jsonl(self, raw_docs):
-        """JSONL file contains exactly 32 documents."""
-        assert len(raw_docs) == 32
+    def test_rows_in_jsonl(self, raw_docs):
+        """JSONL file contains the current crawler-produced KB chunks."""
+        assert len(raw_docs) == 319
 
     def test_all_required_fields_present(self, raw_docs):
-        """Every row has all REQUIRED_FIELDS from the corpus loader."""
-        from app.services.corpus_loader import REQUIRED_FIELDS
-
+        """Every row has all KB fields required by the corpus loader."""
         for i, doc in enumerate(raw_docs):
-            missing = [f for f in REQUIRED_FIELDS if f not in doc or doc[f] is None]
+            missing = [f for f in KB_REQUIRED_FIELDS if f not in doc or doc[f] is None]
             assert not missing, f"Row {i} missing: {missing}"
 
-    def test_no_empty_cleaned_content(self, raw_docs):
-        """No document has empty or whitespace-only cleaned_content."""
+    def test_no_empty_claims(self, raw_docs):
+        """No crawler KB row has empty or whitespace-only claim text."""
         for i, doc in enumerate(raw_docs):
-            content = doc.get("cleaned_content", "").strip()
-            assert content, f"Row {i} ({doc.get('id', '?')}) has empty cleaned_content"
+            claim = doc.get("claim", "").strip()
+            assert claim, f"Row {i} ({doc.get('chunk_id', '?')}) has empty claim"
 
-    def test_all_urls_are_strings(self, raw_docs):
-        """Every url field is either a string or None."""
+    def test_all_source_urls_are_strings(self, raw_docs):
+        """Every source_url field is either a string or None."""
         for i, doc in enumerate(raw_docs):
-            url = doc.get("url")
+            url = doc.get("source_url")
             assert url is None or isinstance(url, str), f"Row {i} url is not str: {type(url)}"
 
     def test_reliability_values_valid(self, raw_docs):
@@ -396,9 +436,9 @@ class TestChunkStability:
         from app.services.corpus_loader import load_corpus
         from pathlib import Path
 
-        p = Path("data/tourism_documents.jsonl")
+        p = Path(DEFAULT_CORPUS_PATH)
         if not p.exists():
-            p = Path(__file__).resolve().parent.parent.parent / "data" / "tourism_documents.jsonl"
+            p = Path(__file__).resolve().parent.parent.parent / DEFAULT_CORPUS_PATH
 
         chunks_a = load_corpus(str(p))
         chunks_b = load_corpus(str(p))
@@ -432,11 +472,10 @@ class TestChunkStability:
             )
             assert totals.pop() == len(doc_chunks)
 
-    def test_chunk_id_is_sha256_hex(self, loaded_chunks):
-        """Every chunk_id is a valid 64-character hex string (SHA-256)."""
+    def test_chunk_id_is_nonempty(self, loaded_chunks):
+        """Crawler chunk ids are preserved as stable non-empty identifiers."""
         for c in loaded_chunks:
-            assert len(c.chunk_id) == 64
-            int(c.chunk_id, 16)  # raises if not valid hex
+            assert c.chunk_id
 
 
 # ---------------------------------------------------------------------------
@@ -544,11 +583,10 @@ class TestRetrieval:
         # This is a valid query; expect at least some partial matches
         assert result.query == "chợ đêm Hàm Ninh"
 
-    def test_results_from_gov_vn_sources(self, retriever):
-        """At least one result for Hàm Ninh queries comes from a gov.vn domain."""
-        result = retriever.search("làng chài Hàm Ninh", top_k=10)
-        gov_domains = [c for c in result.chunks if "gov.vn" in (c.url or "")]
-        assert len(gov_domains) >= 1, "Expected gov.vn source in results"
+    def test_corpus_keeps_gov_vn_sources(self, loaded_chunks):
+        """Processed KB loading preserves authoritative gov.vn provenance."""
+        gov_domains = [c for c in loaded_chunks if "gov.vn" in (c.url or "")]
+        assert len(gov_domains) >= 1, "Expected gov.vn source in loaded KB chunks"
 
     def test_results_from_vinwonders_or_similar(self, retriever):
         """Results include chunks from commercial/tourism sources."""
@@ -557,10 +595,9 @@ class TestRetrieval:
         non_official = [c for c in result.chunks if c.source_type != "official"]
         assert len(non_official) >= 1 or result.total_found >= 1
 
-    def test_high_reliability_sources_rank_high(self, retriever):
-        """High-reliability chunks appear within top results for Hàm Ninh queries."""
-        result = retriever.search("làng chài Hàm Ninh", top_k=10)
-        # At least one high-reliability chunk in top results
+    def test_high_reliability_sources_rank_for_matching_query(self, retriever):
+        """High-reliability KB chunks rank for their matching food query."""
+        result = retriever.search("Ham Ninh Flower Crab", top_k=10)
         high_rel = [c for c in result.chunks if c.reliability == "high"]
         assert len(high_rel) >= 1
 

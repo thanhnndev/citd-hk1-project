@@ -1,6 +1,6 @@
-"""OpenAI embedding service for the tourism RAG pipeline.
+"""OpenAI-compatible embedding service for the tourism RAG pipeline.
 
-Wraps the OpenAI Embeddings API with batching, rate-limit courtesy sleep,
+Wraps OpenAI-compatible Embeddings APIs with batching, dimension validation,
 and structured logging for observability.
 """
 
@@ -12,8 +12,6 @@ import structlog
 import openai
 
 from app.core.config import get_settings
-from app.services.qdrant_service import VECTOR_SIZE
-
 logger = structlog.get_logger(__name__)
 
 class EmbeddingValidationError(RuntimeError):
@@ -22,7 +20,7 @@ class EmbeddingValidationError(RuntimeError):
 
 
 class EmbeddingService:
-    """Async wrapper around OpenAI text-embedding-3-small (or configured model).
+    """Async wrapper around the configured OpenAI-compatible embedding model.
 
     Usage::
 
@@ -35,8 +33,13 @@ class EmbeddingService:
 
     def __init__(self) -> None:
         settings = get_settings()
-        self._client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model: str = settings.OPENAI_EMBEDDING_MODEL
+        client_kwargs = {"api_key": settings.embedding_api_key}
+        if settings.EMBEDDING_BASE_URL:
+            client_kwargs["base_url"] = settings.EMBEDDING_BASE_URL
+        self._client = openai.AsyncOpenAI(**client_kwargs)
+        self.model: str = settings.embedding_model
+        self.dimensions: int = settings.EMBEDDING_DIMENSIONS
+        self.batch_size: int = max(1, settings.EMBEDDING_BATCH_SIZE)
 
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of texts, batching at BATCH_SIZE per API call.
@@ -53,8 +56,8 @@ class EmbeddingService:
         all_vectors: List[List[float]] = []
 
         batches = [
-            texts[i : i + self.BATCH_SIZE]
-            for i in range(0, len(texts), self.BATCH_SIZE)
+            texts[i : i + self.batch_size]
+            for i in range(0, len(texts), self.batch_size)
         ]
 
         for batch_index, batch in enumerate(batches):
@@ -64,6 +67,7 @@ class EmbeddingService:
             response = await self._client.embeddings.create(
                 input=batch,
                 model=self.model,
+                dimensions=self.dimensions,
             )
 
             batch_vectors = [item.embedding for item in response.data]
@@ -81,18 +85,18 @@ class EmbeddingService:
                 )
 
             for vector_index, vector in enumerate(batch_vectors):
-                if len(vector) != VECTOR_SIZE:
+                if len(vector) != self.dimensions:
                     logger.error(
                         "embed.vector_dimension_mismatch",
                         batch_index=batch_index,
                         vector_index=vector_index,
-                        expected_dim=VECTOR_SIZE,
+                        expected_dim=self.dimensions,
                         actual_dim=len(vector),
                         model=self.model,
                     )
                     raise EmbeddingValidationError(
                         "Embedding vector dimension mismatch: "
-                        f"expected {VECTOR_SIZE}, got {len(vector)} "
+                        f"expected {self.dimensions}, got {len(vector)} "
                         f"at batch {batch_index} index {vector_index}"
                     )
             all_vectors.extend(batch_vectors)

@@ -106,8 +106,8 @@ class TestDetectIntent:
     def test_restaurant_search_en(self):
         assert detect_intent("best seafood restaurant near me") == "restaurant_search"
 
-    def test_restaurant_keyword_an(self):
-        assert detect_intent("ăn gì ở Phú Quốc") == "restaurant_search"
+    def test_food_knowledge_uses_cultural_query(self):
+        assert detect_intent("ăn gì ở Phú Quốc") == "cultural_query"
 
     def test_restaurant_keyword_quan(self):
         assert detect_intent("quán ngon gần đây") == "restaurant_search"
@@ -120,6 +120,9 @@ class TestDetectIntent:
 
     def test_navigation_chỉ_đường(self):
         assert detect_intent("chỉ đường đến chợ Hàm Ninh") == "navigation"
+
+    def test_location_knowledge_uses_cultural_query(self):
+        assert detect_intent("vị trí địa lý của Hàm Ninh") == "cultural_query"
 
     def test_cultural_query_default(self):
         assert detect_intent("Hàm Ninh có gì thú vị?") == "cultural_query"

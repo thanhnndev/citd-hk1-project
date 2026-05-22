@@ -44,6 +44,26 @@ class RAGChunk(BaseModel):
     total_chunks: int = Field(
         description="Total number of chunks in the source document"
     )
+    topic: str | None = Field(
+        default=None,
+        description="Knowledge-base topic assigned during extraction",
+    )
+    entity_type: str | None = Field(
+        default=None,
+        description="Entity category assigned during extraction",
+    )
+    entity_name: str | None = Field(
+        default=None,
+        description="Entity name assigned during extraction",
+    )
+    evidence_type: str | None = Field(
+        default=None,
+        description="Evidence class for agent routing and filtering",
+    )
+    source_file: str | None = Field(
+        default=None,
+        description="Knowledge-base artifact that produced this chunk",
+    )
 
 
 class CorpusStats(BaseModel):

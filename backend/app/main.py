@@ -23,7 +23,7 @@ from app.middleware.correlation import CorrelationIdMiddleware
 from app.routers.admin import router as admin_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
-from app.services.corpus_loader import load_corpus
+from app.services.corpus_loader import DEFAULT_CORPUS_PATH, load_corpus
 from app.services.agent_service import AgentService, create_agent_checkpointer
 from app.services.embedding_service import EmbeddingService
 from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # 3. Load corpus and build retriever (project root = backend/../)
     project_root = Path(__file__).resolve().parents[2]
-    corpus_path = project_root / "data" / "tourism_documents.jsonl"
+    corpus_path = project_root / DEFAULT_CORPUS_PATH
 
     try:
         chunks = load_corpus(str(corpus_path))

@@ -15,6 +15,8 @@ def test_settings_instantiates_without_google_api_keys(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.OPENAI_API_KEY == "test-openai-key"
+    assert settings.embedding_api_key == "test-openai-key"
+    assert settings.embedding_model == "text-embedding-3-small"
     assert settings.GOOGLE_PLACES_API_KEY == ""
     assert settings.GOOGLE_ROUTES_API_KEY == ""
 
@@ -44,3 +46,21 @@ def test_settings_still_requires_openai_api_key(monkeypatch):
     assert "OPENAI_API_KEY" in error_text
     assert "GOOGLE_PLACES_API_KEY" not in error_text
     assert "GOOGLE_ROUTES_API_KEY" not in error_text
+
+
+def test_settings_supports_separate_embedding_provider(monkeypatch):
+    """Embedding credentials and provider endpoint can differ from the LLM."""
+    monkeypatch.setenv("OPENAI_API_KEY", "llm-key")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "qwen-key")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://dashscope.example/v1")
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-v4")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1536")
+    monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "10")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.embedding_api_key == "qwen-key"
+    assert settings.EMBEDDING_BASE_URL == "https://dashscope.example/v1"
+    assert settings.embedding_model == "text-embedding-v4"
+    assert settings.EMBEDDING_DIMENSIONS == 1536
+    assert settings.EMBEDDING_BATCH_SIZE == 10

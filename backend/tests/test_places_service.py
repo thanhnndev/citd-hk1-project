@@ -108,6 +108,7 @@ async def test_text_search_normalizes_google_places_payload_and_headers():
     assert path == "/places:searchText"
     assert body["textQuery"] == "seafood"
     assert "places.displayName" in headers["X-Goog-FieldMask"]
+    assert "places.distanceMeters" not in headers["X-Goog-FieldMask"]
     assert "test-key" not in response.model_dump_json()
 
 

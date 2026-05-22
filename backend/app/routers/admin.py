@@ -1,7 +1,7 @@
 """Admin endpoints — corpus embedding and management operations.
 
 POST /admin/embed triggers full corpus ingestion into Qdrant:
-  loads tourism_documents.jsonl → embeds via OpenAI → upserts to Qdrant.
+  loads processed KB chunks JSONL → embeds text evidence → upserts to Qdrant.
 """
 
 import time
@@ -14,14 +14,13 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.core.logging import get_logger
 from app.models.response import EmbedResponse
-from app.services.corpus_loader import load_corpus
+from app.services.corpus_loader import DEFAULT_CORPUS_PATH, load_corpus
 from app.services.embedding_service import EmbeddingService, EmbeddingValidationError
 from app.services.hybrid_retriever import BM25Vectorizer
 from app.services.qdrant_service import (
     COLLECTION_NAME,
     DENSE_VECTOR_NAME,
     SPARSE_VECTOR_NAME,
-    VECTOR_SIZE,
     QdrantService,
 )
 
@@ -34,9 +33,9 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 async def embed_corpus(request: Request) -> EmbedResponse:
     """Trigger full corpus ingestion into Qdrant.
 
-    Loads the tourism JSONL corpus, embeds all chunks via OpenAI
-    text-embedding-3-small, and upserts them into the Qdrant collection
-    using named dense+sparse vectors.
+    Loads the processed KB corpus, embeds text chunks with the configured
+    embedding provider, and upserts them into the Qdrant collection using
+    named dense+sparse vectors.
 
     Returns:
         EmbedResponse with corpus stats and latency.
@@ -51,10 +50,10 @@ async def embed_corpus(request: Request) -> EmbedResponse:
     # Docker: /app/app/routers/admin.py   → /data/ mounted at container root
     _admin_file = Path(__file__).resolve()
     _project_root = _admin_file.parents[3]
-    corpus_path = _project_root / "data" / "tourism_documents.jsonl"
+    corpus_path = _project_root / DEFAULT_CORPUS_PATH
     if not corpus_path.exists():
         # Fallback for Docker where data/ is mounted at filesystem root
-        corpus_path = Path("/data/tourism_documents.jsonl")
+        corpus_path = Path("/data/processed/chunks.jsonl")
 
     logger.info("embed.started", corpus_path=str(corpus_path))
 
@@ -91,7 +90,7 @@ async def embed_corpus(request: Request) -> EmbedResponse:
         logger.error(
             "embed.embedding_validation_failed",
             error=str(exc),
-            expected_dim=VECTOR_SIZE,
+            expected_dim=embedding_svc.dimensions,
             expected_count=len(texts),
         )
         raise HTTPException(
@@ -99,7 +98,7 @@ async def embed_corpus(request: Request) -> EmbedResponse:
             detail={
                 "error": "embedding_validation_failed",
                 "message": str(exc),
-                "expected_dim": VECTOR_SIZE,
+                "expected_dim": embedding_svc.dimensions,
                 "expected_count": len(texts),
             },
         ) from exc
@@ -107,14 +106,14 @@ async def embed_corpus(request: Request) -> EmbedResponse:
         logger.error(
             "embed.openai_failed",
             error_type=type(exc).__name__,
-            expected_dim=VECTOR_SIZE,
+            expected_dim=embedding_svc.dimensions,
             expected_count=len(texts),
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
                 "error": "openai_dependency_failed",
-                "message": "OpenAI embeddings request failed.",
+            "message": "Embedding provider request failed.",
                 "error_type": type(exc).__name__,
             },
         ) from exc
@@ -165,7 +164,7 @@ async def embed_corpus(request: Request) -> EmbedResponse:
     return EmbedResponse(
         total_docs=len({c.source_id for c in chunks}),
         total_chunks=count,
-        vector_dim=VECTOR_SIZE,
+        vector_dim=embedding_svc.dimensions,
         collection_name=COLLECTION_NAME,
         latency_ms=round(latency_ms, 2),
     )

@@ -30,6 +30,11 @@ DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
 
+def configured_vector_size() -> int:
+    """Return the configured dense embedding dimension for Qdrant schemas."""
+    return get_settings().EMBEDDING_DIMENSIONS
+
+
 class QdrantService:
     """Async wrapper around Qdrant for the tourism RAG corpus.
 
@@ -52,14 +57,14 @@ class QdrantService:
     async def ensure_collection(self) -> None:
         """Create the collection if it does not already exist.
 
-        Uses cosine distance with VECTOR_SIZE-dim dense vectors.
+        Uses cosine distance with the configured dense embedding dimension.
         Logs qdrant.collection_ensured with created/existed status.
         """
         exists = await self._client.collection_exists(COLLECTION_NAME)
         if not exists:
             await self._client.create_collection(
                 collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+                vectors_config=VectorParams(size=configured_vector_size(), distance=Distance.COSINE),
             )
             logger.info("qdrant.collection_ensured", collection=COLLECTION_NAME, status="created")
         else:
@@ -97,6 +102,11 @@ class QdrantService:
                     "text": chunk.text,
                     "chunk_index": chunk.chunk_index,
                     "total_chunks": chunk.total_chunks,
+                    "topic": chunk.topic,
+                    "entity_type": chunk.entity_type,
+                    "entity_name": chunk.entity_name,
+                    "evidence_type": chunk.evidence_type,
+                    "source_file": chunk.source_file,
                 },
             )
             for idx, (chunk, vector) in enumerate(zip(chunks, vectors))
@@ -168,7 +178,7 @@ class QdrantService:
                 collection_name=COLLECTION_NAME,
                 vectors_config={
                     DENSE_VECTOR_NAME: VectorParams(
-                        size=VECTOR_SIZE, distance=Distance.COSINE
+                        size=configured_vector_size(), distance=Distance.COSINE
                     )
                 },
                 sparse_vectors_config={
@@ -184,15 +194,27 @@ class QdrantService:
 
         info = await self._client.get_collection(COLLECTION_NAME)
         vectors_cfg = info.config.params.vectors
+        old_schema = "unnamed"
 
-        # Already a named-vector (hybrid) schema
+        # Already a named-vector (hybrid) schema with the configured dimension.
         if isinstance(vectors_cfg, dict) and DENSE_VECTOR_NAME in vectors_cfg:
+            dense_cfg = vectors_cfg[DENSE_VECTOR_NAME]
+            actual_size = getattr(dense_cfg, "size", None)
+            expected_size = configured_vector_size()
+            if actual_size == expected_size:
+                logger.info(
+                    "qdrant.collection_ensured",
+                    collection=COLLECTION_NAME,
+                    status="existed_hybrid",
+                )
+                return
             logger.info(
-                "qdrant.collection_ensured",
+                "hybrid.collection_dimension_changed",
                 collection=COLLECTION_NAME,
-                status="existed_hybrid",
+                old_size=actual_size,
+                new_size=expected_size,
             )
-            return
+            old_schema = "named_dimension_mismatch"
 
         # Old unnamed schema — migrate
         await self._client.delete_collection(COLLECTION_NAME)
@@ -200,7 +222,7 @@ class QdrantService:
             collection_name=COLLECTION_NAME,
             vectors_config={
                 DENSE_VECTOR_NAME: VectorParams(
-                    size=VECTOR_SIZE, distance=Distance.COSINE
+                    size=configured_vector_size(), distance=Distance.COSINE
                 )
             },
             sparse_vectors_config={
@@ -210,7 +232,7 @@ class QdrantService:
         logger.info(
             "hybrid.collection_migrated",
             collection=COLLECTION_NAME,
-            old_schema="unnamed",
+            old_schema=old_schema,
             new_schema="named",
         )
 
@@ -251,6 +273,11 @@ class QdrantService:
                     "text": chunk.text,
                     "chunk_index": chunk.chunk_index,
                     "total_chunks": chunk.total_chunks,
+                    "topic": chunk.topic,
+                    "entity_type": chunk.entity_type,
+                    "entity_name": chunk.entity_name,
+                    "evidence_type": chunk.evidence_type,
+                    "source_file": chunk.source_file,
                 },
             )
             for idx, chunk in enumerate(chunks)

@@ -42,7 +42,7 @@ def _fake_vectors(n: int, dim: int = VECTOR_SIZE) -> List[List[float]]:
 
 
 
-EXPECTED_CORPUS_CHUNKS = 321
+EXPECTED_CORPUS_CHUNKS = 261
 
 def _extract_dense_vector(vector: Any) -> list[float]:
     """Return the dense vector from either unnamed or named Qdrant results."""
@@ -128,20 +128,19 @@ class TestEmbedBatching:
 
     @pytest.mark.asyncio
     async def test_embed_batching_multiple_batches(self):
-        """250 texts → 3 API calls (100 + 100 + 50), order preserved."""
+        """Embedding batches honor configured size and preserve response order."""
         svc = EmbeddingService()
         total = 250
         texts = [f"text {i}" for i in range(total)]
 
         # Build per-batch fake vectors so we can verify order preservation.
         batch_vecs = [
-            _fake_vectors(100),   # batch 0: indices 0–99
-            _fake_vectors(100),   # batch 1: indices 100–199
-            _fake_vectors(50),    # batch 2: indices 200–249
+            _fake_vectors(len(texts[i : i + svc.batch_size]))
+            for i in range(0, len(texts), svc.batch_size)
         ]
         call_count = 0
 
-        async def fake_create(input, model):  # noqa: A002
+        async def fake_create(input, model, dimensions):  # noqa: A002
             nonlocal call_count
             resp = _make_fake_response(batch_vecs[call_count])
             call_count += 1
@@ -151,21 +150,18 @@ class TestEmbedBatching:
             with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 result = await svc.embed_texts(texts)
 
-        assert call_count == 3
+        assert call_count == len(batch_vecs)
         assert len(result) == total
         # Courtesy sleep called between batches (not before first batch).
-        assert mock_sleep.call_count == 2
-        # Verify order: first 100 come from batch_vecs[0], etc.
-        assert result[:100] == batch_vecs[0]
-        assert result[100:200] == batch_vecs[1]
-        assert result[200:] == batch_vecs[2]
+        assert mock_sleep.call_count == len(batch_vecs) - 1
+        assert result == [vector for batch in batch_vecs for vector in batch]
 
     @pytest.mark.asyncio
     async def test_embed_batching_exact_boundary(self):
-        """Exactly BATCH_SIZE texts → one API call, no sleep."""
+        """Exactly the configured batch size uses one API call and no sleep."""
         svc = EmbeddingService()
-        texts = [f"text {i}" for i in range(EmbeddingService.BATCH_SIZE)]
-        fake_vecs = _fake_vectors(EmbeddingService.BATCH_SIZE)
+        texts = [f"text {i}" for i in range(svc.batch_size)]
+        fake_vecs = _fake_vectors(svc.batch_size)
 
         with patch.object(
             svc._client.embeddings,
@@ -176,7 +172,7 @@ class TestEmbedBatching:
             with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 result = await svc.embed_texts(texts)
 
-        assert len(result) == EmbeddingService.BATCH_SIZE
+        assert len(result) == svc.batch_size
         assert mock_sleep.call_count == 0
 
     @pytest.mark.asyncio
@@ -242,6 +238,7 @@ class TestEmbedBatching:
 
         _, kwargs = mock_create.call_args
         assert kwargs.get("model") == svc.model
+        assert kwargs.get("dimensions") == svc.dimensions
 
 
 # ---------------------------------------------------------------------------
@@ -479,11 +476,11 @@ def _is_real_api_key() -> bool:
 
 @pytest.mark.integration
 class TestEmbeddingIndex:
-    """Prove 321 chunks are indexed in Qdrant with correct named-vector shape."""
+    """Prove the processed KB chunks are indexed with the named-vector shape."""
 
     @pytest.mark.asyncio
     async def test_embed_endpoint_indexes_named_dense_collection_idempotently(self):
-        """POST /admin/embed twice keeps the live named-vector corpus at 321 points."""
+        """POST /admin/embed twice keeps the live named-vector corpus idempotent."""
         _skip_without_real_openai_key()
 
         first_body = await _post_admin_embed()

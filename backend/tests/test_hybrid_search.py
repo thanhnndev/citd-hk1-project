@@ -13,6 +13,7 @@ from app.services.qdrant_service import (
     COLLECTION_NAME,
     DENSE_VECTOR_NAME,
     QdrantService,
+    VECTOR_SIZE,
 )
 
 # ---------------------------------------------------------------------------
@@ -89,10 +90,12 @@ def _make_service() -> QdrantService:
     return svc
 
 
-def _make_collection_info(vector_keys: list[str]) -> MagicMock:
+def _make_collection_info(vector_keys: list[str], *, dense_size: int = VECTOR_SIZE) -> MagicMock:
     """Build a fake get_collection() response with the given vector config keys."""
     info = MagicMock()
     vectors_cfg = {k: MagicMock() for k in vector_keys}
+    if DENSE_VECTOR_NAME in vectors_cfg:
+        vectors_cfg[DENSE_VECTOR_NAME].size = dense_size
     info.config.params.vectors = vectors_cfg
     return info
 
@@ -156,6 +159,22 @@ class TestQdrantServiceHybridMethods:
         svc._client.collection_exists = AsyncMock(return_value=True)
         svc._client.get_collection = AsyncMock(
             return_value=_make_collection_info([""])  # old unnamed key
+        )
+        svc._client.delete_collection = AsyncMock()
+        svc._client.create_collection = AsyncMock()
+
+        await svc.ensure_hybrid_collection()
+
+        svc._client.delete_collection.assert_called_once_with(COLLECTION_NAME)
+        svc._client.create_collection.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_hybrid_collection_migrates_dimension_change(self) -> None:
+        """Dense vector dimension changes recreate the hybrid collection."""
+        svc = _make_service()
+        svc._client.collection_exists = AsyncMock(return_value=True)
+        svc._client.get_collection = AsyncMock(
+            return_value=_make_collection_info([DENSE_VECTOR_NAME], dense_size=1024)
         )
         svc._client.delete_collection = AsyncMock()
         svc._client.create_collection = AsyncMock()
@@ -456,10 +475,10 @@ class TestHybridIntegration:
     async def test_hybrid_collection_points_count(
         self, qdrant_service: QdrantService
     ) -> None:
-        """Collection must contain exactly 321 points after full corpus embed."""
+        """Collection must contain one point per current text KB chunk."""
         info = await qdrant_service.collection_info()
-        assert info["points_count"] == 321, (
-            f"Expected 321 points, got {info['points_count']}"
+        assert info["points_count"] == 261, (
+            f"Expected 261 points, got {info['points_count']}"
         )
 
     @pytest.mark.integration

@@ -24,16 +24,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _RESTAURANT_KEYWORDS_VI = {
-    "nhà hàng", "ăn", "quán", "hải sản", "cơm", "phở", "bún",
-    "món", "nhậu", "tiệm", "tiệc", "đặc sản", "ẩm thực",
-    "food", "restaurant", "eat", "seafood", "dining", "meal",
+    # Venue and recommendation wording should use dynamic Places data.
+    # Food knowledge wording such as "dac san" or "co gi an" stays on KB RAG.
+    "nhà hàng", "quán", "tiệm", "gợi ý", "gần đây",
+    "restaurant", "recommend", "suggest", "near me", "dining",
 }
 
 _NAVIGATION_KEYWORDS_VI = {
     "đường đi", "chỉ đường", "đi đến", "đi tới", "làm sao đến",
     "cách đi", "từ đâu đến", "bản đồ", "route", "direction",
-    "how to get", "navigate", "map", "where is", "ở đâu",
-    "vị trí", "địa điểm",
+    "how to get", "navigate", "map",
 }
 
 

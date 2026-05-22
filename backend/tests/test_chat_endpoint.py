@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.config import get_settings
 from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from app.services.corpus_loader import load_corpus
@@ -13,9 +14,15 @@ from app.services.retriever import Retriever
 
 @pytest.fixture()
 def client():
-    """TestClient that runs the lifespan (loads corpus + retriever)."""
-    with TestClient(app) as c:
-        yield c
+    """TestClient that runs lifespan with Places outbound calls disabled."""
+    settings = get_settings()
+    original_places_key = settings.GOOGLE_PLACES_API_KEY
+    settings.GOOGLE_PLACES_API_KEY = ""
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        settings.GOOGLE_PLACES_API_KEY = original_places_key
 
 
 class TestChatEndpointHappyPath:

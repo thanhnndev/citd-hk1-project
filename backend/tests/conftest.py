@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.corpus_loader import load_corpus
+from app.services.corpus_loader import DEFAULT_CORPUS_PATH, load_corpus
 from app.services.retriever import Retriever
 from app.services.qdrant_service import QdrantService
 from app.services.embedding_service import EmbeddingService
@@ -16,10 +16,10 @@ os.environ["OPENAI_API_KEY"] = "fake-test-key"
 
 
 def _resolve_corpus_path() -> str:
-    """Resolve the tourism_documents.jsonl path from either backend/ or project root."""
-    p = Path("data/tourism_documents.jsonl")
+    """Resolve the processed KB corpus from either backend/ or project root."""
+    p = Path(DEFAULT_CORPUS_PATH)
     if not p.exists():
-        p = Path(__file__).resolve().parent.parent.parent / "data" / "tourism_documents.jsonl"
+        p = Path(__file__).resolve().parent.parent.parent / DEFAULT_CORPUS_PATH
     return str(p)
 
 

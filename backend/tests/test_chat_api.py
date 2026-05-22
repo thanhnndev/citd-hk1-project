@@ -387,15 +387,25 @@ class TestChatEndpointIntent:
             "message": "nhà hàng ngon ở Hàm Ninh",
             "language": "vi",
         })
-        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["intent"] == "place_recommendation"
 
-    def test_restaurant_keyword_hải_sản(self, client):
+    def test_food_knowledge_uses_kb_path(self, client):
         r = client.post("/chat", json={
             "session_id": "s-intent-02",
-            "message": "ăn hải sản Phú Quốc",
+            "message": "Hàm Ninh có gì ăn?",
             "language": "vi",
         })
-        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["intent"] == "cultural_query"
+        assert r.json()["citations"]
+
+    def test_location_knowledge_uses_kb_path(self, client):
+        r = client.post("/chat", json={
+            "session_id": "s-intent-location",
+            "message": "vị trí địa lý của Hàm Ninh",
+            "language": "vi",
+        })
+        assert r.json()["intent"] == "cultural_query"
+        assert r.json()["citations"]
 
     def test_restaurant_english_keyword(self, client):
         r = client.post("/chat", json={
@@ -403,7 +413,7 @@ class TestChatEndpointIntent:
             "message": "best seafood restaurant near me",
             "language": "en",
         })
-        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["intent"] == "place_recommendation"
 
     def test_cultural_query_default(self, client):
         """A general tourism query with no specific keywords → cultural_query."""

@@ -244,8 +244,12 @@ class TestRetrieverDeterminism:
 class TestRetrieverTourismCorpus:
     @pytest.fixture(scope="class")
     def retriever(self):
+        from pathlib import Path
+        from app.services.corpus_loader import DEFAULT_CORPUS_PATH
         from app.services.retriever import load_corpus as _load
-        chunks = _load("../data/tourism_documents.jsonl")
+
+        corpus_path = Path(__file__).resolve().parents[2] / DEFAULT_CORPUS_PATH
+        chunks = _load(str(corpus_path))
         return Retriever(chunks)
 
     def test_làng_chài_hàm_ninh_returns_results(self, retriever):

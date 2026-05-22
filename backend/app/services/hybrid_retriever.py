@@ -227,6 +227,11 @@ class HybridRetriever:
                         text=payload.get("text", ""),
                         chunk_index=payload.get("chunk_index", 0),
                         total_chunks=payload.get("total_chunks", 1),
+                        topic=payload.get("topic"),
+                        entity_type=payload.get("entity_type"),
+                        entity_name=payload.get("entity_name"),
+                        evidence_type=payload.get("evidence_type"),
+                        source_file=payload.get("source_file"),
                     )
                 )
 

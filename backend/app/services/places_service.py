@@ -52,7 +52,6 @@ PLACE_FIELD_MASKS = {
             "places.internationalPhoneNumber",
             "places.websiteUri",
             "places.googleMapsUri",
-            "places.distanceMeters",
         ]
     ),
     "details": ",".join(

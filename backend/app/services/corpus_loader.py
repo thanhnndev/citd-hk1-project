@@ -1,12 +1,18 @@
-"""Corpus loader: reads JSONL, validates rows, chunks content deterministically."""
+"""Corpus loader for the Ham Ninh knowledge base.
 
+The canonical runtime corpus is the crawler-produced claim-level JSONL at
+``data/processed/chunks.jsonl``. Legacy document-level JSONL rows remain
+supported for focused chunking tests and older one-off exports.
+"""
+
+from collections import Counter
 import hashlib
 import json
 from pathlib import Path
 
 from app.models.rag import CorpusStats, RAGChunk
 
-# Required fields that every JSONL row must contain
+# Legacy document-level JSONL rows are chunked by this loader.
 REQUIRED_FIELDS = (
     "id",
     "title",
@@ -18,6 +24,23 @@ REQUIRED_FIELDS = (
     "location",
     "cleaned_content",
 )
+
+DEFAULT_CORPUS_PATH = "data/processed/chunks.jsonl"
+KB_REQUIRED_FIELDS = (
+    "chunk_id",
+    "source_file",
+    "topic",
+    "claim",
+    "context",
+    "source_url",
+    "source_domain",
+    "reliability",
+    "evidence_type",
+)
+NON_TEXT_EVIDENCE_TYPES = {"image", "link"}
+KB_SOURCE_TYPE = "knowledge_base"
+KB_LANGUAGE = "vi"
+KB_LOCATION = "Ham Ninh, Phu Quoc"
 
 CHUNK_TARGET = 800  # target chunk size in characters
 CHUNK_OVERLAP = 200  # overlap between consecutive chunks
@@ -176,11 +199,82 @@ def _chunk_document(doc: dict) -> list[RAGChunk]:
     ]
 
 
-def load_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
+def _kb_title(row: dict) -> str:
+    """Return a human-readable source title for an extracted KB chunk."""
+    context_lines = [
+        line.strip()
+        for line in str(row.get("context", "")).splitlines()
+        if line.strip()
+    ]
+    if context_lines:
+        return context_lines[0]
+    return str(row["source_file"])
+
+
+def _kb_text(row: dict) -> str:
+    """Build retrieval text from extracted context and evidence claim."""
+    context = str(row.get("context", "")).strip()
+    claim = str(row.get("claim", "")).strip()
+    if context and claim and claim not in context:
+        return f"{context}\n\n{claim}"
+    return claim or context
+
+
+def _validate_fields(row: dict, required_fields: tuple[str, ...], row_num: int) -> None:
+    missing = [field for field in required_fields if field not in row or row[field] is None]
+    if missing:
+        raise ValueError(f"Row {row_num} missing required fields: {', '.join(missing)}")
+
+
+def _load_kb_chunks(rows: list[tuple[int, dict]]) -> list[RAGChunk]:
+    """Map pre-chunked crawler KB rows to runtime RAGChunk models."""
+    text_rows: list[tuple[int, dict]] = []
+    for row_num, row in rows:
+        _validate_fields(row, KB_REQUIRED_FIELDS, row_num)
+        if str(row["evidence_type"]).strip().lower() in NON_TEXT_EVIDENCE_TYPES:
+            continue
+        if not _kb_text(row):
+            continue
+        text_rows.append((row_num, row))
+
+    total_by_source = Counter(str(row["source_file"]) for _, row in text_rows)
+    chunk_index_by_source: dict[str, int] = {}
+    chunks: list[RAGChunk] = []
+
+    for _, row in text_rows:
+        source_file = str(row["source_file"])
+        chunk_index = chunk_index_by_source.get(source_file, 0)
+        chunk_index_by_source[source_file] = chunk_index + 1
+        chunks.append(
+            RAGChunk(
+                chunk_id=str(row["chunk_id"]),
+                source_id=source_file,
+                title=_kb_title(row),
+                url=str(row["source_url"]) if row.get("source_url") else None,
+                domain=str(row["source_domain"]),
+                source_type=KB_SOURCE_TYPE,
+                reliability=str(row["reliability"]),
+                language=KB_LANGUAGE,
+                location=KB_LOCATION,
+                text=_kb_text(row),
+                chunk_index=chunk_index,
+                total_chunks=total_by_source[source_file],
+                topic=str(row["topic"]) if row.get("topic") else None,
+                entity_type=str(row["entity_type"]) if row.get("entity_type") else None,
+                entity_name=str(row["entity_name"]) if row.get("entity_name") else None,
+                evidence_type=str(row["evidence_type"]),
+                source_file=source_file,
+            )
+        )
+
+    return chunks
+
+
+def load_corpus(path: str = DEFAULT_CORPUS_PATH) -> list[RAGChunk]:
     """Load and chunk the JSONL corpus.
 
     Args:
-        path: Path to the JSONL file.
+        path: Path to a pre-chunked KB JSONL file or legacy document JSONL.
 
     Returns:
         List of RAGChunk objects, one per chunk.
@@ -193,7 +287,8 @@ def load_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
     if not filepath.exists():
         raise FileNotFoundError(f"Corpus file not found: {path}")
 
-    all_chunks: list[RAGChunk] = []
+    document_chunks: list[RAGChunk] = []
+    kb_rows: list[tuple[int, dict]] = []
 
     with open(filepath, "r", encoding="utf-8") as f:
         for row_num, line in enumerate(f, start=1):
@@ -206,18 +301,13 @@ def load_corpus(path: str = "data/tourism_documents.jsonl") -> list[RAGChunk]:
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON at row {row_num}: {e}") from e
 
-            # Validate required fields
-            missing = [field for field in REQUIRED_FIELDS if field not in doc or doc[field] is None]
-            if missing:
-                raise ValueError(
-                    f"Row {row_num} missing required fields: {', '.join(missing)}"
-                )
+            if "cleaned_content" in doc:
+                _validate_fields(doc, REQUIRED_FIELDS, row_num)
+                document_chunks.extend(_chunk_document(doc))
+            else:
+                kb_rows.append((row_num, doc))
 
-            # Chunk the document
-            doc_chunks = _chunk_document(doc)
-            all_chunks.extend(doc_chunks)
-
-    return all_chunks
+    return document_chunks + _load_kb_chunks(kb_rows)
 
 
 def get_corpus_stats(chunks: list[RAGChunk]) -> CorpusStats:
