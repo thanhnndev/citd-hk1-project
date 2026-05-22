@@ -169,6 +169,16 @@ class TestDetectLanguage:
 # Integration — real corpus via PropositionChunker
 # ---------------------------------------------------------------------------
 
+class TestPropositionChunkerConstants:
+    """Verify class-level constants are correctly set."""
+
+    def test_domain_is_tourism(self):
+        assert PropositionChunker.DOMAIN == "tourism"
+
+    def test_default_location_is_ham_ninh(self):
+        assert PropositionChunker.DEFAULT_LOCATION == "Hàm Ninh, Phú Quốc"
+
+
 class TestPropositionChunkerRealCorpus:
     """Test PropositionChunker against real data files."""
 
@@ -191,6 +201,57 @@ class TestPropositionChunkerRealCorpus:
         # Entity files have source_ids like "culture_history:topic_name" or "restaurants:entity_name"
         entity_ids = [sid for sid in source_ids if ":" in sid]
         assert len(entity_ids) >= 1
+
+    def test_markdown_chunk_count_in_expected_range(self, chunker):
+        """chunk_markdown_files() on real corpus produces a substantial chunk set."""
+        md_chunks = chunker.chunk_markdown_files()
+        # Empirical: markdown-only yields ~486 chunks (entity JSONs add ~121 more → 607 total)
+        # A range of 300-600 guards against significant regression
+        assert 300 <= len(md_chunks) <= 600, (
+            f"Expected 300-600 markdown chunks, got {len(md_chunks)}"
+        )
+
+    def test_total_chunk_count_in_expected_range(self, chunker):
+        """chunk_all() (markdown + entities) total is 500-800."""
+        all_chunks = chunker.chunk_all()
+        # 607 is the known baseline, allow tight range
+        assert 500 <= len(all_chunks) <= 800, (
+            f"Expected 500-800 total chunks, got {len(all_chunks)}"
+        )
+
+    def test_all_chunks_have_non_empty_required_fields(self, chunker):
+        """All chunks from the real directory pass schema validation (all 9 required fields non-empty)."""
+        required = (
+            "chunk_id", "source_id", "title", "domain",
+            "source_type", "reliability", "language", "location", "text",
+        )
+        chunks = chunker.chunk_markdown_files()
+        for i, chunk in enumerate(chunks):
+            missing = [f for f in required if not chunk.get(f)]
+            assert not missing, f"Chunk {i} missing non-empty: {missing}"
+
+    def test_language_codes_are_valid_iso639(self, chunker):
+        """Language detection returns valid ISO 639-1 codes (vi/en)."""
+        chunks = chunker.chunk_all()
+        valid_langs = {"vi", "en"}
+        for chunk in chunks:
+            lang = chunk.get("language", "")
+            assert lang in valid_langs, (
+                f"Invalid language '{lang}' in chunk {chunk.get('chunk_id')}"
+            )
+
+    def test_no_duplicate_chunk_ids_in_run(self, chunker):
+        """No duplicate chunk_ids in a single run (verified from markdown only)."""
+        md_chunks = chunker.chunk_markdown_files()
+        ids = [c["chunk_id"] for c in md_chunks]
+        assert len(ids) == len(set(ids)), "Duplicate chunk_ids found in markdown chunks"
+
+    def test_entity_files_add_non_zero_chunks(self, chunker):
+        """culture_history.json and restaurants.json are parsed and add non-zero chunks."""
+        all_chunks = chunker.chunk_all()
+        md_chunks = chunker.chunk_markdown_files()
+        entity_chunks = len(all_chunks) - len(md_chunks)
+        assert entity_chunks > 0, "Entity files contributed zero chunks"
 
     def test_matching_actual_corpus_count(self, chunker):
         """PropositionChunker output count matches tourism_documents.jsonl (607)."""
