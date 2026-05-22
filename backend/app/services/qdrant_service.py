@@ -271,6 +271,49 @@ class QdrantService:
         )
         return len(points)
 
+    async def dense_search(
+        self,
+        dense_vector: list[float],
+        top_k: int = 5,
+    ) -> list:
+        """Run a single-vector dense-only search via Qdrant query_points.
+
+        Unlike hybrid_search, this method does NOT require sparse vectors and
+        does NOT perform RRF fusion — it is the preferred path when the
+        collection has no named sparse vector.
+
+        Args:
+            dense_vector: Dense query embedding.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            List of ScoredPoint objects from qdrant-client.
+        """
+        t0 = time.perf_counter()
+        results = await self._client.query_points(
+            collection_name=COLLECTION_NAME,
+            prefetch=[
+                Prefetch(
+                    query=dense_vector,
+                    using=DENSE_VECTOR_NAME,
+                    limit=top_k * 4,
+                ),
+            ],
+            query=dense_vector,
+            limit=top_k,
+            with_payload=True,
+        )
+
+        latency_ms = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "retrieval.dense_only_active",
+            collection=COLLECTION_NAME,
+            top_k=top_k,
+            result_count=len(results.points),
+            latency_ms=latency_ms,
+        )
+        return results.points
+
     async def hybrid_search(
         self,
         dense_vector: list[float],
