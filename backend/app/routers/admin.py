@@ -79,6 +79,10 @@ async def embed_corpus(request: Request) -> EmbedResponse:
 
     texts = [c.text for c in chunks]
 
+    # Compute language distribution for observability
+    from collections import Counter
+    lang_dist: dict[str, int] = dict(Counter(c.language for c in chunks))
+
     try:
         await qdrant_svc.ensure_hybrid_collection()
         vectors = await embedding_svc.embed_texts(texts)
@@ -93,6 +97,7 @@ async def embed_corpus(request: Request) -> EmbedResponse:
             error=str(exc),
             expected_dim=VECTOR_SIZE,
             expected_count=len(texts),
+            language_distribution=lang_dist,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -158,13 +163,18 @@ async def embed_corpus(request: Request) -> EmbedResponse:
 
     logger.info(
         "embed.done",
+        total_docs=len({c.source_id for c in chunks}),
         total_chunks=count,
+        propositions_ingested=count,
+        language_distribution=lang_dist,
         latency_ms=round(latency_ms, 2),
     )
 
     return EmbedResponse(
         total_docs=len({c.source_id for c in chunks}),
         total_chunks=count,
+        propositions_ingested=count,
+        language_distribution=lang_dist,
         vector_dim=VECTOR_SIZE,
         collection_name=COLLECTION_NAME,
         latency_ms=round(latency_ms, 2),

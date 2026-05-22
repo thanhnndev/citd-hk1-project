@@ -42,7 +42,7 @@ def _fake_vectors(n: int, dim: int = VECTOR_SIZE) -> List[List[float]]:
 
 
 
-EXPECTED_CORPUS_CHUNKS = 321
+EXPECTED_CORPUS_CHUNKS = 607
 
 def _extract_dense_vector(vector: Any) -> list[float]:
     """Return the dense vector from either unnamed or named Qdrant results."""
@@ -350,15 +350,15 @@ class TestQdrantServiceUpsert:
         config.params = params
         info = MagicMock()
         info.config = config
-        info.points_count = 321
-        info.vectors_count = 321
+        info.points_count = 607
+        info.vectors_count = 607
 
         with patch.object(svc._client, "get_collection", AsyncMock(return_value=info)):
             result = await svc.collection_info()
 
         assert result["collection_name"] == COLLECTION_NAME
-        assert result["points_count"] == 321
-        assert result["vectors_count"] == 321
+        assert result["points_count"] == 607
+        assert result["vectors_count"] == 607
         assert result["dense_vector_name"] == DENSE_VECTOR_NAME
         assert result["dense_vector_size"] == VECTOR_SIZE
         assert result["named_vectors"] == [DENSE_VECTOR_NAME]
@@ -479,7 +479,7 @@ def _is_real_api_key() -> bool:
 
 @pytest.mark.integration
 class TestEmbeddingIndex:
-    """Prove 321 chunks are indexed in Qdrant with correct named-vector shape."""
+    """Prove 607 proposition chunks are indexed in Qdrant with correct named-vector shape."""
 
     @pytest.mark.asyncio
     async def test_embed_endpoint_indexes_named_dense_collection_idempotently(self):

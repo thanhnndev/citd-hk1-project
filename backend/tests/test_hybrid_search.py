@@ -456,10 +456,10 @@ class TestHybridIntegration:
     async def test_hybrid_collection_points_count(
         self, qdrant_service: QdrantService
     ) -> None:
-        """Collection must contain exactly 321 points after full corpus embed."""
+        """Collection must contain exactly 607 points after full corpus embed."""
         info = await qdrant_service.collection_info()
-        assert info["points_count"] == 321, (
-            f"Expected 321 points, got {info['points_count']}"
+        assert info["points_count"] == 607, (
+            f"Expected 607 points, got {info['points_count']}"
         )
 
     @pytest.mark.integration

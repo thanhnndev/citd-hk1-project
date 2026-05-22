@@ -191,7 +191,15 @@ class EmbedResponse(BaseModel):
     """Response body for the POST /admin/embed endpoint."""
 
     total_docs: int = Field(description="Number of source documents in corpus")
-    total_chunks: int = Field(description="Number of chunks indexed into Qdrant")
+    total_chunks: int = Field(
+        description="Number of chunks indexed into Qdrant (propositions for proposition corpus)"
+    )
+    propositions_ingested: int = Field(
+        description="Number of proposition chunks ingested (same as total_chunks for proposition corpus)"
+    )
+    language_distribution: dict[str, int] = Field(
+        description="Count of chunks per language code (e.g. {'vi': 607})"
+    )
     vector_dim: int = Field(description="Embedding vector dimension")
     collection_name: str = Field(description="Qdrant collection name")
     latency_ms: float = Field(description="Total embed+upsert latency in milliseconds")
