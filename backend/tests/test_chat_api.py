@@ -381,13 +381,14 @@ class TestChatEndpointIntent:
     cultural keywords → cultural_query,
     short/gibberish → cultural_query (default for non-keyword queries >= 3 chars)."""
 
-    def test_restaurant_keyword_nhà_hàng(self, client):
+    def test_restaurant_keyword_nhà_hàng_uses_kb_path(self, client):
         r = client.post("/chat", json={
             "session_id": "s-intent-01",
             "message": "nhà hàng ngon ở Hàm Ninh",
             "language": "vi",
         })
-        assert r.json()["intent"] == "place_recommendation"
+        assert r.json()["intent"] == "restaurant_search"
+        assert r.json()["citations"]
 
     def test_food_knowledge_uses_kb_path(self, client):
         r = client.post("/chat", json={

@@ -362,9 +362,34 @@ class AgentService:
 
     def _is_place_intent(self, state: AgentState) -> bool:
         intent = state.get("intent") or detect_intent(state["message"])
-        if intent in {"restaurant_search", "navigation"}:
+        if intent == "navigation":
             return True
         lower = state["message"].lower()
+        dynamic_place_terms = (
+            "đang mở",
+            "mở cửa",
+            "giờ mở",
+            "giờ đóng",
+            "đánh giá",
+            "rating",
+            "review",
+            "địa chỉ",
+            "address",
+            "số điện thoại",
+            "điện thoại",
+            "phone",
+            "website",
+            "google maps",
+            "bản đồ",
+            "near me",
+            "gần tôi",
+            "hiện tại",
+            "chi tiết",
+            "details",
+        )
+        if intent == "restaurant_search":
+            return any(term in lower for term in dynamic_place_terms)
+
         recommendation_terms = ("recommend", "gợi ý", "đề xuất", "dịch vụ", "service", "place", "địa điểm")
         ham_ninh_terms = ("hàm ninh", "ham ninh")
         return any(term in lower for term in recommendation_terms) and any(term in lower for term in ham_ninh_terms)

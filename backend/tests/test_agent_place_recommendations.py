@@ -48,7 +48,7 @@ def _place_response(session_id: str = "s-place") -> ChatResponse:
 
 
 @pytest.mark.asyncio
-async def test_place_intent_calls_recommendation_service_and_skips_llm() -> None:
+async def test_dynamic_restaurant_detail_calls_recommendation_service_and_skips_llm() -> None:
     recommender = AsyncMock()
     recommender.recommend.return_value = _place_response()
     llm = AsyncMock()
@@ -59,10 +59,10 @@ async def test_place_intent_calls_recommendation_service_and_skips_llm() -> None
         checkpoint_mode="test",
     )
 
-    response = await service.answer(session_id="s-place", message="Gợi ý nhà hàng hải sản ở Hàm Ninh", language="vi")
+    response = await service.answer(session_id="s-place", message="Nhà hàng hải sản Hàm Ninh đang mở cửa?", language="vi")
 
     recommender.recommend.assert_awaited_once_with(
-        query="Gợi ý nhà hàng hải sản ở Hàm Ninh",
+        query="Nhà hàng hải sản Hàm Ninh đang mở cửa?",
         language="vi",
         session_id="s-place",
     )
@@ -107,6 +107,37 @@ async def test_non_place_cultural_query_does_not_call_recommendation_service() -
     recommender.recommend.assert_not_called()
     llm.answer.assert_awaited_once()
     assert response.intent == "cultural_query"
+    assert response.places == []
+
+
+@pytest.mark.asyncio
+async def test_restaurant_query_uses_kb_answer_before_dynamic_places() -> None:
+    recommender = AsyncMock()
+    llm = AsyncMock()
+    llm.answer.return_value = ChatResponse(
+        session_id="s-restaurant-kb",
+        message="KB restaurant answer.",
+        citations=[],
+        places=[],
+        intent="restaurant_search",
+        latency_ms=1.0,
+    )
+    service = AgentService(
+        retriever=None,
+        llm_service=llm,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-restaurant-kb",
+        message="Gợi ý nhà hàng hải sản ở Hàm Ninh",
+        language="vi",
+    )
+
+    recommender.recommend.assert_not_called()
+    llm.answer.assert_awaited_once()
+    assert response.intent == "restaurant_search"
     assert response.places == []
 
 

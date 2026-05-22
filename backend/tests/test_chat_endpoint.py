@@ -54,7 +54,7 @@ class TestChatEndpointHappyPath:
         assert body["intent"] == "cultural_query"
         assert body["message"].startswith("Based on")
 
-    def test_restaurant_intent(self, client):
+    def test_restaurant_intent_uses_kb_path(self, client):
         r = client.post("/chat", json={
             "session_id": "s3",
             "message": "nhà hàng hải sản ngon",
@@ -62,9 +62,9 @@ class TestChatEndpointHappyPath:
         })
         assert r.status_code == 200
         body = r.json()
-        assert body["intent"] == "place_recommendation"
+        assert body["intent"] == "restaurant_search"
         assert body["places"] == []
-        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"]
+        assert body["citations"]
 
     def test_navigation_intent(self, client):
         r = client.post("/chat", json={
