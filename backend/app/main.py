@@ -4,6 +4,7 @@ Wires together the lifespan manager, CORS middleware, structured logging,
 router registration, and custom error handlers. Replaces the S02 stub.
 """
 
+import os
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
@@ -16,13 +17,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.middleware.auth import verify_api_key
 from app.middleware.correlation import CorrelationIdMiddleware
+from app.middleware.rate_limiter import get_limiter, rate_limit_exceeded_handler
 from app.routers.admin import router as admin_router
+from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
+from app.services.user_service import UserService
 from app.services.corpus_loader import load_corpus
 from app.services.agent_service import AgentService, create_agent_checkpointer
 from app.services.embedding_service import EmbeddingService
@@ -152,6 +159,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         place_recommendation_service=app.state.place_recommendation_service,
     )
 
+    # 5. Initialize UserService (PostgreSQL-backed auth)
+    app.state.user_service = None
+    dsn = os.environ.get("DATABASE_URL")
+    if dsn:
+        try:
+            app.state.user_service = await UserService.create(dsn)
+            logger.info("user_service.initialized", storage="postgres")
+        except Exception as exc:
+            logger.warning("user_service.init_failed", error=str(exc))
+
     logger.info(
         "app.startup",
         title=app.title,
@@ -162,6 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         llm_service_enabled=app.state.llm_service is not None,
         agent_service_enabled=app.state.agent_service is not None,
         place_recommendation_enabled=app.state.place_recommendation_service is not None,
+        user_service_enabled=app.state.user_service is not None,
         checkpoint_mode=checkpoint_mode,
     )
 
@@ -172,6 +190,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     close_client = getattr(places_client, "aclose", None)
     if close_client is not None:
         await close_client()
+
+    # Close user service pool
+    user_service = getattr(app.state, "user_service", None)
+    if user_service is not None:
+        await user_service.close()
 
     # Shutdown phase
     if _langfuse_cleanup:
@@ -189,6 +212,12 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+# ── Rate Limiter ────────────────────────────────────────────────────────
+
+limiter = get_limiter()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 
 # ── Correlation ID middleware ────────────────────────────────────────────
@@ -246,6 +275,9 @@ async def log_requests(request: Request, call_next: Callable) -> JSONResponse:
 
 # Health router — no auth required (used by orchestrator healthchecks)
 app.include_router(health_router)
+
+# Auth router — no auth required (register/login are public)
+app.include_router(auth_router)
 
 # Chat router — requires API key auth
 app.include_router(chat_router, dependencies=[Depends(verify_api_key)])

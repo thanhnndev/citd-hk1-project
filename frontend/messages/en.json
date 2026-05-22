@@ -4,10 +4,59 @@
     "chat": "Chat",
     "map": "Map",
     "architecture": "Architecture",
+    "login": "Login",
+    "register": "Register",
+    "logout": "Logout",
     "localeLabel": "Language",
     "localeSwitcherLabel": "Select language",
     "copyright": "© {year} Ham Ninh AI Guide. Preserving heritage, supporting sustainable tourism.",
     "tagline": "Built for the community — responsible AI for Ham Ninh fishing village, Phu Quoc."
+  },
+  "Auth": {
+    "common": {
+      "emailLabel": "Email",
+      "passwordLabel": "Password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password"
+    },
+    "register": {
+      "eyebrow": "Create account",
+      "title": "Register",
+      "usernameLabel": "Username",
+      "usernamePlaceholder": "Username",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Password (min. 6 characters)",
+      "submitButton": "Create account",
+      "submitting": "Creating...",
+      "loginPrompt": "Already have an account?",
+      "loginLink": "Log in",
+      "successMessage": "Account created! Redirecting to login...",
+      "verifyPrompt": "Account created! Please check your email for the verification code."
+    },
+    "login": {
+      "eyebrow": "Welcome back",
+      "title": "Log in",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Password",
+      "submitButton": "Log in",
+      "submitting": "Logging in...",
+      "registerPrompt": "Don't have an account?",
+      "registerLink": "Register",
+      "verifyError": "Email not verified. Please check your inbox and verify your email before logging in."
+    },
+    "verify": {
+      "eyebrow": "Email verification",
+      "title": "Enter OTP code",
+      "instruction": "We sent a 6-digit verification code to",
+      "otpLabel": "OTP",
+      "otpPlaceholder": "000000",
+      "submitButton": "Verify",
+      "submitting": "Verifying...",
+      "resendButton": "Resend code",
+      "resendSuccess": "A new code has been sent! Please check your email.",
+      "successMessage": "Email verified successfully! Redirecting to login...",
+      "loginLink": "Go to login"
+    }
   },
   "Landing": {
     "hero": {

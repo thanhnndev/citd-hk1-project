@@ -4,10 +4,59 @@
     "chat": "Trò chuyện",
     "map": "Bản đồ",
     "architecture": "Kiến trúc",
+    "login": "Đăng nhập",
+    "register": "Đăng ký",
+    "logout": "Đăng xuất",
     "localeLabel": "Ngôn ngữ",
     "localeSwitcherLabel": "Chọn ngôn ngữ",
     "copyright": "© {year} Hàm Ninh AI Guide. Bảo tồn di sản, hỗ trợ du lịch bền vững.",
     "tagline": "Xây dựng vì cộng đồng — AI có trách nhiệm cho làng chài Hàm Ninh, Phú Quốc."
+  },
+  "Auth": {
+    "common": {
+      "emailLabel": "Email",
+      "passwordLabel": "Mật khẩu",
+      "showPassword": "Hiện mật khẩu",
+      "hidePassword": "Ẩn mật khẩu"
+    },
+    "register": {
+      "eyebrow": "Tạo tài khoản",
+      "title": "Đăng ký",
+      "usernameLabel": "Tên người dùng",
+      "usernamePlaceholder": "Tên người dùng",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Mật khẩu (tối thiểu 6 ký tự)",
+      "submitButton": "Tạo tài khoản",
+      "submitting": "Đang tạo...",
+      "loginPrompt": "Đã có tài khoản?",
+      "loginLink": "Đăng nhập",
+      "successMessage": "Tài khoản đã được tạo! Đang chuyển đến trang đăng nhập...",
+      "verifyPrompt": "Tài khoản đã được tạo! Vui lòng kiểm tra email để lấy mã xác thực."
+    },
+    "login": {
+      "eyebrow": "Chào mừng trở lại",
+      "title": "Đăng nhập",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Mật khẩu",
+      "submitButton": "Đăng nhập",
+      "submitting": "Đang đăng nhập...",
+      "registerPrompt": "Chưa có tài khoản?",
+      "registerLink": "Đăng ký ngay",
+      "verifyError": "Email chưa được xác thực. Vui lòng kiểm tra hộp thư và xác thực email trước khi đăng nhập."
+    },
+    "verify": {
+      "eyebrow": "Xác thực email",
+      "title": "Nhập mã OTP",
+      "instruction": "Chúng tôi đã gửi mã xác thực 6 số đến",
+      "otpLabel": "Mã OTP",
+      "otpPlaceholder": "000000",
+      "submitButton": "Xác thực",
+      "submitting": "Đang xác thực...",
+      "resendButton": "Gửi lại mã",
+      "resendSuccess": "Mã mới đã được gửi! Vui lòng kiểm tra email.",
+      "successMessage": "Email đã được xác thực thành công! Đang chuyển đến trang đăng nhập...",
+      "loginLink": "Đến trang đăng nhập"
+    }
   },
   "Landing": {
     "hero": {

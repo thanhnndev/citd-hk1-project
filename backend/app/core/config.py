@@ -48,6 +48,24 @@ class Settings(BaseSettings):
         lambda v: [x.strip() for x in v.split(",") if x.strip()] if isinstance(v, str) else v
     )] = ["http://localhost:3000"]
 
+    # ── Authentication ──────────────────────────────────────────
+    JWT_SECRET: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_HOURS: int = 24
+    REQUIRE_EMAIL_VERIFICATION: bool = False
+
+    # ── SMTP (Email Verification) ──────────────────────────────
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_NAME: str = "Ham Ninh AI"
+    SMTP_USE_SSL: bool = True
+
+    # ── Rate Limiting ───────────────────────────────────────────
+    RATE_LIMIT_DEFAULT: str = "60/minute"
+    RATE_LIMIT_CHAT: str = "20/minute"
+
     # ── Server ──────────────────────────────────────────────────
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
