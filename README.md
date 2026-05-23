@@ -29,18 +29,18 @@ Hệ thống giải quyết 2 vấn đề cốt lõi:
 ## 🤖 Kiến trúc hệ thống
 
 ### Multi-Agent System
-Hệ thống gồm 3 agent phối hợp dưới sự điều phối của Supervisor:
+Hệ thống gồm 3 agent phối hợp qua LangGraph StateGraph:
 
-| Agent | Vai trò |
-|---|---|
-| **RAG Agent** | Trả lời câu hỏi văn hóa, lịch sử Hàm Ninh từ tài liệu thật |
-| **Maps Agent** | Tìm kiếm địa điểm, nhà hàng qua Google Places API |
-| **Ensemble Re-ranker** | Xếp hạng lại kết quả ưu tiên cơ sở địa phương |
+| Agent | Vai trò | File |
+|---|---|---|
+| **AgentService** | LangGraph orchestration (retrieve → answer) | `agents/graph/agent_service.py` |
+| **GroundedAnswer** | Intent detection + grounded answers | `agents/guardrails/grounded_answer.py` |
+| **EnsembleReranker** | 3-tree Bagging + 2-step Boosting fairness | `agents/ml/ensemble_reranker.py` |
 
 ### RAG Pipeline
-1. Câu hỏi → chuyển thành vector (embedding)
-2. Tìm tài liệu tương tự trong Qdrant
-3. Ghép tài liệu vào prompt → LLM sinh câu trả lời
+1. Câu hỏi → embedding (OpenAI text-embedding-3-small)
+2. Tìm tài liệu tương tự trong Qdrant (BM25 + dense hybrid)
+3. LLM sinh câu trả lời với strict grounding (gpt-4o-mini)
 4. Trả về kèm citation nguồn
 
 ### Ensemble Re-ranking
@@ -48,38 +48,17 @@ Kết hợp Bagging (3 Decision Trees song song) và Boosting (hiệu chỉnh tu
 
 ---
 
-## 🔄 Data Pipeline — ELT
-
-Hệ thống áp dụng phương pháp **ELT (Extract → Load → Transform)** để xây dựng knowledge base cho RAG.
-
-### Extract
-- Thu thập tài liệu thô về văn hóa, lịch sử Hàm Ninh từ nhiều nguồn: PDF, web, tài liệu địa phương
-- Scrape thông tin địa điểm từ Google Places API
-
-### Load
-- Lưu tài liệu thô vào PostgreSQL (metadata) và Qdrant (storage tạm)
-- Endpoint: `POST /admin/ingest`
-
-### Transform — Tự động hóa hoàn toàn
-Sau khi tài liệu được Load vào hệ thống, pipeline tự động xử lý mà không cần can thiệp thủ công:
-
-1. **Auto Chunking** — Docling tự nhận dạng cấu trúc tài liệu (heading, table, paragraph) và cắt thành các đoạn nhỏ (~500 token), tự động lưu ra các file `.md` vào thư mục `data/chunks/`
-2. **Auto Embedding** — Từng chunk `.md` tự động được chuyển thành vector số học bằng mô hình embedding
-3. **Auto Indexing** — Vector tự động được đánh index HNSW và lưu vào Qdrant, sẵn sàng cho RAG pipeline
+## 🔄 Data Pipeline
 
 ```
-Trigger: POST /admin/ingest
-        ↓
-Docling tự nhận dạng cấu trúc
-        ↓ (tự động)
-data/chunks/*.md (file markdown đã chunk)
-        ↓ (tự động)
-Embedding model → vectors
-        ↓ (tự động)
-Qdrant Vector DB ✅ Sẵn sàng cho RAG
+data/cleaned/documents/*.md + data/entities/*.json
+        ↓ (PropositionChunker)
+data/tourism_documents.jsonl
+        ↓ (corpus_loader.py)
+Retriever (keyword) / Qdrant (hybrid dense+sparse)
+        ↓ (RAG via LLMAnswerService)
+Grounded answer with citations
 ```
-
-> Toàn bộ quá trình từ tài liệu thô → Qdrant chỉ cần 1 API call duy nhất.
 
 ---
 
@@ -87,14 +66,14 @@ Qdrant Vector DB ✅ Sẵn sàng cho RAG
 
 | Lớp | Công nghệ |
 |---|---|
-| Frontend | Next.js 16, Tailwind CSS |
-| Backend | FastAPI, Python 3.11 |
-| AI Agents | LangGraph 1.1 |
-| Vector DB | Qdrant v1.13.6 |
+| Frontend | Next.js 16, Tailwind CSS v4, next-intl |
+| Backend API | FastAPI 0.136, Python 3.12 |
+| AI Agents | LangGraph 1.2 (trong `agents/` package) |
+| LLM | OpenAI gpt-4o-mini, text-embedding-3-small |
+| Vector DB | Qdrant v1.13.6 (HNSW index) |
 | Database | PostgreSQL 17, Redis 8.0 |
+| Places | Google Places API (New) v1 |
 | Observability | Langfuse 4.6.1 |
-| Evaluation | RAGAS 0.4.3 |
-| Document Processing | Docling (IBM) |
 
 ---
 
@@ -117,18 +96,61 @@ docker compose up
 
 ```
 citd-hk1-project/
-├── frontend/    # Giao diện Next.js 16
-├── backend/     # API FastAPI
-├── agents/      # Multi-Agent, RAG, Ensemble Re-ranker
-├── data/        # Tài liệu văn hóa Hàm Ninh
-├── docs/        # Tài liệu dự án
-└── scripts/     # Script tiện ích
+├── agents/                    # LangGraph Multi-Agent Orchestration
+│   ├── graph/
+│   │   └── agent_service.py   # LangGraph StateGraph (retrieve → answer)
+│   ├── tools/
+│   │   ├── hybrid_retriever.py  # BM25 + Qdrant dense + keyword fallback
+│   │   ├── retriever.py         # In-memory keyword search
+│   │   ├── qdrant_service.py    # Qdrant vector DB
+│   │   ├── embedding_service.py # OpenAI embeddings
+│   │   ├── places_service.py    # Google Places API (New)
+│   │   ├── routes_service.py    # Google Routes API
+│   │   ├── corpus_loader.py     # JSONL document ingestion
+│   │   └── proposition_chunker.py
+│   ├── guardrails/
+│   │   └── grounded_answer.py   # Intent detection + grounded answers
+│   ├── ml/
+│   │   ├── ensemble_reranker.py # 3-tree Bagging + Boosting
+│   │   └── feature_extractor.py # Feature engineering (6 features)
+│   ├── services/
+│   │   ├── llm_answer_service.py       # OpenAI LLM answers
+│   │   └── place_recommendation_service.py  # Places → Ensemble → rank
+│   └── requirements.txt
+│
+├── backend/                     # FastAPI API Gateway (thin wrapper)
+│   ├── app/
+│   │   ├── main.py              # Lifespan, router wiring, service init
+│   │   ├── routers/             # chat, health, admin, auth
+│   │   ├── models/              # Pydantic schemas
+│   │   ├── services/            # Backend-only: langfuse, jwt, email, user
+│   │   ├── middleware/          # auth, cors, rate_limiter, correlation
+│   │   └── core/                # config, logging
+│   ├── tests/
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+├── frontend/                    # Next.js 16 UI
+│   ├── src/
+│   │   ├── app/                 # App Router (landing, chat, map, auth)
+│   │   ├── components/          # landing, chat, map, ui
+│   │   ├── lib/                 # api clients, auth store
+│   │   └── i18n/                # next-intl (vi, en)
+│   └── tests/
+│
+├── data/                        # Knowledge base
+│   ├── cleaned/documents/       # Source markdown files
+│   ├── tourism_documents.jsonl  # Ingested corpus
+│   └── reports/
+│
+├── docs/                        # Project documentation
+├── scripts/                     # Verification and ingestion scripts
+└── compose.yaml                 # Docker Compose (postgres, redis, qdrant, backend)
 ```
 
 ## 📄 Tài liệu
 
 - [Requirements](docs/REQUIREMENTS.md)
-- [Architecture](docs/ARCHITECTURE.md)
 
 ---
 
