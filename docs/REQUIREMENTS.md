@@ -200,61 +200,58 @@ ham-ninh-ai/
 │   ├── package.json
 │   └── tsconfig.json
 │
-├── agents/                          # LangGraph 1.1.10 — Multi-Agent Orchestration
+├── agents/                          # LangGraph 1.2.0 — Multi-Agent Orchestration
 │   ├── graph/
-│   │   ├── supervisor.py            # Supervisor Agent + StateGraph
-│   │   ├── rag_agent.py             # RAG Agent (Local Guide Worker)
-│   │   ├── maps_agent.py            # Maps & Service Agent (Concierge Worker)
-│   │   └── state.py                 # AgentState TypedDict
+│   │   └── agent_service.py         # LangGraph StateGraph (retrieve → answer)
 │   ├── tools/
-│   │   ├── qdrant_retriever.py      # Qdrant similarity search
-│   │   ├── places_nearby.py         # Places API (New): searchNearby
-│   │   ├── places_text.py           # Places API (New): searchText
-│   │   ├── places_details.py        # Places API (New): Place Details
-│   │   ├── routes_matrix.py         # Routes API: computeRouteMatrix
-│   │   └── cache_fallback.py        # SQLite circuit breaker fallback
-│   ├── routing/
-│   │   ├── semantic_router.py       # Intent routing (cosine similarity)
-│   │   └── intent_schemas.py        # Intent definitions & utterances
+│   │   ├── hybrid_retriever.py      # BM25 + Qdrant dense + keyword fallback
+│   │   ├── retriever.py             # In-memory keyword search fallback
+│   │   ├── qdrant_service.py        # Qdrant vector DB operations
+│   │   ├── embedding_service.py     # OpenAI embedding API wrapper
+│   │   ├── places_service.py        # Google Places API (New) v1 client
+│   │   ├── routes_service.py        # Google Routes API v2 client
+│   │   ├── corpus_loader.py         # JSONL document ingestion
+│   │   └── proposition_chunker.py   # Proposition extraction for embeddings
 │   ├── guardrails/
-│   │   ├── input_guardrails.py      # Prompt injection, topic filter
-│   │   └── output_guardrails.py     # Grounding check, content safety
+│   │   └── grounded_answer.py       # Intent detection + grounded answers
 │   ├── ml/
-│   │   ├── reranker.py              # Ensemble Re-ranker (RF + GBM)
-│   │   ├── feature_extractor.py     # Feature engineering (8 features)
-│   │   └── model_artifacts/         # Serialized .joblib files
-│   ├── eval/
-│   │   ├── ragas_eval.py            # RAGAS 0.4.3 evaluation
-│   │   └── test_datasets/           # Golden Q&A datasets
-│   ├── checkpointer/
-│   │   └── postgres_saver.py        # LangGraph PostgresSaver
+│   │   ├── ensemble_reranker.py     # 3-tree Bagging + 2-step Boosting
+│   │   └── feature_extractor.py     # Feature engineering (6 features)
+│   ├── services/
+│   │   ├── llm_answer_service.py    # OpenAI LLM answer with strict grounding
+│   │   └── place_recommendation_service.py  # Places → Ensemble → ranked results
 │   └── requirements.txt
 │
 └── backend/                         # FastAPI 0.136.1 — API Gateway
     ├── app/
-    │   ├── main.py
+    │   ├── main.py                  # Lifespan, router wiring, service init
     │   ├── routers/
     │   │   ├── chat.py              # POST /chat, GET /chat/stream (SSE)
     │   │   ├── health.py            # GET /health, /health/ready
-    │   │   └── admin.py             # eval trigger, trace viewer, ingest
+    │   │   ├── admin.py             # eval trigger, trace viewer, ingest
+    │   │   └── auth.py              # Login, register, OTP, verify-email
     │   ├── models/
     │   │   ├── request.py           # Pydantic v2 request schemas
-    │   │   └── response.py          # Pydantic v2 response schemas
+    │   │   ├── response.py          # Pydantic v2 response schemas
+    │   │   ├── places.py            # PlaceCandidate, PlaceSearchRequest
+    │   │   ├── rag.py               # RAGChunk, RetrievalResult
+    │   │   └── user.py              # User model
     │   ├── services/
-    │   │   ├── agent_service.py
-    │   │   ├── langfuse_service.py
-    │   │   └── qdrant_service.py
+    │   │   ├── langfuse_service.py  # Observability traces
+    │   │   ├── jwt_service.py       # JWT auth token management
+    │   │   ├── email_service.py     # Email delivery (OTP, verification)
+    │   │   └── user_service.py      # PostgreSQL-backed user management
     │   ├── middleware/
-    │   │   ├── auth.py
-    │   │   ├── rate_limiter.py
-    │   │   └── cors.py
+    │   │   ├── auth.py              # API key verification
+    │   │   ├── correlation.py       # X-Request-ID correlation
+    │   │   ├── cors.py              # CORS configuration
+    │   │   └── rate_limiter.py      # SlowAPI rate limiting
     │   └── core/
     │       ├── config.py            # Pydantic BaseSettings
-    │       └── logging.py           # structlog
+    │       └── logging.py           # structlog setup
     ├── migrations/                  # Alembic (PostgreSQL 17)
-    ├── tests/
+    ├── tests/                       # pytest test suite
     ├── Dockerfile
-    ├── docker-compose.yml
     └── requirements.txt
 ```
 
