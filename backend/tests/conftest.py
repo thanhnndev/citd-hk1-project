@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from app.services.corpus_loader import load_corpus
-from app.services.retriever import Retriever
-from app.services.qdrant_service import QdrantService
-from app.services.embedding_service import EmbeddingService
+from agents.tools.corpus_loader import load_corpus
+from agents.tools.retriever import Retriever
+from agents.tools.qdrant_service import QdrantService
+from agents.tools.embedding_service import EmbeddingService
 
 # Ensure required app secrets are set before any app module imports.
 # Google credentials are optional and should remain absent unless a test opts in.

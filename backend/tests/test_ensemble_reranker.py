@@ -11,7 +11,7 @@ import pytest
 from app.models.places import PlaceCandidate, RouteContext
 from app.models.request import LatLng
 from app.models.response import ScoreBreakdown
-from app.services.ensemble_reranker import EnsembleReranker, LEARNING_RATE
+from agents.ml.ensemble_reranker import EnsembleReranker, LEARNING_RATE
 
 LEARNING_RATE = 0.3
 

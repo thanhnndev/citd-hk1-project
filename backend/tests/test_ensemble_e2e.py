@@ -22,8 +22,8 @@ from app.models.places import (
 )
 from app.models.request import LatLng
 from app.models.response import ScoreBreakdown
-from app.services.agent_service import AgentService
-from app.services.place_recommendation_service import PlaceRecommendationService
+from agents.graph.agent_service import AgentService
+from agents.services.place_recommendation_service import PlaceRecommendationService
 
 
 # ---------------------------------------------------------------------------

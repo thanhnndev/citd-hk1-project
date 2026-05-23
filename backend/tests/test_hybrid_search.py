@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from qdrant_client.models import Fusion, FusionQuery, SparseVector
 
-from app.services.hybrid_retriever import BM25Vectorizer
-from app.services.qdrant_service import (
+from agents.tools.hybrid_retriever import BM25Vectorizer
+from agents.tools.qdrant_service import (
     COLLECTION_NAME,
     DENSE_VECTOR_NAME,
     QdrantService,
@@ -235,7 +235,7 @@ class TestHybridRetriever:
         qdrant_raises: Exception | None = None,
     ):
         """Build a HybridRetriever with mocked dependencies."""
-        from app.services.hybrid_retriever import HybridRetriever
+        from agents.tools.hybrid_retriever import HybridRetriever
 
         qdrant_svc = MagicMock()
         if qdrant_raises:
@@ -305,7 +305,7 @@ class TestHybridRetriever:
         """answer_from_chunks with 2 chunks returns ChatResponse with non-empty message."""
         from app.models.rag import RAGChunk
         from app.models.response import Citation
-        from app.services.grounded_answer import GroundedAnswerService
+        from agents.guardrails.grounded_answer import GroundedAnswerService
 
         chunks = [
             RAGChunk(
@@ -471,8 +471,8 @@ class TestHybridIntegration:
         loaded_chunks,
     ) -> None:
         """For each Hàm Ninh query, hybrid search must return ≥1 chunk mentioning Hàm Ninh."""
-        from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
-        from app.services.retriever import Retriever
+        from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+        from agents.tools.retriever import Retriever
 
         bm25 = BM25Vectorizer()
         bm25.fit([c.text for c in loaded_chunks])
@@ -500,7 +500,7 @@ class TestHybridIntegration:
         retriever,
     ) -> None:
         """Hybrid total_found must be >= keyword-only total_found for each query."""
-        from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
+        from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 
         bm25 = BM25Vectorizer()
         bm25.fit([c.text for c in loaded_chunks])

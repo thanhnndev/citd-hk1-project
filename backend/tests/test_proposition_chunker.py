@@ -4,7 +4,7 @@ import json
 import pytest
 from pathlib import Path
 
-from app.services.proposition_chunker import (
+from agents.tools.proposition_chunker import (
     PropositionChunker,
     _chunk_id,
     _parse_frontmatter,

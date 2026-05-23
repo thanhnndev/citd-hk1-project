@@ -4,7 +4,7 @@ import pytest
 
 from app.models.rag import RAGChunk
 from app.models.response import Citation
-from app.services.retriever import (
+from agents.tools.retriever import (
     RELIABILITY_BOOST,
     Retriever,
     citation_from_chunk,
@@ -200,7 +200,7 @@ class TestRetrieverScoring:
         assert result_rare.total_found == 1
         assert result_common.total_found == 3
         # Verify IDF math: rarer term has higher per-token contribution
-        from app.services.retriever import _idf
+        from agents.tools.retriever import _idf
         idf_rare = _idf(1, 4)
         idf_common = _idf(3, 4)
         assert idf_rare > idf_common
@@ -244,7 +244,7 @@ class TestRetrieverDeterminism:
 class TestRetrieverTourismCorpus:
     @pytest.fixture(scope="class")
     def retriever(self):
-        from app.services.retriever import load_corpus as _load
+        from agents.tools.retriever import load_corpus as _load
         chunks = _load("../data/tourism_documents.jsonl")
         return Retriever(chunks)
 
@@ -262,7 +262,7 @@ class TestRetrieverTourismCorpus:
 
     def test_reliability_boost_applied(self, retriever):
         """High-reliability chunks get a score multiplier (verified via boost constant)."""
-        from app.services.retriever import RELIABILITY_BOOST
+        from agents.tools.retriever import RELIABILITY_BOOST
         assert RELIABILITY_BOOST["high"] > RELIABILITY_BOOST["medium"]
         # Sanity: query returns results at all
         result = retriever.search("làng chài Hàm Ninh", top_k=5)
@@ -270,7 +270,7 @@ class TestRetrieverTourismCorpus:
 
     def test_reliability_boost_end_to_end(self):
         """When TF/IDF are identical, high-reliability chunk ranks first."""
-        from app.services.retriever import Retriever
+        from agents.tools.retriever import Retriever
         from app.models.rag import RAGChunk
         corpus = [
             RAGChunk(

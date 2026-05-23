@@ -2,14 +2,14 @@ import pytest
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse
-from app.services.agent_service import (
+from agents.graph.agent_service import (
     AgentService,
     InMemoryAgentCheckpointer,
     PostgresAgentCheckpointer,
     create_agent_checkpointer,
 )
-from app.services.grounded_answer import detect_intent
-from app.services.retriever import citation_from_chunk
+from agents.guardrails.grounded_answer import detect_intent
+from agents.tools.retriever import citation_from_chunk
 
 
 @pytest.fixture

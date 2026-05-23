@@ -10,7 +10,7 @@ from collections import Counter
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
-from app.services.proposition_chunker import PropositionChunker
+from agents.tools.proposition_chunker import PropositionChunker
 
 DOCS_DIR = PROJECT_ROOT / "data" / "cleaned" / "documents"
 ENTITIES_DIR = PROJECT_ROOT / "data" / "entities"

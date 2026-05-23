@@ -15,7 +15,7 @@ from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import Citation
 
 # Re-export for single-import convenience
-from app.services.corpus_loader import load_corpus  # noqa: F401
+from agents.tools.corpus_loader import load_corpus  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Internal helpers

@@ -6,7 +6,7 @@ import pytest
 
 from app.models.places import DEFAULT_SEARCH_RADIUS_METERS, PlaceCandidate, RouteContext
 from app.models.request import LatLng
-from app.services.feature_extractor import FeatureExtractor, haversine
+from agents.ml.feature_extractor import FeatureExtractor, haversine
 
 
 def make_candidate(**overrides: object) -> PlaceCandidate:

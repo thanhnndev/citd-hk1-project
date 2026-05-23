@@ -15,8 +15,8 @@ import pytest
 for _key in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
     os.environ.setdefault(_key, "fake-test-key")
 
-from app.services.embedding_service import EmbeddingService, EmbeddingValidationError
-from app.services.qdrant_service import (
+from agents.tools.embedding_service import EmbeddingService, EmbeddingValidationError
+from agents.tools.qdrant_service import (
     COLLECTION_NAME,
     DENSE_VECTOR_NAME,
     VECTOR_SIZE,

@@ -20,10 +20,10 @@ from typing import Any
 import pytest
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse, Citation
-from app.services.hybrid_retriever import HybridRetriever
-from app.services.retriever import citation_from_chunk, Retriever
-from app.services.qdrant_service import QdrantService
-from app.services.agent_service import AgentService, AgentState
+from agents.tools.hybrid_retriever import HybridRetriever
+from agents.tools.retriever import citation_from_chunk, Retriever
+from agents.tools.qdrant_service import QdrantService
+from agents.graph.agent_service import AgentService, AgentState
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ class _ErroringQdrantService(FakeQdrantService):
 
 def _make_keyword_retriever(chunks: list[RAGChunk]):
     """Build a real in-memory keyword Retriever over given chunks."""
-    from app.services.retriever import Retriever
+    from agents.tools.retriever import Retriever
 
     return Retriever(chunks)
 

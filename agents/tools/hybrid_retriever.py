@@ -29,7 +29,7 @@ from qdrant_client.models import SparseVector
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import Citation
-from app.services.retriever import Retriever, citation_from_chunk
+from agents.tools.retriever import Retriever, citation_from_chunk
 
 logger = structlog.get_logger(__name__)
 

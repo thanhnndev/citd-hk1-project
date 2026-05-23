@@ -6,7 +6,7 @@ import pytest
 
 from app.models.rag import RAGChunk
 from app.models.response import ChatResponse
-from app.services.grounded_answer import (
+from agents.guardrails.grounded_answer import (
     GroundedAnswerService,
     detect_intent,
     compose_answer_vi,
@@ -14,7 +14,7 @@ from app.services.grounded_answer import (
     _excerpt,
     _no_evidence_message,
 )
-from app.services.retriever import Retriever
+from agents.tools.retriever import Retriever
 
 
 # ---------------------------------------------------------------------------

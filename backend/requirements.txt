@@ -28,8 +28,16 @@ email-validator>=2.0
 # Vector Store, Embeddings & Agent Graph
 qdrant-client==1.18.0
 openai==1.82.0
-langgraph>=0.2.60
-langgraph-checkpoint-postgres>=2.0.0
+langgraph==1.2.0
+langgraph-checkpoint-postgres==3.1.0
+langchain-core==1.4.0
+langchain-openai
+
+# ML — Ensemble Re-ranking
+scikit-learn==1.8.0
+
+# Google Maps Places API (New)
+google-maps-places==0.8.0
 
 # Authentication
 bcrypt==4.3.0

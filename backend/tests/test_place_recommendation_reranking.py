@@ -16,7 +16,7 @@ from app.models.places import (
 )
 from app.models.request import LatLng
 from app.models.response import PlaceResult, ScoreBreakdown
-from app.services.place_recommendation_service import (
+from agents.services.place_recommendation_service import (
     PlaceRecommendationService,
     _grounded_results,
     _reranked_results,

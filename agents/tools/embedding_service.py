@@ -12,7 +12,7 @@ import structlog
 import openai
 
 from app.core.config import get_settings
-from app.services.qdrant_service import VECTOR_SIZE
+from agents.tools.qdrant_service import VECTOR_SIZE
 
 logger = structlog.get_logger(__name__)
 

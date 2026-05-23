@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
-from app.services.agent_service import AgentService
+from agents.graph.agent_service import AgentService
 
 
 def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
@@ -165,7 +165,7 @@ async def test_recommendation_service_preserves_pin_ready_candidate_fields() -> 
 
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
-    from app.services.place_recommendation_service import PlaceRecommendationService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidate = PlaceCandidate(
         place_id="places/pin-ready",
@@ -218,7 +218,7 @@ async def test_recommendation_service_negative_statuses_return_empty_places(stat
 
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
-    from app.services.place_recommendation_service import PlaceRecommendationService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
 
     places_tool = AsyncMock()
     request = PlaceSearchRequest(query="seafood")

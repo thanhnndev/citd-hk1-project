@@ -169,7 +169,7 @@ class TestCorpusLoaderIntegration:
         """corpus_loader.load_proposition_corpus() must load all rows without ValueError."""
         import sys as _sys
         _sys.path.insert(0, str(PROJECT_ROOT / "backend"))
-        from app.services.corpus_loader import load_proposition_corpus
+        from agents.tools.corpus_loader import load_proposition_corpus
 
         chunks = load_proposition_corpus(str(CORPUS_PATH))
         assert len(chunks) >= CHUNK_COUNT_MIN, (

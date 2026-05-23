@@ -15,7 +15,7 @@ from typing import List
 
 from app.models.rag import RAGChunk
 from app.models.response import ChatResponse, Citation
-from app.services.retriever import Retriever, RetrievalResult
+from agents.tools.retriever import Retriever, RetrievalResult
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
-"""Application service layer package.
+"""Backend service layer — infrastructure and auth concerns only.
 
-Services encapsulate external integrations (Langfuse, Qdrant) and
-business logic (agent orchestration).  Each service is initialized
-during lifespan startup and cleaned up on shutdown.
+Agent orchestration lives in the `agents/` package.  This module
+contains services that are backend-specific: observability, auth,
+email, and user management.
 """
 
 from app.services.langfuse_service import init_langfuse

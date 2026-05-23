@@ -8,7 +8,7 @@ import pytest
 from app.core.config import Settings
 from app.models.places import PlaceCandidate, RouteContext
 from app.models.request import LatLng
-from app.services.routes_service import (
+from agents.tools.routes_service import (
     CircuitBreaker,
     GoogleRoutesService,
     COOLDOWN_SECONDS,

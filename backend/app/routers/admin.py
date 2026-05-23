@@ -14,10 +14,10 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.core.logging import get_logger
 from app.models.response import EmbedResponse
-from app.services.corpus_loader import load_proposition_corpus
-from app.services.embedding_service import EmbeddingService, EmbeddingValidationError
-from app.services.hybrid_retriever import BM25Vectorizer
-from app.services.qdrant_service import (
+from agents.tools.corpus_loader import load_proposition_corpus
+from agents.tools.embedding_service import EmbeddingService, EmbeddingValidationError
+from agents.tools.hybrid_retriever import BM25Vectorizer
+from agents.tools.qdrant_service import (
     COLLECTION_NAME,
     DENSE_VECTOR_NAME,
     SPARSE_VECTOR_NAME,

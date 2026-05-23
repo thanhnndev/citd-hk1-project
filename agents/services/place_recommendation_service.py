@@ -21,8 +21,8 @@ from app.models.places import (
 )
 from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
-from app.services.ensemble_reranker import EnsembleReranker
-from app.services.feature_extractor import FeatureExtractor
+from agents.ml.ensemble_reranker import EnsembleReranker
+from agents.ml.feature_extractor import FeatureExtractor
 
 logger = logging.getLogger(__name__)
 

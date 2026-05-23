@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.models.rag import RAGChunk
 from app.models.response import ChatResponse, Citation
-from app.services.llm_answer_service import LLMAnswerService
+from agents.services.llm_answer_service import LLMAnswerService
 
 # ---------------------------------------------------------------------------
 # Helpers

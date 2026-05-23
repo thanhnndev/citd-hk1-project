@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from app.models.rag import RAGChunk
-from app.services.corpus_loader import (
+from agents.tools.corpus_loader import (
     load_corpus,
     get_corpus_stats,
     _chunk_document,
@@ -413,7 +413,7 @@ class TestChunkStability:
 
     def test_deterministic_reload(self):
         """Re-loading the corpus produces identical chunk_ids in the same order."""
-        from app.services.corpus_loader import load_corpus
+        from agents.tools.corpus_loader import load_corpus
         from pathlib import Path
 
         p = Path("data/tourism_documents.jsonl")
@@ -456,7 +456,7 @@ class TestCitationReconstruction:
 
     def test_basic_citation_from_chunk(self, loaded_chunks):
         """Every chunk can produce a valid Citation."""
-        from app.services.retriever import citation_from_chunk
+        from agents.tools.retriever import citation_from_chunk
         from app.models.response import Citation
 
         for chunk in loaded_chunks[:10]:  # sample first 10 for speed
@@ -467,7 +467,7 @@ class TestCitationReconstruction:
 
     def test_citation_source_matches_chunk_title(self, loaded_chunks):
         """Citation source is the chunk's title."""
-        from app.services.retriever import citation_from_chunk
+        from agents.tools.retriever import citation_from_chunk
 
         for chunk in loaded_chunks[:5]:
             citation = citation_from_chunk(chunk)
@@ -475,7 +475,7 @@ class TestCitationReconstruction:
 
     def test_citation_url_matches_chunk_url(self, loaded_chunks):
         """Citation url is the chunk's url."""
-        from app.services.retriever import citation_from_chunk
+        from agents.tools.retriever import citation_from_chunk
 
         for chunk in loaded_chunks[:5]:
             citation = citation_from_chunk(chunk)
@@ -483,7 +483,7 @@ class TestCitationReconstruction:
 
     def test_citation_snippet_truncated_at_200(self):
         """Snippet is truncated to 200 characters for long text."""
-        from app.services.retriever import citation_from_chunk
+        from agents.tools.retriever import citation_from_chunk
         from app.models.rag import RAGChunk
 
         chunk = RAGChunk(
@@ -498,7 +498,7 @@ class TestCitationReconstruction:
 
     def test_citation_snippet_short_text_unchanged(self):
         """Short text is not truncated."""
-        from app.services.retriever import citation_from_chunk
+        from agents.tools.retriever import citation_from_chunk
         from app.models.rag import RAGChunk
 
         chunk = RAGChunk(
@@ -512,7 +512,7 @@ class TestCitationReconstruction:
 
     def test_citation_url_none_propagates(self):
         """Null URL on chunk propagates to citation."""
-        from app.services.retriever import citation_from_chunk
+        from agents.tools.retriever import citation_from_chunk
         from app.models.rag import RAGChunk
 
         chunk = RAGChunk(

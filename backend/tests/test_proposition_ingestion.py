@@ -19,9 +19,9 @@ import pytest
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import Citation
-from app.services.corpus_loader import load_corpus, load_proposition_corpus, get_corpus_stats
-from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
-from app.services.retriever import Retriever
+from agents.tools.corpus_loader import load_corpus, load_proposition_corpus, get_corpus_stats
+from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+from agents.tools.retriever import Retriever
 
 # ---------------------------------------------------------------------------
 # Corpus path helper (mirrors conftest.py)
@@ -470,8 +470,8 @@ class TestPropositionIngestionIntegration:
         loaded_chunks,
     ) -> None:
         """Hybrid search for a Vietnamese query returns proposition chunks."""
-        from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
-        from app.services.retriever import Retriever
+        from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+        from agents.tools.retriever import Retriever
 
         bm25 = BM25Vectorizer()
         bm25.fit([c.text for c in loaded_chunks])
@@ -492,8 +492,8 @@ class TestPropositionIngestionIntegration:
         loaded_chunks,
     ) -> None:
         """Hybrid search for an English query returns proposition chunks."""
-        from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
-        from app.services.retriever import Retriever
+        from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+        from agents.tools.retriever import Retriever
 
         bm25 = BM25Vectorizer()
         bm25.fit([c.text for c in loaded_chunks])

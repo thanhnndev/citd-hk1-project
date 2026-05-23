@@ -20,7 +20,7 @@ from uuid import uuid4
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
-from app.services.agent_service import InMemoryAgentCheckpointer, create_agent_checkpointer  # noqa: E402
+from agents.graph.agent_service import InMemoryAgentCheckpointer, create_agent_checkpointer  # noqa: E402
 
 SESSION_PREFIX = "m004-s08-session-durability"
 USER_MESSAGE = "synthetic durability user turn"

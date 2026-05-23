@@ -3,11 +3,14 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install dependencies first (leveraging Docker layer caching)
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY app/ ./app/
+# Copy backend application code
+COPY backend/app/ ./app/
+
+# Copy agents package (LangGraph multi-agent orchestration)
+COPY agents/ ./agents/
 
 # Expose port
 EXPOSE 8000

@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
-from app.services.corpus_loader import load_corpus
-from app.services.retriever import Retriever
+from agents.tools.corpus_loader import load_corpus
+from agents.tools.retriever import Retriever
 
 
 @pytest.fixture()

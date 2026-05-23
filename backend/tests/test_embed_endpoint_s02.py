@@ -237,7 +237,7 @@ class TestEmbedEndpoint:
     @pytest.mark.asyncio
     async def test_corpus_loader_proposition_schema(self) -> None:
         """load_proposition_corpus correctly parses 607 proposition rows."""
-        from app.services.corpus_loader import load_proposition_corpus
+        from agents.tools.corpus_loader import load_proposition_corpus
 
         chunks = load_proposition_corpus(_CORPUS_PATH)
         assert len(chunks) == CORPUS_CHUNK_COUNT

@@ -19,9 +19,9 @@ import structlog
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse, Citation
-from app.services.grounded_answer import GroundedAnswerService, detect_intent
-from app.services.retriever import Retriever
-from app.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
+from agents.guardrails.grounded_answer import GroundedAnswerService, detect_intent
+from agents.tools.retriever import Retriever
+from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 
 try:  # LangGraph is optional in unit tests until dependencies are installed.
     from langgraph.graph import END, StateGraph

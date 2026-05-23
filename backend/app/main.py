@@ -30,17 +30,18 @@ from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
 from app.services.user_service import UserService
-from app.services.corpus_loader import load_corpus
-from app.services.agent_service import AgentService, create_agent_checkpointer
-from app.services.embedding_service import EmbeddingService
-from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from app.services.langfuse_service import init_langfuse
-from app.services.llm_answer_service import LLMAnswerService
-from app.services.place_recommendation_service import PlaceRecommendationService
-from app.services.places_service import GooglePlacesService
-from app.services.qdrant_service import QdrantService
-from app.services.retriever import Retriever
-from app.services.routes_service import GoogleRoutesService
+
+from agents.tools.corpus_loader import load_corpus
+from agents.graph.agent_service import AgentService, create_agent_checkpointer
+from agents.tools.embedding_service import EmbeddingService
+from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+from agents.services.llm_answer_service import LLMAnswerService
+from agents.services.place_recommendation_service import PlaceRecommendationService
+from agents.tools.places_service import GooglePlacesService
+from agents.tools.routes_service import GoogleRoutesService
+from agents.tools.qdrant_service import QdrantService
+from agents.tools.retriever import Retriever
 
 logger = get_logger(__name__)
 

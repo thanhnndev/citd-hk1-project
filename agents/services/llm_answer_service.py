@@ -21,7 +21,7 @@ import structlog
 from app.core.config import get_settings
 from app.models.rag import RAGChunk
 from app.models.response import ChatResponse, Citation
-from app.services.grounded_answer import detect_intent
+from agents.guardrails.grounded_answer import detect_intent
 
 logger = structlog.get_logger(__name__)
 
