@@ -48,6 +48,7 @@ logger = get_logger(__name__)
 # ── Lifespan manager ────────────────────────────────────────────────────
 
 _langfuse_cleanup: Callable[[], None] | None = None
+_langfuse_client: Any | None = None
 
 
 @asynccontextmanager
@@ -65,7 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         1. Flush and close Langfuse client.
         2. Log shutdown confirmation.
     """
-    global _langfuse_cleanup
+    global _langfuse_cleanup, _langfuse_client
 
     # 1. Setup logging before anything else so all startup logs are structured
     settings = get_settings()
@@ -75,7 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     # 2. Initialize Langfuse (graceful skip if keys absent)
-    _langfuse_cleanup = init_langfuse(settings)
+    _langfuse_cleanup, _langfuse_client = init_langfuse(settings)
+    app.state.langfuse_client = _langfuse_client
 
     # 3. Load corpus and build retriever (project root = backend/../)
     project_root = Path(__file__).resolve().parents[2]
@@ -158,6 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointer=checkpoint,
         checkpoint_mode=checkpoint_mode,
         place_recommendation_service=app.state.place_recommendation_service,
+        langfuse_client=_langfuse_client,
     )
 
     # 5. Initialize UserService (PostgreSQL-backed auth)
@@ -176,6 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         version=app.version,
         env=settings.APP_ENV,
         langfuse_enabled=_langfuse_cleanup is not None,
+        langfuse_client_attached=_langfuse_client is not None,
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
         agent_service_enabled=app.state.agent_service is not None,

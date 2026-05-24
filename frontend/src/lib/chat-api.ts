@@ -69,6 +69,8 @@ export interface ChatResponse {
   intent?: string | null;
   langfuse_trace_id?: string | null;
   fallback?: boolean;
+  guardrail_status?: string;
+  cache_hit?: boolean;
   latency_ms: number;
 }
 

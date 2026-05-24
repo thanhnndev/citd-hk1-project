@@ -2,18 +2,33 @@
 
 POST /admin/embed triggers full corpus ingestion into Qdrant:
   loads tourism_documents.jsonl → embeds via OpenAI → upserts to Qdrant.
+
+POST /admin/eval/trigger runs RAGAS evaluation against eval_dataset.jsonl.
+GET /admin/eval/results lists recent evaluation result files.
+GET /admin/traces is a stub for S04 Langfuse integration.
 """
 
+import json
+import os
 import time
 from pathlib import Path
 
 import openai
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status, Depends
 
 from app.core.logging import get_logger
-from app.models.response import EmbedResponse
+from app.core.config import get_settings
+from app.models.response import (
+    EmbedResponse,
+    EvalTriggerRequest,
+    EvalResultResponse,
+    EvalFileListing,
+    TracesStatusResponse,
+    FairnessSummaryResponse,
+)
+from app.middleware.auth import get_current_user
 from agents.tools.corpus_loader import load_proposition_corpus
 from agents.tools.embedding_service import EmbeddingService, EmbeddingValidationError
 from agents.tools.hybrid_retriever import BM25Vectorizer
@@ -179,3 +194,246 @@ async def embed_corpus(request: Request) -> EmbedResponse:
         collection_name=COLLECTION_NAME,
         latency_ms=round(latency_ms, 2),
     )
+
+
+# ---------------------------------------------------------------------------
+# RAGAS Evaluation endpoints
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EVAL_DATASET = "data/eval_dataset.jsonl"
+
+
+def _resolve_eval_dataset_path(requested: str | None) -> str:
+    """Resolve eval dataset path — works both locally and inside Docker."""
+    if requested:
+        return requested
+
+    _admin_file = Path(__file__).resolve()
+    _project_root = _admin_file.parents[3]
+    candidate = _project_root / _DEFAULT_EVAL_DATASET
+    if candidate.exists():
+        return str(candidate)
+    # Fallback: Docker volume mount
+    return _DEFAULT_EVAL_DATASET
+
+
+@router.post(
+    "/eval/trigger",
+    response_model=EvalResultResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def trigger_eval(
+    body: EvalTriggerRequest | None = None,
+    request: Request = None,
+    current_user=Depends(get_current_user),
+) -> EvalResultResponse:
+    """Run RAGAS evaluation against eval_dataset.jsonl.
+
+    Requires JWT auth. Returns credential_blocked verdict if OPENAI_API_KEY
+    is not configured. Synchronous call — may block ~30s for 10-15 questions.
+
+    Returns:
+        EvalResultResponse with verdict, metrics, timestamp, and result path.
+    """
+    from agents.ml.ragas_evaluator import RAGASEvaluator
+
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    dataset_path = _resolve_eval_dataset_path(
+        body.dataset_path if body else None
+    )
+    metrics = body.metrics if body else None
+
+    logger.info(
+        "eval.trigger",
+        user_id=getattr(current_user, "id", "unknown"),
+        dataset_path=dataset_path,
+        metrics=metrics,
+    )
+
+    evaluator = RAGASEvaluator(
+        openai_api_key=openai_key,
+        metrics=metrics,
+        corpus_path=_resolve_eval_dataset_path(None).replace(
+            "eval_dataset.jsonl", "tourism_documents.jsonl"
+        ),
+    )
+    result = evaluator.evaluate(dataset_path)
+
+    latency_ms = result.get("latency_seconds", 0) * 1000
+
+    logger.info(
+        "eval.completed",
+        verdict=result.get("verdict"),
+        latency_ms=round(latency_ms, 2),
+    )
+
+    return EvalResultResponse(
+        verdict=result.get("verdict", "unknown"),
+        metrics=result.get("metrics", {}),
+        timestamp=result.get("timestamp", ""),
+        dataset_size=result.get("dataset_size", 0),
+        latency_ms=round(latency_ms, 2),
+        result_path=result.get("saved_to"),
+    )
+
+
+@router.get("/eval/results", response_model=list[EvalFileListing])
+async def list_eval_results(
+    current_user=Depends(get_current_user),
+) -> list[EvalFileListing]:
+    """List recent evaluation results from data/eval_results/.
+
+    Requires JWT auth. Returns empty list if no results exist.
+    """
+    results_dir = Path("data/eval_results")
+    if not results_dir.exists():
+        return []
+
+    listings: list[EvalFileListing] = []
+    for fpath in sorted(results_dir.glob("eval_*.json"), reverse=True):
+        try:
+            with open(fpath, encoding="utf-8") as fh:
+                data = json.load(fh)
+            listings.append(
+                EvalFileListing(
+                    filename=fpath.name,
+                    timestamp=data.get("timestamp", ""),
+                    verdict=data.get("verdict", "unknown"),
+                    dataset_size=data.get("dataset_size", 0),
+                )
+            )
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return listings
+
+
+@router.get("/traces", response_model=TracesStatusResponse)
+async def get_traces(
+    request: Request,
+    current_user=Depends(get_current_user),
+) -> TracesStatusResponse:
+    """Return Langfuse tracing status for observability diagnostics.
+
+    Checks whether the Langfuse client was successfully initialized
+    during app startup. Returns host and enabled flag.
+    """
+    settings = get_settings()
+    langfuse_client = getattr(request.app.state, "langfuse_client", None)
+
+    if langfuse_client is not None:
+        return TracesStatusResponse(
+            langfuse_enabled=True,
+            host=settings.LANGFUSE_HOST,
+            message="Langfuse tracing is active.",
+        )
+
+    return TracesStatusResponse(
+        langfuse_enabled=False,
+        host=None,
+        message="Langfuse not configured — set LANGFUSE_* env vars",
+    )
+
+
+@router.get("/fairness", response_model=FairnessSummaryResponse)
+async def get_fairness(
+    current_user=Depends(get_current_user),
+) -> FairnessSummaryResponse:
+    """Return fairness audit summary for social impact diagnostics.
+
+    Reads all JSONL snapshots from data/fairness_audit/ and returns
+    total_audits count, latest timestamp, and aggregated local_factor
+    distribution with buckets, mean, and count.
+    """
+    _admin_file = Path(__file__).resolve()
+    _project_root = _admin_file.parents[3]
+    audit_dir = _project_root / "data" / "fairness_audit"
+
+    if not audit_dir.exists():
+        return FairnessSummaryResponse(
+            total_audits=0,
+            latest_timestamp=None,
+            local_factor_distribution=None,
+            message="No fairness audits recorded yet",
+        )
+
+    audit_files = sorted(audit_dir.glob("*.jsonl"))
+    if not audit_files:
+        return FairnessSummaryResponse(
+            total_audits=0,
+            latest_timestamp=None,
+            local_factor_distribution=None,
+            message="No fairness audits recorded yet",
+        )
+
+    # Aggregate across all audit files
+    all_local_factors: list[float] = []
+    latest_timestamp: str | None = None
+
+    for fpath in audit_files:
+        try:
+            with open(fpath, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    ts = record.get("timestamp")
+                    if ts and (latest_timestamp is None or ts > latest_timestamp):
+                        latest_timestamp = ts
+                    # Collect individual local_factors if present as list
+                    local_factors = record.get("local_factors")
+                    if isinstance(local_factors, list) and local_factors:
+                        all_local_factors.extend(float(lf) for lf in local_factors)
+                    elif "local_factor" in record:
+                        all_local_factors.append(float(record["local_factor"]))
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+
+    total_audits = len(audit_files)
+
+    if not all_local_factors:
+        return FairnessSummaryResponse(
+            total_audits=total_audits,
+            latest_timestamp=latest_timestamp,
+            local_factor_distribution=None,
+            message="No local_factor data found in audit files",
+        )
+
+    # Compute aggregate distribution
+    count = len(all_local_factors)
+    mean_val = sum(all_local_factors) / count
+    buckets = _bucket_local_factors_aggregate(all_local_factors)
+
+    local_factor_dist = {
+        "buckets": buckets,
+        "mean": round(mean_val, 4),
+        "count": count,
+    }
+
+    return FairnessSummaryResponse(
+        total_audits=total_audits,
+        latest_timestamp=latest_timestamp,
+        local_factor_distribution=local_factor_dist,
+        message=None,
+    )
+
+
+def _bucket_local_factors_aggregate(local_factors: list[float]) -> dict[str, int]:
+    """Bucket local_factor values into the plan-specified distribution ranges."""
+    buckets: dict[str, int] = {
+        "<0.1": 0,
+        "0.1-0.3": 0,
+        "0.3-0.5": 0,
+        ">0.5": 0,
+    }
+    for lf in local_factors:
+        if lf < 0.1:
+            buckets["<0.1"] += 1
+        elif lf < 0.3:
+            buckets["0.1-0.3"] += 1
+        elif lf < 0.5:
+            buckets["0.3-0.5"] += 1
+        else:
+            buckets[">0.5"] += 1
+    return buckets

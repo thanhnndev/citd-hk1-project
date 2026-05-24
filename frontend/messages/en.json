@@ -307,7 +307,19 @@
     "placeResultsHeading": "Recommended Places",
     "viewOnMap": "View on Map",
     "scoreLabel": "Score",
-    "noRating": "No rating"
+    "noRating": "No rating",
+    "welcomeGreeting": "Hello! I'm your Ham Ninh AI Guide",
+    "welcomeSubtitle": "Ask me anything about Ham Ninh's culture, history, food, and places.",
+    "newConversation": "New conversation",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "retryMessage": "Retry",
+    "prompts": [
+      "What is the history of Ham Ninh fishing village?",
+      "Recommend local seafood restaurants",
+      "How do I get to Ham Ninh from Duong Dong?",
+      "What cultural festivals happen in Ham Ninh?"
+    ]
   },
   "Map": {
     "title": "Ham Ninh Place Proof Map",

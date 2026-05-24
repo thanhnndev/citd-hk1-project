@@ -307,7 +307,19 @@
     "placeResultsHeading": "Địa điểm gợi ý",
     "viewOnMap": "Xem trên Bản đồ",
     "scoreLabel": "Điểm số",
-    "noRating": "Chưa có đánh giá"
+    "noRating": "Chưa có đánh giá",
+    "welcomeGreeting": "Xin chào! Tôi là Hướng dẫn viên AI Hàm Ninh",
+    "welcomeSubtitle": "Hãy hỏi tôi bất cứ điều gì về văn hóa, lịch sử, ẩm thực và địa điểm ở Hàm Ninh.",
+    "newConversation": "Cuộc trò chuyện mới",
+    "copy": "Sao chép",
+    "copied": "Đã sao chép!",
+    "retryMessage": "Thử lại",
+    "prompts": [
+      "Lịch sử làng chài Hàm Ninh như thế nào?",
+      "Gợi ý nhà hàng hải sản địa phương",
+      "Tôi đến Hàm Ninh từ Dương Đông như thế nào?",
+      "Hàm Ninh có lễ hội văn hóa nào?"
+    ]
   },
   "Map": {
     "title": "Bản đồ kiểm chứng địa điểm Hàm Ninh",

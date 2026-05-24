@@ -48,7 +48,7 @@ export function AlgorithmShowcase({ eyebrow, heading, body, chart, steps }: Algo
                       <span className="font-semibold tabular-nums text-primary">{percentage}%</span>
                     </div>
                     <div className="h-3 overflow-hidden rounded-full bg-muted">
-                      <div className="h-full rounded-full bg-primary" style={{ width: `${percentage}%` }} />
+                      <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${percentage}%` }} />
                     </div>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">{bar.description}</p>
                   </div>
@@ -60,7 +60,7 @@ export function AlgorithmShowcase({ eyebrow, heading, body, chart, steps }: Algo
 
         <div className="grid gap-4 sm:grid-cols-2">
           {steps.map((step, index) => (
-            <Card key={step.title} className="bg-background/70">
+            <Card key={step.title} className="bg-background/70 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
               <CardContent className="space-y-4">
                 <span className="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
                   {index + 1}

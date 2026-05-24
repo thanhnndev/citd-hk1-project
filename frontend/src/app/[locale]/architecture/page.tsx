@@ -60,9 +60,9 @@ function CardGrid({ cards, icons }: { cards: CardEntry[]; icons: string[] }) {
       {cards.map((card, i) => {
         const Icon = iconMap[icons[i] ?? 'ArrowRight'];
         return (
-          <Card key={card.title} className="relative">
+          <Card key={card.title} className="relative transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
             <CardHeader>
-              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary group-hover:scale-110 transition-transform">
                 <Icon className="h-5 w-5" />
               </div>
               <CardTitle>{card.title}</CardTitle>

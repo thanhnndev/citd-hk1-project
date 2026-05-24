@@ -12,6 +12,8 @@ import os
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import asyncpg
@@ -47,6 +49,7 @@ class AgentState(TypedDict, total=False):
     response: ChatResponse
     fallback_reason: str | None
     intent: str | None
+    langfuse_trace_id: str | None
 
 
 @dataclass
@@ -165,6 +168,9 @@ class AgentService:
         checkpointer: Any | None = None,
         checkpoint_mode: Literal["memory", "postgres", "test"] = "memory",
         place_recommendation_service: Any | None = None,
+        semantic_cache: Any | None = None,
+        embedding_service: Any | None = None,
+        langfuse_client: Any | None = None,
     ) -> None:
         self._retriever = retriever
         self._hybrid_retriever = hybrid_retriever
@@ -173,6 +179,9 @@ class AgentService:
         self._place_recommendation_service = place_recommendation_service
         self._checkpointer = checkpointer or InMemoryAgentCheckpointer()
         self.checkpoint_mode = checkpoint_mode
+        self._semantic_cache = semantic_cache
+        self._embedding_service = embedding_service
+        self._langfuse_client = langfuse_client
         self._graph = self._build_graph()
 
     def _build_graph(self) -> Any | None:
@@ -186,21 +195,211 @@ class AgentService:
         graph.add_edge("answer", END)
         return graph.compile(checkpointer=MemorySaver() if MemorySaver else None)
 
+    # -- Fairness audit logging --
+
+    _FAIRNESS_AUDIT_DIR = Path("data/fairness_audit")
+
+    def _fairness_audit_log(self, *, places: list, trace_id: str | None = None) -> None:
+        """Log local_factor distribution for place recommendations.
+
+        Extracts local_factor from each PlaceResult, computes distribution
+        stats (count, mean, min, max, buckets), and writes a JSON line to
+        data/fairness_audit/{timestamp}.jsonl.
+
+        Wrapped in try/except — audit failure must NOT break recommendation flow.
+        """
+        if not places:
+            return
+
+        try:
+            local_factors = []
+            for place in places:
+                lf = getattr(place, "local_factor", None)
+                if lf is not None:
+                    local_factors.append(float(lf))
+
+            if not local_factors:
+                return
+
+            count = len(local_factors)
+            mean_val = sum(local_factors) / count
+            min_val = min(local_factors)
+            max_val = max(local_factors)
+
+            buckets = self._bucket_local_factors(local_factors)
+
+            audit_record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "trace_id": trace_id,
+                "count": count,
+                "mean": round(mean_val, 4),
+                "min": round(min_val, 4),
+                "max": round(max_val, 4),
+                "local_factors": [round(lf, 4) for lf in local_factors],
+                "distribution": buckets,
+            }
+
+            self._FAIRNESS_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            filepath = self._FAIRNESS_AUDIT_DIR / f"{ts}.jsonl"
+            with open(filepath, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(audit_record, ensure_ascii=False) + "\n")
+
+            logger.info(
+                "fairness_audit.logged",
+                filepath=str(filepath),
+                count=count,
+                mean=round(mean_val, 4),
+            )
+        except Exception as exc:
+            logger.warning(
+                "fairness_audit.error",
+                reason=type(exc).__name__,
+                message="audit failure must not break recommendation flow",
+            )
+
+    @staticmethod
+    def _bucket_local_factors(local_factors: list[float]) -> dict[str, int]:
+        """Bucket local_factor values into distribution ranges."""
+        buckets: dict[str, int] = {
+            "<0.1": 0,
+            "0.1-0.3": 0,
+            "0.3-0.5": 0,
+            ">0.5": 0,
+        }
+        for lf in local_factors:
+            if lf < 0.1:
+                buckets["<0.1"] += 1
+            elif lf < 0.3:
+                buckets["0.1-0.3"] += 1
+            elif lf < 0.5:
+                buckets["0.3-0.5"] += 1
+            else:
+                buckets[">0.5"] += 1
+        return buckets
+
+    def _start_langfuse_span(
+        self,
+        *,
+        trace_id: str,
+        name: str,
+        as_type: str = "span",
+        input_data: dict | None = None,
+    ) -> Any | None:
+        """Create a Langfuse observation span, gracefully degrading on error.
+
+        Returns the span object or None if Langfuse is unavailable.
+        All Langfuse calls are wrapped in try/except — Langfuse down means
+        silently dropped with a structlog warning only.
+        """
+        if self._langfuse_client is None:
+            return None
+        try:
+            from langfuse.types import TraceContext
+
+            span = self._langfuse_client.start_observation(
+                trace_context=TraceContext(trace_id=trace_id),
+                name=name,
+                as_type=as_type,  # type: ignore[arg-type]
+                input=input_data,
+            )
+            logger.info("langfuse.span_started", trace_id=trace_id, name=name)
+            return span
+        except Exception as exc:
+            logger.warning(
+                "langfuse.error",
+                operation="start_observation",
+                name=name,
+                reason=type(exc).__name__,
+            )
+            return None
+
+    def _end_langfuse_span(
+        self,
+        span: Any | None,
+        *,
+        trace_id: str,
+        name: str,
+        output_data: dict | None = None,
+    ) -> None:
+        """End a Langfuse span with output metadata, gracefully degrading."""
+        if span is None:
+            return
+        try:
+            if output_data:
+                span.update(output=output_data)
+            span.end()
+            logger.info("langfuse.span_ended", trace_id=trace_id, name=name)
+        except Exception as exc:
+            logger.warning(
+                "langfuse.error",
+                operation="end_observation",
+                name=name,
+                reason=type(exc).__name__,
+            )
+
     async def answer(self, *, session_id: str, message: str, language: str = "vi") -> ChatResponse:
         """Return a grounded ChatResponse and persist the turn for the session."""
         t0 = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
-        logger.info(
-            "agent.graph_start",
-            session_id=session_id,
-            checkpoint_mode=self.checkpoint_mode,
-            stream=False,
-            history_turns=len(state.get("history", [])) // 2,
+
+        # -- Langfuse trace creation --
+        trace_id: str | None = None
+        if self._langfuse_client is not None:
+            try:
+                trace_id = self._langfuse_client.create_trace_id(seed=session_id)
+                state["langfuse_trace_id"] = trace_id
+                logger.info("langfuse.trace_created", trace_id=trace_id, session_id=session_id)
+            except Exception as exc:
+                logger.warning(
+                    "langfuse.error",
+                    operation="create_trace_id",
+                    reason=type(exc).__name__,
+                )
+
+        # -- Retrieve node with span --
+        retrieve_span = self._start_langfuse_span(
+            trace_id=trace_id or "",
+            name="retrieve",
+            as_type="retriever",
+            input_data={"query": state["retrieval_query"]},
         )
         state = await self._retrieve_node(state)
+        self._end_langfuse_span(
+            retrieve_span,
+            trace_id=trace_id or "",
+            name="retrieve",
+            output_data={
+                "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
+                "retrieval_count": len(state.get("chunks", [])),
+            },
+        )
+
+        # -- Answer node with span --
+        answer_span = self._start_langfuse_span(
+            trace_id=trace_id or "",
+            name="answer",
+            input_data={"chunks_count": len(state.get("chunks", []))},
+        )
         state = await self._answer_node(state)
         response = state["response"]
+        self._end_langfuse_span(
+            answer_span,
+            trace_id=trace_id or "",
+            name="answer",
+            output_data={
+                "response_length": len(response.message),
+                "fallback": response.fallback,
+                "citation_count": len(response.citations),
+            },
+        )
+
         await self._save_turn(session_id, message, response.message)
+
+        # -- Attach trace_id to response --
+        if trace_id is not None:
+            response.langfuse_trace_id = trace_id
+
         logger.info(
             "agent.graph_end",
             session_id=session_id,
@@ -208,6 +407,7 @@ class AgentService:
             fallback=response.fallback,
             fallback_reason=state.get("fallback_reason"),
             latency_ms=round((time.perf_counter() - t0) * 1000, 3),
+            langfuse_trace_id=trace_id,
         )
         return response
 
@@ -216,7 +416,39 @@ class AgentService:
     ) -> AsyncGenerator[str, None]:
         """Yield answer tokens, then a citations marker and DONE marker."""
         state = await self._initial_state(session_id, message, language)
+
+        # -- Langfuse trace creation --
+        trace_id: str | None = None
+        if self._langfuse_client is not None:
+            try:
+                trace_id = self._langfuse_client.create_trace_id(seed=session_id)
+                state["langfuse_trace_id"] = trace_id
+                logger.info("langfuse.trace_created", trace_id=trace_id, session_id=session_id)
+            except Exception as exc:
+                logger.warning(
+                    "langfuse.error",
+                    operation="create_trace_id",
+                    reason=type(exc).__name__,
+                )
+
+        # -- Retrieve node with span --
+        retrieve_span = self._start_langfuse_span(
+            trace_id=trace_id or "",
+            name="retrieve",
+            as_type="retriever",
+            input_data={"query": state["retrieval_query"]},
+        )
         state = await self._retrieve_node(state)
+        self._end_langfuse_span(
+            retrieve_span,
+            trace_id=trace_id or "",
+            name="retrieve",
+            output_data={
+                "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
+                "retrieval_count": len(state.get("chunks", [])),
+            },
+        )
+
         answer_text = ""
         citations = state.get("citations", [])
         fallback_reason: str | None = None
@@ -228,7 +460,23 @@ class AgentService:
             retrieval_count=len(citations),
         )
         if self._is_place_intent(state):
+            # -- Place recommendation span --
+            place_span = self._start_langfuse_span(
+                trace_id=trace_id or "",
+                name="place_recommendation",
+                as_type="tool",
+                input_data={"query": state["message"]},
+            )
             response = await self._answer_place_intent(state)
+            self._end_langfuse_span(
+                place_span,
+                trace_id=trace_id or "",
+                name="place_recommendation",
+                output_data={
+                    "result_count": len(response.places),
+                    "fallback": response.fallback,
+                },
+            )
             answer_text = response.message
             citations = response.citations
             yield answer_text
@@ -239,6 +487,12 @@ class AgentService:
                 fallback=response.fallback,
             )
         elif self._llm_service is not None:
+            # -- Answer span for streaming --
+            answer_span = self._start_langfuse_span(
+                trace_id=trace_id or "",
+                name="answer",
+                input_data={"chunks_count": len(state.get("chunks", []))},
+            )
             try:
                 async for token in self._llm_service.answer_stream(
                     chunks=state.get("chunks", []),
@@ -252,6 +506,15 @@ class AgentService:
             except Exception as exc:
                 fallback_reason = type(exc).__name__
                 logger.warning("agent.answer_fallback", session_id=session_id, fallback_reason=fallback_reason)
+            self._end_langfuse_span(
+                answer_span,
+                trace_id=trace_id or "",
+                name="answer",
+                output_data={
+                    "response_length": len(answer_text),
+                    "fallback": fallback_reason is not None,
+                },
+            )
 
         if not answer_text:
             response = await self._compose_fallback(state, fallback_reason or "llm_unavailable")
@@ -262,7 +525,12 @@ class AgentService:
         await self._save_turn(session_id, message, answer_text)
         yield f"[CITATIONS] {json.dumps([c.model_dump() for c in citations], ensure_ascii=False)}"
         yield "[DONE]"
-        logger.info("agent.stream_complete", session_id=session_id, fallback_reason=fallback_reason)
+        logger.info(
+            "agent.stream_complete",
+            session_id=session_id,
+            fallback_reason=fallback_reason,
+            langfuse_trace_id=trace_id,
+        )
 
 
     async def stream(
@@ -292,6 +560,51 @@ class AgentService:
 
     async def _retrieve_node(self, state: AgentState) -> AgentState:
         query = state["retrieval_query"]
+
+        # -- Semantic cache check (optional, graceful degradation) --
+        cache_hit_response: str | None = None
+        if self._semantic_cache is not None and self._embedding_service is not None:
+            try:
+                query_embedding = await self._embedding_service.embed_texts([query])
+                if query_embedding and len(query_embedding) > 0:
+                    embedding = query_embedding[0]
+                    cache_hit_response = await self._semantic_cache.lookup(
+                        query, embedding
+                    )
+            except Exception as exc:
+                # Cache failure must NOT break retrieval
+                logger.warning(
+                    "agent.semantic_cache_lookup_failed",
+                    session_id=state["session_id"],
+                    reason=type(exc).__name__,
+                )
+
+        if cache_hit_response is not None:
+            # Cache hit — use cached response text directly
+            state["citations"] = []
+            # Build a synthetic chunk from cached response for downstream use
+            from app.models.rag import RAGChunk
+            state["chunks"] = [RAGChunk(
+                chunk_id="cache_hit",
+                source_id="semantic_cache",
+                title="Semantic Cache Hit",
+                url="",
+                domain="cache",
+                source_type="cache",
+                reliability="low",
+                language="unknown",
+                location="",
+                text=cache_hit_response,
+                chunk_index=0,
+                total_chunks=1,
+            )]
+            logger.info(
+                "agent.cache_hit",
+                session_id=state["session_id"],
+            )
+            return state
+
+        # -- Normal retrieval path --
         try:
             if self._hybrid_retriever is not None:
                 result, citations = await self._hybrid_retriever.search_with_citations(query, top_k=5)
@@ -312,6 +625,24 @@ class AgentService:
 
         state["chunks"] = result.chunks
         state["citations"] = citations
+
+        # -- Store in semantic cache on miss (best-effort) --
+        if self._semantic_cache is not None and self._embedding_service is not None and result.chunks:
+            try:
+                response_text = " ".join(c.text for c in result.chunks)
+                query_embedding = await self._embedding_service.embed_texts([query])
+                if query_embedding and len(query_embedding) > 0:
+                    await self._semantic_cache.store(
+                        query, query_embedding[0], response_text
+                    )
+            except Exception as exc:
+                # Cache store failure must NOT break retrieval
+                logger.warning(
+                    "agent.semantic_cache_store_failed",
+                    session_id=state["session_id"],
+                    reason=type(exc).__name__,
+                )
+
         logger.info(
             "agent.node_complete",
             phase="retrieve",
@@ -384,11 +715,17 @@ class AgentService:
                 fallback=True,
             )
         try:
-            return await self._place_recommendation_service.recommend(
+            response = await self._place_recommendation_service.recommend(
                 query=state["message"],
                 language=state["language"],
                 session_id=state["session_id"],
             )
+            # Log fairness audit for place recommendations (best-effort, never breaks flow)
+            self._fairness_audit_log(
+                places=response.places,
+                trace_id=state.get("langfuse_trace_id"),
+            )
+            return response
         except Exception as exc:  # noqa: BLE001 - service boundary must fail closed.
             state["fallback_reason"] = "place_recommendation_error"
             logger.warning(

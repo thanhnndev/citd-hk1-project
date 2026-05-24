@@ -43,6 +43,10 @@ google-maps-places==0.8.0
 bcrypt==4.3.0
 python-jose[cryptography]==3.4.0
 
+# RAGAS Evaluation
+ragas==0.4.3
+
 # Testing
 pytest>=8.0
 pytest-asyncio>=0.24
+fakeredis

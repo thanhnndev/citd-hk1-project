@@ -205,6 +205,101 @@ class EmbedResponse(BaseModel):
     latency_ms: float = Field(description="Total embed+upsert latency in milliseconds")
 
 
+class EvalTriggerRequest(BaseModel):
+    """Request body for POST /admin/eval/trigger."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "dataset_path": "data/eval_dataset.jsonl",
+                    "metrics": ["faithfulness", "answer_relevancy"],
+                }
+            ]
+        }
+    )
+
+    dataset_path: str | None = Field(
+        default=None,
+        description="Path to eval dataset JSONL. Defaults to data/eval_dataset.jsonl.",
+    )
+    metrics: list[str] | None = Field(
+        default=None,
+        description="Metric names to compute. Defaults to all four.",
+    )
+
+
+class EvalResultResponse(BaseModel):
+    """Response body for evaluation results."""
+
+    verdict: str = Field(
+        description="Evaluation verdict: completed, credential_blocked, or failed.",
+    )
+    metrics: dict = Field(
+        default_factory=dict,
+        description="Evaluation metrics dict (empty when blocked).",
+    )
+    timestamp: str = Field(
+        description="ISO-8601 timestamp of the evaluation.",
+    )
+    dataset_size: int = Field(
+        default=0,
+        description="Number of questions evaluated.",
+    )
+    latency_ms: float = Field(
+        default=0.0,
+        description="Evaluation latency in milliseconds.",
+    )
+    result_path: str | None = Field(
+        default=None,
+        description="Filesystem path to the persisted result JSON.",
+    )
+
+
+class EvalFileListing(BaseModel):
+    """Single entry in GET /admin/eval/results response."""
+
+    filename: str = Field(description="Result filename.")
+    timestamp: str = Field(description="ISO-8601 timestamp from result content.")
+    verdict: str = Field(description="Evaluation verdict.")
+    dataset_size: int = Field(description="Number of questions evaluated.")
+
+
+class TracesStatusResponse(BaseModel):
+    """Response body for GET /admin/traces."""
+
+    langfuse_enabled: bool = Field(
+        description="Whether Langfuse tracing is active.",
+    )
+    host: str | None = Field(
+        default=None,
+        description="Langfuse host URL when enabled.",
+    )
+    message: str = Field(
+        description="Human-readable status message.",
+    )
+
+
+class FairnessSummaryResponse(BaseModel):
+    """Response body for GET /admin/fairness."""
+
+    total_audits: int = Field(
+        description="Total number of fairness audit snapshots on disk.",
+    )
+    latest_timestamp: str | None = Field(
+        default=None,
+        description="ISO-8601 timestamp of the most recent audit entry.",
+    )
+    local_factor_distribution: dict | None = Field(
+        default=None,
+        description="Aggregated distribution with buckets, mean, and count.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Human-readable message when no audits exist.",
+    )
+
+
 class ChatResponse(BaseModel):
     """
     Response body for the chat endpoint.

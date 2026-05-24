@@ -27,9 +27,9 @@ export function ProblemSection({ eyebrow, heading, body, cards }: ProblemSection
           const Icon = icons[index % icons.length];
 
           return (
-            <Card key={card.title} className="h-full bg-background/70">
+            <Card key={card.title} className="h-full bg-background/70 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
               <CardHeader>
-                <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+                <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-destructive/10 text-destructive transition-colors duration-300">
                   <Icon aria-hidden="true" className="size-5" />
                 </div>
                 <CardTitle className="text-xl leading-7">{card.title}</CardTitle>

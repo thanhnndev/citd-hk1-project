@@ -67,7 +67,7 @@ export function HeroSection({
             </div>
             <div className="grid gap-3">
               {trustBadges.map((badge) => (
-                <div key={badge.label} className="rounded-xl border bg-background/60 p-4">
+                <div key={badge.label} className="rounded-xl border bg-background/60 p-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
                   <p className="font-semibold text-foreground">{badge.label}</p>
                   <p className="mt-1 text-sm leading-6 text-muted-foreground">{badge.description}</p>
                 </div>

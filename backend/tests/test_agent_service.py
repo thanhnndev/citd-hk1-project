@@ -294,3 +294,215 @@ async def test_checkpoint_factory_returns_postgres_contract_when_asyncpg_connect
     assert isinstance(checkpointer, PostgresAgentCheckpointer)
     assert pool.conn.executed
     assert await checkpointer.load_history("empty") == []
+
+
+# ---------------------------------------------------------------------------
+# Semantic cache integration tests
+# ---------------------------------------------------------------------------
+
+class FakeEmbeddingService:
+    """Stub embedding service that returns deterministic embeddings."""
+
+    def __init__(self, dimension: int = 1536):
+        self.dimension = dimension
+        self.embed_calls: list[str] = []
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.embed_calls.extend(texts)
+        # Simple deterministic embedding: hash-based vector
+        result = []
+        for text in texts:
+            vec = [0.0] * self.dimension
+            h = hash(text) % self.dimension
+            vec[h] = 1.0
+            result.append(vec)
+        return result
+
+
+class FakeSemanticCache:
+    """Stub semantic cache that tracks calls without needing Redis."""
+
+    def __init__(self, hit_response: str | None = None):
+        self.hit_response = hit_response
+        self.lookup_calls: list[tuple[str, list[float]]] = []
+        self.store_calls: list[tuple[str, list[float], str]] = []
+
+    async def lookup(self, query: str, query_embedding: list[float]) -> str | None:
+        self.lookup_calls.append((query, query_embedding))
+        return self.hit_response
+
+    async def store(
+        self, query: str, query_embedding: list[float], response: str
+    ) -> None:
+        self.store_calls.append((query, query_embedding, response))
+
+
+@pytest.mark.asyncio
+async def test_agent_uses_semantic_cache_on_hit(ham_ninh_chunk):
+    """When semantic cache hits, retrieval uses cached response directly."""
+    cache = FakeSemanticCache(hit_response="Cached: Ham Ninh is a fishing village.")
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=cache,
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "cache-hit-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # Cache was queried
+    assert len(cache.lookup_calls) == 1
+    # Cache hit returned synthetic chunk from cached text
+    assert len(result_state["chunks"]) == 1
+    assert result_state["chunks"][0].source_type == "cache"
+    # Real retriever should NOT have been called (cache hit short-circuits)
+    assert len(retriever.queries) == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_stores_in_semantic_cache_on_miss(ham_ninh_chunk):
+    """When semantic cache misses, retrieval proceeds and result is stored."""
+    cache = FakeSemanticCache(hit_response=None)  # Always miss
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=cache,
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "cache-miss-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # Cache was queried (miss)
+    assert len(cache.lookup_calls) == 1
+    # Cache was stored with the retrieval result
+    assert len(cache.store_calls) == 1
+    stored_query, stored_embedding, stored_response = cache.store_calls[0]
+    assert stored_query == "lang chai Ham Ninh"
+    assert "Ham Ninh" in stored_response
+    # Real retriever was called
+    assert len(retriever.queries) == 1
+    # Chunks came from real retriever
+    assert len(result_state["chunks"]) == 1
+    assert result_state["chunks"][0].source_type == "guide"
+
+
+@pytest.mark.asyncio
+async def test_agent_retrieval_not_broken_when_cache_fails(ham_ninh_chunk):
+    """Cache failure must NOT break the retrieval path."""
+    class BrokenCache:
+        async def lookup(self, query, embedding):
+            raise ConnectionError("Redis is down")
+
+        async def store(self, query, embedding, response):
+            raise ConnectionError("Redis is down")
+
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=BrokenCache(),
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "cache-broken-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    # Should not raise — cache failure is caught
+    result_state = await svc._retrieve_node(state)
+
+    # Retrieval still returned real chunks
+    assert len(result_state["chunks"]) == 1
+    assert result_state["chunks"][0].source_type == "guide"
+
+
+@pytest.mark.asyncio
+async def test_agent_skips_cache_when_not_configured(ham_ninh_chunk):
+    """Without semantic_cache, retrieval works normally (no cache calls)."""
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        # No semantic_cache
+    )
+
+    state = {
+        "session_id": "no-cache-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # Retrieval worked normally
+    assert len(result_state["chunks"]) == 1
+    assert len(retriever.queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_skips_store_when_no_chunks_returned():
+    """When retrieval returns empty results, cache store is skipped."""
+    cache = FakeSemanticCache(hit_response=None)
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([])  # Empty retriever
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=cache,
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "empty-session",
+        "message": "khong-co-du-lieu",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "khong-co-du-lieu",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # No chunks returned
+    assert len(result_state["chunks"]) == 0
+    # Cache store was NOT called (nothing to store)
+    assert len(cache.store_calls) == 0
+    # But lookup was attempted
+    assert len(cache.lookup_calls) == 1

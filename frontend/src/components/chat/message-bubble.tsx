@@ -2,6 +2,8 @@
 
 import { CitationCard } from "./citation-card";
 import { PlaceCard } from "./place-card";
+import { MessageActions } from "./message-actions";
+import { AccessibilityBadge } from "@/components/reasoning/accessibility-badge";
 import type { Citation, PlaceResult } from "@/lib/chat-api";
 
 interface MessageBubbleProps {
@@ -10,12 +12,17 @@ interface MessageBubbleProps {
   citations?: Citation[];
   places?: PlaceResult[];
   typingLabel?: string;
+  guardrailStatus?: string;
+  fallback?: boolean;
+  langfuseTraceId?: string | null;
+  cacheHit?: boolean;
   placeTranslations?: {
     placeResultsHeading: string;
     viewOnMap: string;
     scoreLabel: string;
     noRating: string;
   };
+  onRetry?: () => void;
 }
 
 export function MessageBubble({
@@ -24,14 +31,20 @@ export function MessageBubble({
   citations,
   places,
   typingLabel = "Thinking...",
+  guardrailStatus,
+  fallback,
+  langfuseTraceId,
+  cacheHit,
   placeTranslations,
+  onRetry,
 }: MessageBubbleProps) {
   const isUser = role === "user";
+  const isStreaming = !content;
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} animate-slideUp`}>
       <div
-        className={`max-w-[85%] md:max-w-[75%] rounded-2xl px-4 py-3 ${
+        className={`group relative max-w-[85%] md:max-w-[75%] rounded-2xl px-4 py-3 ${
           isUser
             ? "bg-primary text-primary-foreground rounded-br-sm"
             : "bg-muted rounded-bl-sm"
@@ -43,9 +56,28 @@ export function MessageBubble({
             <span className="inline-flex gap-1 items-center">
               <TypingDots />
               <span className="ml-1 text-xs text-muted-foreground">{typingLabel}</span>
+              {/* Streaming cursor */}
+              <span className="inline-block w-0.5 h-4 bg-primary animate-blink ml-0.5" aria-hidden="true" />
             </span>
           )}
         </div>
+
+        {/* Message actions — hover-revealed for assistant messages with content */}
+        {!isUser && !isStreaming && content && (
+          <div className="absolute -right-1 -bottom-1 translate-x-full translate-y-1/2">
+            <MessageActions content={content} onRetry={onRetry} />
+          </div>
+        )}
+
+        {/* Accessibility badges — only for assistant messages with status info */}
+        {!isUser && (guardrailStatus || fallback || langfuseTraceId || cacheHit) && (
+          <AccessibilityBadge
+            guardrailStatus={guardrailStatus}
+            fallback={fallback}
+            langfuseTraceId={langfuseTraceId}
+            cacheHit={cacheHit}
+          />
+        )}
 
         {/* Citations — only for assistant messages */}
         {!isUser && citations && citations.length > 0 && (
