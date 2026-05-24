@@ -4,26 +4,34 @@
 # Quick start:
 #   make setup    # copy .env.example → .env
 #   make up       # start all services, wait for health
-#   make test     # verify health endpoints
+#   make test     # run all unit + integration tests
 #   make down     # stop services (keep volumes)
 # ============================================================
 
 BACKEND_URL ?= http://localhost:48721
 HEALTH_TIMEOUT ?= 60
 HEALTH_INTERVAL ?= 3
+PYTHON ?= python
+PYTEST_FLAGS ?= -v --tb=short
 
-.PHONY: setup up down test logs restart clean status help
+# PYTHONPATH must include root (for agents.*) and backend (for app.*)
+export PYTHONPATH := .:backend
 
-# Default target
+.PHONY: setup up down test test-all test-backend test-agents \
+        test-unit test-integration logs restart clean status help \
+        install install-backend install-agents lint format infra-test
+
+# ── Default target ──────────────────────────────────────────
 help: ## Show available targets with descriptions
 	@echo "Ham Ninh AI — Development Makefile"
 	@echo ""
 	@echo "Usage:"
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) \
 		| sort \
-		| awk 'BEGIN { FS = ":.*##" }; { printf "  \033[36m%-10s\033[0m  %s\n", $$1, $$2 }'
+		| awk 'BEGIN { FS = ":.*##" }; { printf "  \033[36m%-18s\033[0m  %s\n", $$1, $$2 }'
 	@echo ""
 
+# ── Environment ─────────────────────────────────────────────
 setup: ## Copy .env.example to .env if .env doesn't exist
 	@if [ ! -f .env ]; then \
 		cp .env.example .env; \
@@ -37,6 +45,7 @@ setup: ## Copy .env.example to .env if .env doesn't exist
 		echo ".env already exists — skipping setup"; \
 	fi
 
+# ── Infrastructure ──────────────────────────────────────────
 up: ## Start all services and wait for backend /health/ready
 	@if [ ! -f .env ]; then \
 		echo "ERROR: .env not found. Run \`make setup\` first."; \
@@ -69,10 +78,6 @@ down: ## Stop all services (keeps volumes)
 	docker compose down
 	@echo "Services stopped."
 
-test: ## Run health check script against running services
-	@echo "Running health checks..."
-	./scripts/check-health.sh
-
 logs: ## Tail backend service logs
 	docker compose logs -f backend
 
@@ -90,3 +95,55 @@ clean: ## Stop all services and remove volumes (DATA LOSS WARNING)
 status: ## Show running services and their health state
 	@echo "Service status:"
 	docker compose ps
+
+infra-test: ## Run HTTP health checks against running services
+	@echo "Running health checks..."
+	./scripts/check-health.sh
+
+# ── Dependencies ────────────────────────────────────────────
+install-backend: ## Install backend Python dependencies
+	$(PYTHON) -m pip install -r backend/requirements.txt
+
+install-agents: ## Install agents Python dependencies
+	$(PYTHON) -m pip install -r agents/requirements.txt
+
+install: install-backend install-agents ## Install all Python dependencies
+
+# ── Testing ─────────────────────────────────────────────────
+test-backend: ## Run backend unit tests (excludes @integration, PYTHONPATH=. backend)
+	@echo "Running backend tests..."
+	$(PYTHON) -m pytest backend/tests/ -m "not integration" $(PYTEST_FLAGS)
+
+test-agents: ## Run agents module tests
+	@echo "Running agents tests..."
+	$(PYTHON) -m pytest agents/ $(PYTEST_FLAGS)
+
+test-unit: test-backend test-agents ## Run all unit tests (offline, no infra)
+
+test-integration: ## Run integration tests (requires live services)
+	@echo "Running integration tests..."
+	$(PYTHON) -m pytest backend/tests/ -m integration $(PYTEST_FLAGS)
+
+test-all: test-unit infra-test ## Run unit tests + infra health checks
+
+# Alias: "make test" runs everything (unit + infra)
+test: test-all ## Run all tests (unit + health checks)
+
+# ── Lint & Format ──────────────────────────────────────────
+lint: ## Lint Python code (ruff or flake8 if available)
+	@echo "Linting Python code..."
+	@if command -v ruff >/dev/null 2>&1; then \
+		ruff check backend/ agents/ scripts/; \
+	else \
+		echo "ruff not installed — install with: pip install ruff"; \
+		exit 1; \
+	fi
+
+format: ## Format Python code (ruff or black if available)
+	@echo "Formatting Python code..."
+	@if command -v ruff >/dev/null 2>&1; then \
+		ruff format backend/ agents/ scripts/; \
+	else \
+		echo "ruff not installed — install with: pip install ruff"; \
+		exit 1; \
+	fi

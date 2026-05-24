@@ -289,7 +289,7 @@ async def test_checkpoint_factory_returns_postgres_contract_when_asyncpg_connect
         assert kwargs["max_size"] == 5
         return pool
 
-    monkeypatch.setattr("app.services.agent_service.asyncpg.create_pool", fake_create_pool)
+    monkeypatch.setattr("agents.graph.agent_service.asyncpg.create_pool", fake_create_pool)
 
     checkpointer, mode = await create_agent_checkpointer("postgresql://user:secret@example.test/db")
 
