@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request, status, Depends
 from app.core.logging import get_logger
 from app.core.config import get_settings
 from app.models.response import (
+    AdminStatsResponse,
     EmbedResponse,
     EvalTriggerRequest,
     EvalResultResponse,
@@ -46,7 +47,10 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.post("/embed", response_model=EmbedResponse, status_code=status.HTTP_200_OK)
-async def embed_corpus(request: Request) -> EmbedResponse:
+async def embed_corpus(
+    request: Request,
+    current_user=Depends(get_current_user),
+) -> EmbedResponse:
     """Trigger full corpus ingestion into Qdrant.
 
     Loads the tourism JSONL corpus, embeds all chunks via OpenAI
@@ -437,3 +441,69 @@ def _bucket_local_factors_aggregate(local_factors: list[float]) -> dict[str, int
         else:
             buckets[">0.5"] += 1
     return buckets
+
+
+# ---------------------------------------------------------------------------
+# Stats endpoint — corpus operational visibility
+# ---------------------------------------------------------------------------
+
+@router.get("/stats", response_model=AdminStatsResponse)
+async def get_stats(
+    request: Request,
+    current_user=Depends(get_current_user),
+) -> AdminStatsResponse:
+    """Return corpus operational stats for admin dashboard visibility.
+
+    Requires JWT auth. Reads from app.state for retriever, BM25, hybrid,
+    and Qdrant service status. Returns safe defaults when components are
+    not yet initialized.
+    """
+    retriever = getattr(request.app.state, "retriever", None)
+    bm25 = getattr(request.app.state, "bm25_vectorizer", None)
+    hybrid = getattr(request.app.state, "hybrid_retriever", None)
+    qdrant = getattr(request.app.state, "qdrant_service", None)
+
+    # Retrieve chunk and doc counts from the in-process retriever
+    total_chunks = 0
+    total_docs = 0
+    language_distribution: dict[str, int] = {}
+
+    if retriever is not None:
+        chunks = getattr(retriever, "chunks", [])
+        total_chunks = len(chunks)
+        source_ids = set()
+        lang_counter: dict[str, int] = {}
+        for c in chunks:
+            source_ids.add(getattr(c, "source_id", ""))
+            lang = getattr(c, "language", "unknown")
+            lang_counter[lang] = lang_counter.get(lang, 0) + 1
+        total_docs = len(source_ids)
+        language_distribution = lang_counter
+
+    bm25_vocab_size = 0
+    if bm25 is not None:
+        bm25_vocab_size = getattr(bm25, "vocab_size", 0)
+
+    hybrid_enabled = hybrid is not None
+
+    qdrant_collection_name: str | None = None
+    if qdrant is not None:
+        qdrant_collection_name = getattr(qdrant, "collection_name", None)
+
+    logger.info(
+        "stats.read",
+        user_id=getattr(current_user, "id", "unknown"),
+        total_chunks=total_chunks,
+        total_docs=total_docs,
+        bm25_vocab_size=bm25_vocab_size,
+        hybrid_enabled=hybrid_enabled,
+    )
+
+    return AdminStatsResponse(
+        total_chunks=total_chunks,
+        total_docs=total_docs,
+        language_distribution=language_distribution,
+        bm25_vocab_size=bm25_vocab_size,
+        hybrid_enabled=hybrid_enabled,
+        qdrant_collection_name=qdrant_collection_name,
+    )

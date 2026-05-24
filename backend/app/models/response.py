@@ -300,6 +300,33 @@ class FairnessSummaryResponse(BaseModel):
     )
 
 
+class AdminStatsResponse(BaseModel):
+    """Response body for GET /admin/stats — corpus operational visibility."""
+
+    total_chunks: int = Field(
+        description="Number of chunks in the in-process retriever."
+    )
+    total_docs: int = Field(
+        description="Number of unique source documents in the retriever."
+    )
+    language_distribution: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of chunks per language code (e.g. {'vi': 607}).",
+    )
+    bm25_vocab_size: int = Field(
+        default=0,
+        description="Number of unique terms in the BM25 vectorizer vocabulary.",
+    )
+    hybrid_enabled: bool = Field(
+        default=False,
+        description="Whether hybrid retrieval (Qdrant + BM25) is active.",
+    )
+    qdrant_collection_name: str | None = Field(
+        default=None,
+        description="Active Qdrant collection name, or null if not configured.",
+    )
+
+
 class ChatResponse(BaseModel):
     """
     Response body for the chat endpoint.

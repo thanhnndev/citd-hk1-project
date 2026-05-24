@@ -287,8 +287,8 @@ app.include_router(auth_router)
 # Chat router — requires API key auth
 app.include_router(chat_router, dependencies=[Depends(verify_api_key)])
 
-# Admin router — requires API key auth
-app.include_router(admin_router, dependencies=[Depends(verify_api_key)])
+# Admin router — each endpoint manages its own JWT auth via Depends(get_current_user)
+app.include_router(admin_router)
 
 
 # ── Root endpoint ───────────────────────────────────────────────────────
