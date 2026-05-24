@@ -17,9 +17,6 @@ scikit-learn==1.8.0
 # RAG Evaluation
 ragas==0.4.3
 
-# Input/Output Guardrails
-nemoguardrails==0.17.0
-
 # Observability & Tracing
 langfuse==4.6.1
 

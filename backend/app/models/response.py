@@ -266,3 +266,14 @@ class ChatResponse(BaseModel):
             "by the deterministic fallback path."
         ),
     )
+    guardrail_status: str | None = Field(
+        default=None,
+        description=(
+            "Guardrail verdict: 'pass', 'input_blocked', 'off_topic', "
+            "or 'output_flagged'. None when guardrails are not evaluated."
+        ),
+    )
+    guardrail_reason: str | None = Field(
+        default=None,
+        description="Human-readable reason for the guardrail verdict.",
+    )
