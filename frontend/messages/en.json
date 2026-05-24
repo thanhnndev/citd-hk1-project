@@ -461,6 +461,43 @@
       ]
     }
   },
+  "Admin": {
+    "gate": {
+      "loginRequired": "Login required",
+      "loginPrompt": "Please log in to access the admin dashboard.",
+      "loginButton": "Log in"
+    },
+    "dashboard": {
+      "title": "Admin Dashboard",
+      "corpus": {
+        "title": "Corpus",
+        "noData": "No data available"
+      },
+      "evaluation": {
+        "title": "RAGAS Evaluation",
+        "triggerButton": "Run evaluation",
+        "triggering": "Running...",
+        "lastVerdict": "Last verdict",
+        "noResults": "No evaluation results yet",
+        "error": "Unable to run evaluation"
+      },
+      "traces": {
+        "title": "Langfuse Traces",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "noData": "No trace data",
+        "error": "Unable to load trace status"
+      },
+      "fairness": {
+        "title": "Fairness Audit",
+        "totalAudits": "Total audits",
+        "meanLocalFactor": "Mean local factor",
+        "noData": "No audit data",
+        "error": "Unable to load fairness summary"
+      },
+      "fetchError": "Unable to load data"
+    }
+  },
   "Common": {
     "loading": "Loading...",
     "error": "An error occurred",

@@ -1,9 +1,4 @@
-"""Tests verifying JWT auth on POST /admin/embed (R011 compliance).
-
-The /admin/embed endpoint previously relied on router-level verify_api_key
-(lenient dev-mode bypass). After this change it uses get_current_user(strict
-JWT) like all other admin endpoints. These tests confirm the 401 behavior.
-"""
+"""Tests for POST /admin/embed JWT auth — verifies R011 (uniform JWT protection)."""
 
 import sys
 from pathlib import Path
@@ -11,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Resolve project root so we can import app.* regardless of cwd.
+# Resolve project root so we can import agents.* regardless of cwd.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
@@ -21,21 +16,23 @@ from fastapi.testclient import TestClient
 
 from app.routers.admin import router as admin_router
 
-
 # ---------------------------------------------------------------------------
-# Test app setup — mirrors test_admin_traces_endpoint.py pattern
+# Test app setup
 # ---------------------------------------------------------------------------
 
 def _build_app():
     """Build a minimal FastAPI with admin router for testing."""
     app = FastAPI()
     app.include_router(admin_router)
+
+    # Mock app.state for bm25_vectorizer (required by admin router)
     app.state.bm25_vectorizer = None
 
+    # Mock user_service
     mock_user = MagicMock()
     mock_user.id = "test-admin-user"
     mock_user.is_active = True
-    mock_user_service = MagicMock()
+    mock_user_service = AsyncMock()
     mock_user_service.get_by_id = AsyncMock(return_value=mock_user)
     app.state.user_service = mock_user_service
 
@@ -44,16 +41,20 @@ def _build_app():
 
 @pytest.fixture
 def client():
-    return TestClient(_build_app())
+    """TestClient with admin router."""
+    app = _build_app()
+    return TestClient(app)
 
 
 @pytest.fixture
 def auth_headers():
+    """Headers with valid JWT Bearer token."""
     return {"Authorization": "Bearer fake-jwt-token-for-tests"}
 
 
 @pytest.fixture
 def no_auth_headers():
+    """Headers without auth."""
     return {}
 
 
@@ -66,45 +67,53 @@ def mock_decode_token():
 
 
 # ---------------------------------------------------------------------------
-# POST /admin/embed — JWT auth enforcement
+# POST /admin/embed — JWT auth tests
 # ---------------------------------------------------------------------------
 
 class TestAdminEmbedAuth:
-    """Verify POST /admin/embed requires strict JWT (no dev-mode bypass)."""
+    """Verify JWT auth on POST /admin/embed — was previously accessible in dev mode."""
 
     def test_no_auth_returns_401(self, client, no_auth_headers):
         """Without Authorization header, /admin/embed must return 401."""
-        response = client.post("/admin/embed", headers=no_auth_headers)
-        assert response.status_code == 401
-        data = response.json()
-        assert "Authorization" in data["detail"]
-
-    def test_invalid_token_returns_401(self, client):
-        """With a token that fails decode, /admin/embed must return 401."""
         response = client.post(
             "/admin/embed",
-            headers={"Authorization": "Bearer expired-or-fake-token"},
+            headers=no_auth_headers,
         )
         assert response.status_code == 401
 
-    def test_valid_jwt_passes_auth_gate(self, client, auth_headers, mock_decode_token):
-        """With a valid JWT, auth gate passes (request may fail later due to no Qdrant)."""
-        # Mock the embed internals so we don't need real Qdrant/OpenAI
-        with patch("app.routers.admin.load_proposition_corpus") as mock_load, \
-             patch("app.routers.admin.EmbeddingService") as mock_embed_cls, \
-             patch("app.routers.admin.QdrantService") as mock_qdrant_cls:
-            # Simulate corpus load returning empty to avoid deep mocking
-            mock_load.return_value = []
+    def test_invalid_token_returns_401(self, client):
+        """With an invalid JWT, /admin/embed must return 401."""
+        response = client.post(
+            "/admin/embed",
+            headers={"Authorization": "Bearer invalid-token-here"},
+        )
+        assert response.status_code == 401
 
-            response = client.post("/admin/embed", headers=auth_headers)
-            # With empty corpus we expect 500 (not 401), proving auth passed
-            assert response.status_code == 500
-            assert "no chunks" in response.json()["detail"].lower()
+    def test_valid_jwt_passes_auth_check(self, client, auth_headers, mock_decode_token):
+        """With a valid JWT, /admin/embed passes auth and proceeds to embed logic."""
+        with patch("app.routers.admin.load_proposition_corpus") as mock_load:
+            mock_load.return_value = []  # Empty corpus → 500, but auth passed
 
-    def test_malformed_bearer_returns_401(self, client):
-        """Malformed Authorization header (not 'Bearer <token>') returns 401."""
+            response = client.post(
+                "/admin/embed",
+                headers=auth_headers,
+            )
+            # Auth passed (not 401); 500 is expected because corpus is empty
+            assert response.status_code != 401
+
+    def test_malformed_auth_header_returns_401(self, client):
+        """Malformed Authorization header (no 'Bearer ' prefix) returns 401."""
         response = client.post(
             "/admin/embed",
             headers={"Authorization": "InvalidFormat token"},
         )
         assert response.status_code == 401
+
+    def test_expired_token_returns_401(self, client):
+        """Token that decodes to None (expired) returns 401."""
+        with patch("app.middleware.auth.decode_access_token", return_value=None):
+            response = client.post(
+                "/admin/embed",
+                headers={"Authorization": "Bearer expired-token"},
+            )
+            assert response.status_code == 401

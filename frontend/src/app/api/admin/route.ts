@@ -22,7 +22,7 @@ function buildBackendUrl(request: NextRequest): string {
   return backendUrl.toString();
 }
 
-function isBodyAllowed(method: string): boolean {
+function _isBodyAllowed(method: string): boolean {
   return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
 }
 

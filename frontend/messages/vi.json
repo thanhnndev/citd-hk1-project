@@ -461,6 +461,43 @@
       ]
     }
   },
+  "Admin": {
+    "gate": {
+      "loginRequired": "Yêu cầu đăng nhập",
+      "loginPrompt": "Vui lòng đăng nhập để truy cập trang quản trị.",
+      "loginButton": "Đăng nhập"
+    },
+    "dashboard": {
+      "title": "Bảng quản trị",
+      "corpus": {
+        "title": "Kho dữ liệu",
+        "noData": "Chưa có dữ liệu"
+      },
+      "evaluation": {
+        "title": "Đánh giá RAGAS",
+        "triggerButton": "Chạy đánh giá",
+        "triggering": "Đang chạy...",
+        "lastVerdict": "Kết quả gần nhất",
+        "noResults": "Chưa có kết quả đánh giá",
+        "error": "Không thể chạy đánh giá"
+      },
+      "traces": {
+        "title": "Langfuse Traces",
+        "enabled": "Đang bật",
+        "disabled": "Đang tắt",
+        "noData": "Chưa có dữ liệu traces",
+        "error": "Không thể tải trạng thái traces"
+      },
+      "fairness": {
+        "title": "Kiểm tra công bằng",
+        "totalAudits": "Tổng số lần kiểm tra",
+        "meanLocalFactor": "Hệ số địa phương trung bình",
+        "noData": "Chưa có dữ liệu kiểm tra",
+        "error": "Không thể tải tóm tắt công bằng"
+      },
+      "fetchError": "Không thể tải dữ liệu"
+    }
+  },
   "Common": {
     "loading": "Đang tải...",
     "error": "Có lỗi xảy ra",
