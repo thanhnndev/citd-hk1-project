@@ -33,12 +33,13 @@ try:
     from ragas.embeddings import embedding_factory
     from ragas.llms import llm_factory
     from ragas.llms.base import BaseRagasLLM, LLMResult
-    from ragas.metrics.collections import (
+    # ragas 0.4.3: use ragas.metrics (top-level Metric subclasses)
+    from ragas.metrics import (
+        AnswerRelevancy,
         ContextPrecision,
         ContextRecall,
         Faithfulness,
     )
-    from ragas.metrics._answer_relevance import AnswerRelevancy
 
     _RAGAS_AVAILABLE = True
 except ImportError as exc:
@@ -138,8 +139,9 @@ class RAGASEvaluator:
         logger.info("ragas.eval.started", dataset_path=dataset_path)
 
         try:
-            # Build dataset
+            # Build dataset and generate responses
             samples = self._load_samples(dataset_path)
+            samples = self._generate_responses(samples)
             dataset = EvaluationDataset(samples=samples)
             dataset_size = len(samples)
 
@@ -154,9 +156,18 @@ class RAGASEvaluator:
                 client=sync_client,
             )
             embeddings = embedding_factory(
-                model="text-embedding-ada-002",
+                provider="openai",
+                model="text-embedding-3-small",
                 client=async_client,
             )
+
+            # ragas 0.4.3 metrics internally call embed_query/embed_documents
+            # but OpenAIEmbeddings only exposes embed_text/embed_texts.
+            # Monkey-patch aliases so metrics work.
+            if not hasattr(embeddings, "embed_query"):
+                embeddings.embed_query = embeddings.embed_text
+            if not hasattr(embeddings, "embed_documents"):
+                embeddings.embed_documents = embeddings.embed_texts
 
             # Build metrics list (needs the InstructorLLM)
             metrics_list = self._build_metrics(llm, embeddings)
@@ -231,8 +242,65 @@ class RAGASEvaluator:
                     user_input=question,
                     reference=ground_truth,
                     retrieved_contexts=retrieved_contexts if retrieved_contexts else None,
+                    response="",  # Placeholder — filled by _generate_responses
                 )
                 samples.append(sample)
+
+        return samples
+
+    def _generate_responses(self, samples: list[SingleTurnSample]) -> list[SingleTurnSample]:
+        """Generate LLM responses for each sample before evaluation."""
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.openai_api_key)
+        context_docs = _build_context_lookup(self.corpus_path or "")
+
+        for i, sample in enumerate(samples):
+            # Build context from retrieved sources
+            context_text = ""
+            if sample.retrieved_contexts:
+                context_text = "\n\n".join(
+                    f"[Doc {j+1}] {ctx}" for j, ctx in enumerate(sample.retrieved_contexts)
+                )
+
+            system_prompt = (
+                "You are a helpful tourism assistant for Ham Ninh, Phu Quoc. "
+                "Answer the user's question based on the provided context. "
+                "If the context doesn't contain the answer, say so honestly. "
+                "Respond in the same language as the question."
+            )
+            user_prompt = (
+                f"Context:\n{context_text}\n\n"
+                f"Question: {sample.user_input}"
+            ) if context_text else f"Question: {sample.user_input}"
+
+            try:
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.3,
+                    max_tokens=500,
+                )
+                response_text = resp.choices[0].message.content or ""
+            except Exception:
+                response_text = "Failed to generate response."
+
+            # Create updated sample with response
+            samples[i] = SingleTurnSample(
+                user_input=sample.user_input,
+                response=response_text,
+                reference=sample.reference,
+                retrieved_contexts=sample.retrieved_contexts,
+            )
+
+            logger.info(
+                "ragas.response_generated",
+                question_idx=i,
+                response_len=len(response_text),
+            )
 
         return samples
 

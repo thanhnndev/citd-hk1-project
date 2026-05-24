@@ -7,6 +7,7 @@ router registration, and custom error handlers. Replaces the S02 stub.
 import os
 import time
 from collections.abc import AsyncGenerator, Callable
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
