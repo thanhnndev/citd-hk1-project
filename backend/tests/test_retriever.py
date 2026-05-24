@@ -1,6 +1,14 @@
 """Tests for the deterministic keyword retriever."""
 
+import sys
+from pathlib import Path
+
 import pytest
+
+# Resolve project root so relative data paths work from any cwd.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
 from app.models.rag import RAGChunk
 from app.models.response import Citation
@@ -245,7 +253,7 @@ class TestRetrieverTourismCorpus:
     @pytest.fixture(scope="class")
     def retriever(self):
         from agents.tools.retriever import load_corpus as _load
-        chunks = _load("../data/tourism_documents.jsonl")
+        chunks = _load(str(_PROJECT_ROOT / "data" / "tourism_documents.jsonl"))
         return Retriever(chunks)
 
     def test_làng_chài_hàm_ninh_returns_results(self, retriever):

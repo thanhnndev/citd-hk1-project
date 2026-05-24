@@ -5,6 +5,9 @@ from app.models.response import ChatResponse
 from agents.graph.agent_service import (
     AgentService,
     InMemoryAgentCheckpointer,
+    NODE_TIMEOUT_ANSWER,
+    NODE_TIMEOUT_RETRIEVE,
+    NodeTimeoutError,
     PostgresAgentCheckpointer,
     create_agent_checkpointer,
 )
@@ -506,3 +509,142 @@ async def test_agent_skips_store_when_no_chunks_returned():
     assert len(cache.store_calls) == 0
     # But lookup was attempted
     assert len(cache.lookup_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Node Timeout (ROB-06)
+# ---------------------------------------------------------------------------
+
+class TestNodeTimeoutError:
+    """Tests for per-node timeout error class."""
+
+    def test_exception_message(self) -> None:
+        from agents.graph.agent_service import NodeTimeoutError
+
+        err = NodeTimeoutError("retrieve", 10)
+        assert err.node_name == "retrieve"
+        assert err.timeout_seconds == 10
+        assert "retrieve" in str(err)
+        assert "10s" in str(err)
+
+    def test_is_exception(self) -> None:
+        from agents.graph.agent_service import NodeTimeoutError
+
+        assert issubclass(NodeTimeoutError, Exception)
+
+    def test_timeout_constants_exist(self) -> None:
+        from agents.graph.agent_service import (
+            NODE_TIMEOUT_ANSWER,
+            NODE_TIMEOUT_RETRIEVE,
+        )
+
+        assert NODE_TIMEOUT_RETRIEVE == 10
+        assert NODE_TIMEOUT_ANSWER == 15
+        assert isinstance(NODE_TIMEOUT_RETRIEVE, int)
+        assert isinstance(NODE_TIMEOUT_ANSWER, int)
+
+
+# ---------------------------------------------------------------------------
+# Cultural Context Ordering (SOC-05)
+# ---------------------------------------------------------------------------
+
+class TestCulturalContextOrdering:
+    """Tests for SOC-05: cultural context before commercial recommendations."""
+
+    def _make_chunk(self, domain: str = "food", text: str = "test",
+                    source_type: str = "entity", title: str = "Test") -> RAGChunk:
+        return RAGChunk(
+            chunk_id="test-1",
+            source_id="test",
+            title=title,
+            url="",
+            domain=domain,
+            source_type=source_type,
+            reliability="medium",
+            language="vi",
+            location="Hàm Ninh",
+            text=text,
+            chunk_index=0,
+            total_chunks=1,
+        )
+
+    def test_extracts_cultural_chunks_by_domain(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="food", text="restaurant"),
+            self._make_chunk(domain="culture", text="festival traditions"),
+            self._make_chunk(domain="history", text="ancient temple"),
+            self._make_chunk(domain="food", text="noodle shop"),
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) == 2  # culture + history
+        assert all(c.domain in ("culture", "history") for c in cultural)
+
+    def test_extracts_cultural_chunks_by_title(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="food", title="Lễ hội Dinh Cậu"),
+            self._make_chunk(domain="food", title="Quán ốc"),
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) == 1
+        assert "Lễ hội Dinh Cậu" in cultural[0].title
+
+    def test_limits_to_3_chunks(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="culture", text=f"Cultural fact {i}")
+            for i in range(10)
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) <= 3
+
+    def test_returns_empty_for_no_cultural_chunks(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="food", text="restaurant"),
+            self._make_chunk(domain="shopping", text="mall"),
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) == 0
+
+    def test_builds_cultural_intro_vi(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="culture", text="Hàm Ninh có truyền thống đánh bắt cá từ thế kỷ 18"),
+        ]
+
+        intro = svc._build_cultural_intro(chunks, "vi")
+        assert "Hàm Ninh" in intro
+        assert "Bối cảnh văn hóa" in intro
+
+    def test_builds_cultural_intro_en(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="culture", text="Ham Ninh has a fishing tradition since the 18th century"),
+        ]
+
+        intro = svc._build_cultural_intro(chunks, "en")
+        assert "Cultural Context" in intro

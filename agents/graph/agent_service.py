@@ -7,6 +7,7 @@ state so routers do not duplicate orchestration logic.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -34,6 +35,23 @@ except Exception:  # pragma: no cover - exercised when dependency is absent loca
     MemorySaver = None  # type: ignore[assignment]
 
 logger = structlog.get_logger(__name__)
+
+# -- Per-node timeout thresholds (ROB-06) --
+NODE_TIMEOUT_RETRIEVE = 10  # seconds for retrieval node
+NODE_TIMEOUT_ANSWER = 15    # seconds for answer generation node
+
+
+class NodeTimeoutError(Exception):
+    """Raised when a graph node exceeds its configured timeout.
+
+    Captures the node name and timeout value for structured logging
+    and user-friendly error messages.
+    """
+
+    def __init__(self, node_name: str, timeout_seconds: int) -> None:
+        self.node_name = node_name
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Node '{node_name}' timed out after {timeout_seconds}s")
 
 
 class AgentState(TypedDict, total=False):
@@ -357,14 +375,27 @@ class AgentService:
                     reason=type(exc).__name__,
                 )
 
-        # -- Retrieve node with span --
+        # -- Retrieve node with span and per-node timeout (ROB-06) --
         retrieve_span = self._start_langfuse_span(
             trace_id=trace_id or "",
             name="retrieve",
             as_type="retriever",
             input_data={"query": state["retrieval_query"]},
         )
-        state = await self._retrieve_node(state)
+        try:
+            state = await asyncio.wait_for(
+                self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "agent.node_timeout",
+                session_id=session_id,
+                node="retrieve",
+                timeout_seconds=NODE_TIMEOUT_RETRIEVE,
+            )
+            state["fallback_reason"] = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
+            state["chunks"] = []
+            state["citations"] = []
         self._end_langfuse_span(
             retrieve_span,
             trace_id=trace_id or "",
@@ -375,13 +406,26 @@ class AgentService:
             },
         )
 
-        # -- Answer node with span --
+        # -- Answer node with span and per-node timeout (ROB-06) --
         answer_span = self._start_langfuse_span(
             trace_id=trace_id or "",
             name="answer",
             input_data={"chunks_count": len(state.get("chunks", []))},
         )
-        state = await self._answer_node(state)
+        try:
+            state = await asyncio.wait_for(
+                self._answer_node(state), timeout=NODE_TIMEOUT_ANSWER
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "agent.node_timeout",
+                session_id=session_id,
+                node="answer",
+                timeout_seconds=NODE_TIMEOUT_ANSWER,
+            )
+            state["fallback_reason"] = state.get("fallback_reason") or f"NodeTimeoutError(answer, {NODE_TIMEOUT_ANSWER}s)"
+            # Fall through to compose_fallback below
+            state["response"] = await self._compose_fallback(state, state.get("fallback_reason", "llm_timeout"))
         response = state["response"]
         self._end_langfuse_span(
             answer_span,
@@ -431,14 +475,29 @@ class AgentService:
                     reason=type(exc).__name__,
                 )
 
-        # -- Retrieve node with span --
+        # -- Retrieve node with span and per-node timeout (ROB-06) --
         retrieve_span = self._start_langfuse_span(
             trace_id=trace_id or "",
             name="retrieve",
             as_type="retriever",
             input_data={"query": state["retrieval_query"]},
         )
-        state = await self._retrieve_node(state)
+        try:
+            state = await asyncio.wait_for(
+                self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "agent.node_timeout",
+                session_id=session_id,
+                node="retrieve",
+                timeout_seconds=NODE_TIMEOUT_RETRIEVE,
+            )
+            fallback_reason = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
+            state["chunks"] = []
+            state["citations"] = []
+        else:
+            fallback_reason = None
         self._end_langfuse_span(
             retrieve_span,
             trace_id=trace_id or "",
@@ -487,20 +546,36 @@ class AgentService:
                 fallback=response.fallback,
             )
         elif self._llm_service is not None:
-            # -- Answer span for streaming --
+            # -- Answer span for streaming with per-token timeout (ROB-06) --
             answer_span = self._start_langfuse_span(
                 trace_id=trace_id or "",
                 name="answer",
                 input_data={"chunks_count": len(state.get("chunks", []))},
             )
             try:
-                async for token in self._llm_service.answer_stream(
+                stream = self._llm_service.answer_stream(
                     chunks=state.get("chunks", []),
                     citations=citations,
                     query=state["retrieval_query"],
                     language=language,
                     session_id=session_id,
-                ):
+                )
+                while True:
+                    try:
+                        token = await asyncio.wait_for(
+                            stream.__anext__(), timeout=NODE_TIMEOUT_ANSWER
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "agent.node_timeout",
+                            session_id=session_id,
+                            node="answer_stream",
+                            timeout_seconds=NODE_TIMEOUT_ANSWER,
+                        )
+                        fallback_reason = f"NodeTimeoutError(answer_stream, {NODE_TIMEOUT_ANSWER}s)"
+                        break
                     answer_text += token
                     yield token
             except Exception as exc:
@@ -700,6 +775,55 @@ class AgentService:
         ham_ninh_terms = ("hàm ninh", "ham ninh")
         return any(term in lower for term in recommendation_terms) and any(term in lower for term in ham_ninh_terms)
 
+    # -- SOC-05: Cultural context before commercial recommendations --
+
+    _CULTURAL_DOMAINS = {"culture", "history", "heritage", "tradition", "festival", "temple", "đình", "chùa", "di tích", "lễ hội", "văn hóa"}
+
+    def _extract_cultural_context(self, chunks: list[RAGChunk]) -> list[RAGChunk]:
+        """Extract chunks related to cultural/historical content from retrieval results.
+
+        Returns chunks whose domain or source_type indicates cultural/historical relevance.
+        Limited to top 3 to keep the intro concise.
+        """
+        cultural: list[RAGChunk] = []
+        for chunk in chunks:
+            domain = (chunk.domain or "").lower()
+            source_type = (chunk.source_type or "").lower()
+            title = (chunk.title or "").lower()
+            text = (chunk.text or "").lower()
+
+            is_cultural = (
+                any(d in domain for d in self._CULTURAL_DOMAINS)
+                or any(d in source_type for d in self._CULTURAL_DOMAINS)
+                or any(d in title for d in self._CULTURAL_DOMAINS)
+                or any(d in text[:200] for d in self._CULTURAL_DOMAINS)
+            )
+            if is_cultural:
+                cultural.append(chunk)
+                if len(cultural) >= 3:
+                    break
+        return cultural
+
+    def _build_cultural_intro(
+        self, cultural_chunks: list[RAGChunk], language: str
+    ) -> str:
+        """Build a brief cultural context intro from retrieved chunks."""
+        if language == "vi":
+            intro = "🏛️ **Về Hàm Ninh — Bối cảnh văn hóa:**"
+        else:
+            intro = "🏛️ **About Hàm Ninh — Cultural Context:**"
+
+        snippets = []
+        for chunk in cultural_chunks[:2]:  # Max 2 snippets for brevity
+            # Truncate to first 150 chars
+            text = (chunk.text or "")[:150]
+            if text:
+                snippets.append(f"- {text}")
+
+        if snippets:
+            return f"{intro}\n" + "\n".join(snippets)
+        return intro
+
     async def _answer_place_intent(self, state: AgentState) -> ChatResponse:
         if self._place_recommendation_service is None:
             state["fallback_reason"] = "place_recommendation_unavailable"
@@ -725,6 +849,20 @@ class AgentService:
                 places=response.places,
                 trace_id=state.get("langfuse_trace_id"),
             )
+
+            # -- SOC-05: Cultural context before commercial recommendations --
+            # If we have cultural/historical chunks, prepend context to the response.
+            cultural_chunks = self._extract_cultural_context(state.get("chunks", []))
+            if cultural_chunks:
+                cultural_intro = self._build_cultural_intro(
+                    cultural_chunks, state["language"]
+                )
+                response.message = f"{cultural_intro}\n\n{response.message}"
+                response.reasoning_log = (
+                    f"cultural_context=true cultural_chunks={len(cultural_chunks)} "
+                    f"{response.reasoning_log or ''}"
+                )
+
             return response
         except Exception as exc:  # noqa: BLE001 - service boundary must fail closed.
             state["fallback_reason"] = "place_recommendation_error"
