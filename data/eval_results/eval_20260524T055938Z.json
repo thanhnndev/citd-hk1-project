@@ -1,0 +1,6 @@
+{
+  "verdict": "credential_blocked",
+  "metrics": {},
+  "reason": "OPENAI_API_KEY not set",
+  "timestamp": "2026-05-24T05:59:38.286927+00:00"
+}
