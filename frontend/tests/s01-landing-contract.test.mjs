@@ -57,8 +57,8 @@ assert.match(localeLayout, /routing\.locales/, 'Locale layout must validate agai
 const localePage = readFileSync(path.join(projectRoot, 'src/app/[locale]/page.tsx'), 'utf8');
 assert.match(localePage, /getTranslations\(['"]Landing['"]\)/, 'Locale page must load Landing messages');
 assert.match(localePage, /notFound\(\)/, 'Locale page must reject invalid locales with notFound()');
-assert.match(localePage, /<main\b/, 'Locale page must expose one main landmark');
-assert.equal((localePage.match(/<main\b/g) ?? []).length, 1, 'Locale page must render exactly one main landmark');
+assert.match(localeLayout, /<main\b/, 'Locale layout must expose one main landmark');
+assert.equal((localeLayout.match(/<main\b/g) ?? []).length, 1, 'Locale layout must render exactly one main landmark');
 
 const expectedLandingComponents = [
   'HeroSection',

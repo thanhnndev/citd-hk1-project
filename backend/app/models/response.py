@@ -8,22 +8,35 @@ from app.models.request import LatLng
 
 
 class ScoreBreakdown(BaseModel):
-    """Individual scoring components for a recommended place."""
+    """Ensemble scoring components for the 3-tree reranker pipeline.
 
-    relevance: float = Field(
-        description="How well the place matches the user's intent (0-1)."
+    Replaces the legacy 5-field schema (relevance, proximity, price, rating,
+    accessibility) with the ensemble schema defined in REQUIREMENTS.md §7.8.
+    """
+
+    tree1_locality: float = Field(
+        description="Tree 1 locality-first score (0-1).",
     )
-    proximity: float = Field(
-        description="Normalized distance score relative to user location (0-1)."
+    tree2_proximity: float = Field(
+        description="Tree 2 proximity-first score (0-1).",
     )
-    price: float = Field(
-        description="Price alignment score with user budget (0-1)."
+    tree3_quality: float = Field(
+        description="Tree 3 quality-first score (0-1).",
     )
-    rating: float = Field(
-        description="Normalized Google Maps rating score (0-1)."
+    s_bag: float = Field(
+        description="Bagged average of the 3 tree scores (0-1).",
     )
-    accessibility: float = Field(
-        description="Accessibility compliance score (0-1)."
+    delta1_fairness: float = Field(
+        description="Applied fairness correction: η × Δ1 (can be negative).",
+    )
+    delta2_access: float = Field(
+        description="Applied accessibility correction: η × Δ2.",
+    )
+    final_score: float = Field(
+        description="Clipped final score F2, bounded to [0, 1].",
+    )
+    rank: int = Field(
+        description="1-based rank after stable sort by final_score descending.",
     )
 
 
@@ -65,11 +78,14 @@ class PlaceResult(BaseModel):
                     "local_factor": 0.8,
                     "final_score": 0.87,
                     "score_breakdown": {
-                        "relevance": 0.95,
-                        "proximity": 0.80,
-                        "price": 0.90,
-                        "rating": 0.85,
-                        "accessibility": 0.75,
+                        "tree1_locality": 0.90,
+                        "tree2_proximity": 0.65,
+                        "tree3_quality": 0.75,
+                        "s_bag": 0.767,
+                        "delta1_fairness": -0.045,
+                        "delta2_access": 0.0,
+                        "final_score": 0.72,
+                        "rank": 1,
                     },
                     "accessibility_score": 0.75,
                     "google_maps_uri": "https://maps.google.com/?q=ChIJ123abc",
@@ -175,10 +191,140 @@ class EmbedResponse(BaseModel):
     """Response body for the POST /admin/embed endpoint."""
 
     total_docs: int = Field(description="Number of source documents in corpus")
-    total_chunks: int = Field(description="Number of chunks indexed into Qdrant")
+    total_chunks: int = Field(
+        description="Number of chunks indexed into Qdrant (propositions for proposition corpus)"
+    )
+    propositions_ingested: int = Field(
+        description="Number of proposition chunks ingested (same as total_chunks for proposition corpus)"
+    )
+    language_distribution: dict[str, int] = Field(
+        description="Count of chunks per language code (e.g. {'vi': 607})"
+    )
     vector_dim: int = Field(description="Embedding vector dimension")
     collection_name: str = Field(description="Qdrant collection name")
     latency_ms: float = Field(description="Total embed+upsert latency in milliseconds")
+
+
+class EvalTriggerRequest(BaseModel):
+    """Request body for POST /admin/eval/trigger."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "dataset_path": "data/eval_dataset.jsonl",
+                    "metrics": ["faithfulness", "answer_relevancy"],
+                }
+            ]
+        }
+    )
+
+    dataset_path: str | None = Field(
+        default=None,
+        description="Path to eval dataset JSONL. Defaults to data/eval_dataset.jsonl.",
+    )
+    metrics: list[str] | None = Field(
+        default=None,
+        description="Metric names to compute. Defaults to all four.",
+    )
+
+
+class EvalResultResponse(BaseModel):
+    """Response body for evaluation results."""
+
+    verdict: str = Field(
+        description="Evaluation verdict: completed, credential_blocked, or failed.",
+    )
+    metrics: dict = Field(
+        default_factory=dict,
+        description="Evaluation metrics dict (empty when blocked).",
+    )
+    timestamp: str = Field(
+        description="ISO-8601 timestamp of the evaluation.",
+    )
+    dataset_size: int = Field(
+        default=0,
+        description="Number of questions evaluated.",
+    )
+    latency_ms: float = Field(
+        default=0.0,
+        description="Evaluation latency in milliseconds.",
+    )
+    result_path: str | None = Field(
+        default=None,
+        description="Filesystem path to the persisted result JSON.",
+    )
+
+
+class EvalFileListing(BaseModel):
+    """Single entry in GET /admin/eval/results response."""
+
+    filename: str = Field(description="Result filename.")
+    timestamp: str = Field(description="ISO-8601 timestamp from result content.")
+    verdict: str = Field(description="Evaluation verdict.")
+    dataset_size: int = Field(description="Number of questions evaluated.")
+
+
+class TracesStatusResponse(BaseModel):
+    """Response body for GET /admin/traces."""
+
+    langfuse_enabled: bool = Field(
+        description="Whether Langfuse tracing is active.",
+    )
+    host: str | None = Field(
+        default=None,
+        description="Langfuse host URL when enabled.",
+    )
+    message: str = Field(
+        description="Human-readable status message.",
+    )
+
+
+class FairnessSummaryResponse(BaseModel):
+    """Response body for GET /admin/fairness."""
+
+    total_audits: int = Field(
+        description="Total number of fairness audit snapshots on disk.",
+    )
+    latest_timestamp: str | None = Field(
+        default=None,
+        description="ISO-8601 timestamp of the most recent audit entry.",
+    )
+    local_factor_distribution: dict | None = Field(
+        default=None,
+        description="Aggregated distribution with buckets, mean, and count.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Human-readable message when no audits exist.",
+    )
+
+
+class AdminStatsResponse(BaseModel):
+    """Response body for GET /admin/stats — corpus operational visibility."""
+
+    total_chunks: int = Field(
+        description="Number of chunks in the in-process retriever."
+    )
+    total_docs: int = Field(
+        description="Number of unique source documents in the retriever."
+    )
+    language_distribution: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of chunks per language code (e.g. {'vi': 607}).",
+    )
+    bm25_vocab_size: int = Field(
+        default=0,
+        description="Number of unique terms in the BM25 vectorizer vocabulary.",
+    )
+    hybrid_enabled: bool = Field(
+        default=False,
+        description="Whether hybrid retrieval (Qdrant + BM25) is active.",
+    )
+    qdrant_collection_name: str | None = Field(
+        default=None,
+        description="Active Qdrant collection name, or null if not configured.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -241,4 +387,15 @@ class ChatResponse(BaseModel):
             "True when the LLM call failed and the response was composed "
             "by the deterministic fallback path."
         ),
+    )
+    guardrail_status: str | None = Field(
+        default=None,
+        description=(
+            "Guardrail verdict: 'pass', 'input_blocked', 'off_topic', "
+            "or 'output_flagged'. None when guardrails are not evaluated."
+        ),
+    )
+    guardrail_reason: str | None = Field(
+        default=None,
+        description="Human-readable reason for the guardrail verdict.",
     )

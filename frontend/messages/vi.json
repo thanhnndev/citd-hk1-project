@@ -4,10 +4,59 @@
     "chat": "Trò chuyện",
     "map": "Bản đồ",
     "architecture": "Kiến trúc",
+    "login": "Đăng nhập",
+    "register": "Đăng ký",
+    "logout": "Đăng xuất",
     "localeLabel": "Ngôn ngữ",
     "localeSwitcherLabel": "Chọn ngôn ngữ",
     "copyright": "© {year} Hàm Ninh AI Guide. Bảo tồn di sản, hỗ trợ du lịch bền vững.",
     "tagline": "Xây dựng vì cộng đồng — AI có trách nhiệm cho làng chài Hàm Ninh, Phú Quốc."
+  },
+  "Auth": {
+    "common": {
+      "emailLabel": "Email",
+      "passwordLabel": "Mật khẩu",
+      "showPassword": "Hiện mật khẩu",
+      "hidePassword": "Ẩn mật khẩu"
+    },
+    "register": {
+      "eyebrow": "Tạo tài khoản",
+      "title": "Đăng ký",
+      "usernameLabel": "Tên người dùng",
+      "usernamePlaceholder": "Tên người dùng",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Mật khẩu (tối thiểu 6 ký tự)",
+      "submitButton": "Tạo tài khoản",
+      "submitting": "Đang tạo...",
+      "loginPrompt": "Đã có tài khoản?",
+      "loginLink": "Đăng nhập",
+      "successMessage": "Tài khoản đã được tạo! Đang chuyển đến trang đăng nhập...",
+      "verifyPrompt": "Tài khoản đã được tạo! Vui lòng kiểm tra email để lấy mã xác thực."
+    },
+    "login": {
+      "eyebrow": "Chào mừng trở lại",
+      "title": "Đăng nhập",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Mật khẩu",
+      "submitButton": "Đăng nhập",
+      "submitting": "Đang đăng nhập...",
+      "registerPrompt": "Chưa có tài khoản?",
+      "registerLink": "Đăng ký ngay",
+      "verifyError": "Email chưa được xác thực. Vui lòng kiểm tra hộp thư và xác thực email trước khi đăng nhập."
+    },
+    "verify": {
+      "eyebrow": "Xác thực email",
+      "title": "Nhập mã OTP",
+      "instruction": "Chúng tôi đã gửi mã xác thực 6 số đến",
+      "otpLabel": "Mã OTP",
+      "otpPlaceholder": "000000",
+      "submitButton": "Xác thực",
+      "submitting": "Đang xác thực...",
+      "resendButton": "Gửi lại mã",
+      "resendSuccess": "Mã mới đã được gửi! Vui lòng kiểm tra email.",
+      "successMessage": "Email đã được xác thực thành công! Đang chuyển đến trang đăng nhập...",
+      "loginLink": "Đến trang đăng nhập"
+    }
   },
   "Landing": {
     "hero": {
@@ -68,7 +117,7 @@
         },
         {
           "title": "Ensemble Re-ranker — Fairness Engine",
-          "description": "Kết hợp Random Forest và Gradient Boosting để cân bằng chất lượng, khoảng cách và local_factor."
+          "description": "Kết hợp 3 cây quyết định dựa trên quy tắc định sẵn qua kỹ thuật bagging và 2 stump hiệu chỉnh để cân bằng chất lượng, khoảng cách và local_factor — không cần huấn luyện."
         }
       ]
     },
@@ -112,48 +161,72 @@
     "algorithmShowcase": {
       "eyebrow": "Thuật toán",
       "heading": "Ensemble Re-ranking biến dữ liệu địa điểm thành thứ hạng công bằng hơn",
-      "body": "Minh họa cách Decision Tree phát triển thành Random Forest (bagging), Gradient Boosting (boosting), rồi hợp nhất thành Final Score.",
+      "body": "Minh họa cách 3 cây quyết định dựa trên quy tắc định sẵn được kết hợp qua bagging và các stump hiệu chỉnh thành một điểm số cuối cùng có thể giải thích — không cần huấn luyện.",
       "chart": {
         "title": "Đóng góp minh họa vào Final Score",
         "ariaLabel": "Biểu đồ cột minh họa đóng góp của local factor, rating và distance vào điểm cuối.",
         "description": "Dữ liệu bên dưới là ví dụ giải thích giao diện, không phải kết quả Places API trực tiếp.",
         "bars": [
           {
-            "key": "local_factor",
-            "label": "Nhân tố địa phương",
-            "value": 0.42,
-            "description": "Mức độ cơ sở gắn với hộ kinh doanh và nghề truyền thống địa phương."
+            "key": "tree1_locality",
+            "label": "Cây quyết định 1: Ưu tiên địa phương",
+            "value": 0.78,
+            "description": "Cây quyết định đầu tiên chấm điểm dựa trên mức độ gắn với cộng đồng địa phương."
           },
           {
-            "key": "rating",
-            "label": "Đánh giá",
-            "value": 0.33,
-            "description": "Chất lượng cảm nhận từ rating và tín hiệu review đã chuẩn hóa."
+            "key": "tree2_proximity",
+            "label": "Cây quyết định 2: Ưu tiên khoảng cách",
+            "value": 0.65,
+            "description": "Cây quyết định thứ hai ưu tiên các địa điểm gần vị trí hoặc tuyến tham quan."
           },
           {
-            "key": "distance",
-            "label": "Khoảng cách",
-            "value": 0.25,
-            "description": "Độ thuận tiện di chuyển từ vị trí hoặc tuyến tham quan của người dùng."
+            "key": "tree3_quality",
+            "label": "Cây quyết định 3: Ưu tiên chất lượng",
+            "value": 0.58,
+            "description": "Cây quyết định thứ ba đánh giá chất lượng từ rating và phản hồi khách tham quan."
+          },
+          {
+            "key": "s_bag",
+            "label": "Bagging: Trung bình 3 cây",
+            "value": 0.67,
+            "description": "Kết hợp 3 cây bằng kỹ thuật bagging để giảm phương sai và tăng ổn định."
+          },
+          {
+            "key": "delta1_fairness",
+            "label": "Điều chỉnh công bằng (phạt chuỗi cửa hàng)",
+            "value": -0.045,
+            "description": "Phạt các cơ sở chuỗi (η × -0.15) để giảm lợi thế xếp hạng của họ và hỗ trợ tiểu thương địa phương."
+          },
+          {
+            "key": "delta2_access",
+            "label": "Điều chỉnh tiếp cận (+3%)",
+            "value": 0.03,
+            "description": "Bù điểm cho địa điểm có khả năng tiếp cận cao, hỗ trợ du khách khuyết tật."
+          },
+          {
+            "key": "final_score",
+            "label": "Điểm cuối cùng",
+            "value": 0.75,
+            "description": "Kết quả ensemble cuối cùng — tổng hợp bagging và các điều chỉnh công bằng, tiếp cận."
           }
         ]
       },
       "steps": [
         {
-          "title": "Decision Tree",
-          "description": "Học các ngưỡng đơn giản trên rating, khoảng cách và local_factor."
+          "title": "Cây quyết định",
+          "description": "Ngưỡng định sẵn trên rating, khoảng cách và local_factor — mỗi cây áp dụng một quy tắc ưu tiên đơn giản."
         },
         {
-          "title": "Random Forest",
-          "description": "Bagging nhiều cây để giảm variance khi dữ liệu địa điểm nhiễu."
+          "title": "Bagging: Trung bình 3 cây",
+          "description": "Trung bình cộng 3 cây viết tay để ổn định điểm số và giảm phương sai từ một cây đơn lẻ."
         },
         {
-          "title": "Gradient Boosting",
-          "description": "Học tuần tự phần sai lệch còn lại để giảm bias của thứ hạng."
+          "title": "Stump hiệu chỉnh: công bằng + tiếp cận",
+          "description": "Áp dụng 2 hiệu chỉnh do chuyên gia định nghĩa: phạt chuỗi cửa hàng về công bằng, thưởng cho tính tiếp cận."
         },
         {
-          "title": "Ensemble Score",
-          "description": "Kết hợp 0.6 × RF và 0.4 × GBM thành final_score có giải thích."
+          "title": "Điểm cuối: clip và xếp hạng",
+          "description": "Giới hạn kết quả trong [0,1] và gán xếp hạng thứ 1-based — hoàn toàn có thể giải thích, không cần huấn luyện."
         }
       ]
     },
@@ -183,8 +256,8 @@
           "description": "Nguồn dữ liệu địa điểm và tuyến đường trong các slice sau."
         },
         {
-          "name": "scikit-learn",
-          "description": "Random Forest và Gradient Boosting cho re-ranking."
+          "name": "Ensemble định sẵn",
+          "description": "Cây quyết định viết tay với bagging và stump hiệu chỉnh cho re-ranking có thể giải thích — không cần huấn luyện ML."
         },
         {
           "name": "RAGAS",
@@ -230,7 +303,23 @@
     "retry": "Thử lại",
     "typing": "Đang trả lời...",
     "noEvidence": "Tôi chưa tìm thấy thông tin về câu hỏi này. Hãy thử hỏi theo cách khác.",
-    "newQuestion": "Hỏi thêm"
+    "newQuestion": "Hỏi thêm",
+    "placeResultsHeading": "Địa điểm gợi ý",
+    "viewOnMap": "Xem trên Bản đồ",
+    "scoreLabel": "Điểm số",
+    "noRating": "Chưa có đánh giá",
+    "welcomeGreeting": "Xin chào! Tôi là Hướng dẫn viên AI Hàm Ninh",
+    "welcomeSubtitle": "Hãy hỏi tôi bất cứ điều gì về văn hóa, lịch sử, ẩm thực và địa điểm ở Hàm Ninh.",
+    "newConversation": "Cuộc trò chuyện mới",
+    "copy": "Sao chép",
+    "copied": "Đã sao chép!",
+    "retryMessage": "Thử lại",
+    "prompts": [
+      "Lịch sử làng chài Hàm Ninh như thế nào?",
+      "Gợi ý nhà hàng hải sản địa phương",
+      "Tôi đến Hàm Ninh từ Dương Đông như thế nào?",
+      "Hàm Ninh có lễ hội văn hóa nào?"
+    ]
   },
   "Map": {
     "title": "Bản đồ kiểm chứng địa điểm Hàm Ninh",
@@ -264,7 +353,150 @@
     "responseNote": "Ghi chú của trợ lý"
   },
   "Architecture": {
-    "title": "Kiến trúc hệ thống"
+    "title": "Kiến trúc hệ thống",
+    "overview": {
+      "eyebrow": "Thiết kế hệ thống",
+      "heading": "Trợ lý AI đa agent cho làng chài Hàm Ninh",
+      "body": "Kiến trúc kết hợp Retrieval-Augmented Generation cho tri thức văn hóa, Google Places API cho thông tin địa điểm, ensemble re-ranking cho công bằng, và điều phối agent dựa trên LangGraph — tất cả được phục vụ qua frontend Next.js song ngữ với khả năng quan sát toàn diện.",
+      "cards": [
+        {
+          "title": "Luồng dữ liệu",
+          "description": "Người dùng → Frontend → Bộ điều phối Agent → Worker (RAG, Maps) → SSE Streaming → Phản hồi"
+        }
+      ]
+    },
+    "ragPipeline": {
+      "eyebrow": "Truy xuất tri thức",
+      "heading": "RAG Pipeline — Hỏi đáp văn hóa có trích dẫn",
+      "body": "Câu trả lời về văn hóa, lịch sử và ẩm thực Hàm Ninh được neo vào tài liệu truy xuất — không phải suy đoán của mô hình. Mỗi câu trả lời bao gồm trích dẫn và được đánh giá bởi RAGAS về độ trung thực và liên quan.",
+      "cards": [
+        {
+          "title": "Kho tài liệu",
+          "description": "Tài liệu văn hóa được chuẩn hóa, phân đoạn và embedding vào Qdrant vector store để tìm kiếm tương đồng nhanh."
+        },
+        {
+          "title": "Tìm kiếm vector",
+          "description": "Truy vấn người dùng được embedding và so khớp với kho tài liệu qua top-k similarity với ngưỡng tùy chỉnh."
+        },
+        {
+          "title": "Câu trả lời có căn cứ",
+          "description": "LLM sinh câu trả lời dựa trên ngữ cảnh truy xuất, kèm trích dẫn inline về tài liệu nguồn."
+        }
+      ]
+    },
+    "mapsApi": {
+      "eyebrow": "Thông tin địa điểm",
+      "heading": "Maps & Places API — Dữ liệu địa điểm thực tế",
+      "body": "Google Places API (New) cung cấp tìm kiếm gần đây, tìm kiếm theo văn bản, chi tiết địa điểm và autocomplete. Routes API hỗ trợ computeRouteMatrix cho gợi ý nhạy cảm khoảng cách. Circuit breaker đảm bảo graceful fallback khi API không khả dụng.",
+      "cards": [
+        {
+          "title": "Khám phá địa điểm",
+          "description": "Nearby search và text search tìm nhà hàng, dịch vụ và điểm văn hóa gần làng chài Hàm Ninh."
+        },
+        {
+          "title": "Lập kế hoạch tuyến đường",
+          "description": "computeRouteMatrix tính khoảng cách giữa vị trí người dùng và địa điểm ứng viên cho xếp hạng nhạy cảm khoảng cách."
+        },
+        {
+          "title": "Xử lý dự phòng",
+          "description": "Circuit breaker phát hiện lỗi API và trả kết quả dự phòng thay vì trang lỗi."
+        }
+      ]
+    },
+    "ensembleReranker": {
+      "eyebrow": "Công cụ công bằng",
+      "heading": "Ensemble Re-ranking — Chấm điểm công bằng và giải thích được",
+      "body": "Ba cây quyết định dựa trên quy tắc (Ưu tiên địa phương, Ưu tiên khoảng cách, Ưu tiên chất lượng) được kết hợp qua bagging. Hai correction stump áp dụng phạt công bằng cho chuỗi cửa hàng và thưởng tiếp cận. local_factor đảm bảo ≥40% địa điểm địa phương xuất hiện trong top-5.",
+      "cards": [
+        {
+          "title": "Cây quyết định",
+          "description": "Cây Ưu tiên địa phương, Khoảng cách và Chất lượng chấm điểm bằng quy tắc viết tay — không cần huấn luyện."
+        },
+        {
+          "title": "Stump hiệu chỉnh",
+          "description": "Phạt công bằng giảm thứ hạng chuỗi cửa hàng; thưởng tiếp cận cho địa điểm thân thiện người khuyết tật."
+        },
+        {
+          "title": "Ràng buộc công bằng",
+          "description": "local_factor tăng điểm doanh nghiệp địa phương để ít nhất 40% kết quả top-5 là cơ sở cộng đồng."
+        }
+      ]
+    },
+    "orchestration": {
+      "eyebrow": "Giám sát",
+      "heading": "Điều phối Agent — Mô hình giám sát LangGraph",
+      "body": "Bộ giám sát LangGraph điều phối các worker agent chuyên biệt: RAG Agent cho câu trả lời văn hóa và Maps & Service Agent cho dữ liệu địa điểm. Guardrails lọc đầu vào không an toàn, SSE streaming phân phối phản hồi chat theo thời gian thực với session durability.",
+      "cards": [
+        {
+          "title": "Mô hình giám sát",
+          "description": "Bộ giám sát định tuyến truy vấn đến worker agent phù hợp — RAG cho văn hóa, Maps cho địa điểm."
+        },
+        {
+          "title": "Phản hồi streaming",
+          "description": "Server-Sent Events (SSE) phân phối streaming ở cấp token cho trải nghiệm chat mượt mà."
+        },
+        {
+          "title": "Trạng thái session",
+          "description": "LangGraph checkpoints bảo tồn lịch sử hội thoại và trạng thái agent qua các phiên."
+        }
+      ]
+    },
+    "frontendShell": {
+      "eyebrow": "Nền tảng",
+      "heading": "Frontend Shell & Quan sát hệ thống",
+      "body": "Next.js 16 App Router vận hành frontend với next-intl cho hỗ trợ song ngữ (Tiếng Việt/Tiếng Anh). Langfuse theo dõi luồng agent, health endpoints giám sát trạng thái hệ thống, và UI responsive đảm bảo khả năng tiếp cận trên mọi thiết bị.",
+      "cards": [
+        {
+          "title": "App Shell",
+          "description": "Next.js 16 với App Router, layout responsive và tăng cường dần dần từ landing page đến chat/map đầy đủ."
+        },
+        {
+          "title": "Hỗ trợ i18n",
+          "description": "next-intl cung cấp locale routing, file thông dịch và dịch server-side cho toàn bộ UI text tiếng Việt và tiếng Anh."
+        },
+        {
+          "title": "Quan sát hệ thống",
+          "description": "Langfuse traces, health endpoints và structured logging cung cấp khả năng hiển thị hiệu năng agent và sức khỏe hệ thống."
+        }
+      ]
+    }
+  },
+  "Admin": {
+    "gate": {
+      "loginRequired": "Yêu cầu đăng nhập",
+      "loginPrompt": "Vui lòng đăng nhập để truy cập trang quản trị.",
+      "loginButton": "Đăng nhập"
+    },
+    "dashboard": {
+      "title": "Bảng quản trị",
+      "corpus": {
+        "title": "Kho dữ liệu",
+        "noData": "Chưa có dữ liệu"
+      },
+      "evaluation": {
+        "title": "Đánh giá RAGAS",
+        "triggerButton": "Chạy đánh giá",
+        "triggering": "Đang chạy...",
+        "lastVerdict": "Kết quả gần nhất",
+        "noResults": "Chưa có kết quả đánh giá",
+        "error": "Không thể chạy đánh giá"
+      },
+      "traces": {
+        "title": "Langfuse Traces",
+        "enabled": "Đang bật",
+        "disabled": "Đang tắt",
+        "noData": "Chưa có dữ liệu traces",
+        "error": "Không thể tải trạng thái traces"
+      },
+      "fairness": {
+        "title": "Kiểm tra công bằng",
+        "totalAudits": "Tổng số lần kiểm tra",
+        "meanLocalFactor": "Hệ số địa phương trung bình",
+        "noData": "Chưa có dữ liệu kiểm tra",
+        "error": "Không thể tải tóm tắt công bằng"
+      },
+      "fetchError": "Không thể tải dữ liệu"
+    }
   },
   "Common": {
     "loading": "Đang tải...",

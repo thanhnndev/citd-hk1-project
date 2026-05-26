@@ -4,8 +4,10 @@ Wires together the lifespan manager, CORS middleware, structured logging,
 router registration, and custom error handlers. Replaces the S02 stub.
 """
 
+import os
 import time
 from collections.abc import AsyncGenerator, Callable
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,29 +18,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.middleware.auth import verify_api_key
 from app.middleware.correlation import CorrelationIdMiddleware
+from app.middleware.rate_limiter import get_limiter, rate_limit_exceeded_handler
 from app.routers.admin import router as admin_router
+from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
-from app.services.corpus_loader import load_corpus
-from app.services.agent_service import AgentService, create_agent_checkpointer
-from app.services.embedding_service import EmbeddingService
-from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
+from app.services.user_service import UserService
 from app.services.langfuse_service import init_langfuse
-from app.services.llm_answer_service import LLMAnswerService
-from app.services.place_recommendation_service import PlaceRecommendationService
-from app.services.places_service import GooglePlacesService
-from app.services.qdrant_service import QdrantService
-from app.services.retriever import Retriever
+
+from agents.tools.corpus_loader import load_corpus
+from agents.graph.agent_service import AgentService, create_agent_checkpointer
+from agents.tools.embedding_service import EmbeddingService
+from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+from agents.services.llm_answer_service import LLMAnswerService
+from agents.services.place_recommendation_service import PlaceRecommendationService
+from agents.tools.places_service import GooglePlacesService
+from agents.tools.routes_service import GoogleRoutesService
+from agents.tools.qdrant_service import QdrantService
+from agents.tools.retriever import Retriever
 
 logger = get_logger(__name__)
 
 # ── Lifespan manager ────────────────────────────────────────────────────
 
 _langfuse_cleanup: Callable[[], None] | None = None
+_langfuse_client: Any | None = None
 
 
 @asynccontextmanager
@@ -56,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         1. Flush and close Langfuse client.
         2. Log shutdown confirmation.
     """
-    global _langfuse_cleanup
+    global _langfuse_cleanup, _langfuse_client
 
     # 1. Setup logging before anything else so all startup logs are structured
     settings = get_settings()
@@ -66,7 +77,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     # 2. Initialize Langfuse (graceful skip if keys absent)
-    _langfuse_cleanup = init_langfuse(settings)
+    _langfuse_cleanup, _langfuse_client = init_langfuse(settings)
+    app.state.langfuse_client = _langfuse_client
 
     # 3. Load corpus and build retriever (project root = backend/../)
     project_root = Path(__file__).resolve().parents[2]
@@ -104,8 +116,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     try:
         places_service = GooglePlacesService(settings=settings)
+        routes_service = GoogleRoutesService(settings=settings)
         app.state.places_service = places_service
-        app.state.place_recommendation_service = PlaceRecommendationService(places_service)
+        app.state.place_recommendation_service = PlaceRecommendationService(
+            places_service, routes_service=routes_service
+        )
         logger.info("places.recommendation_configured", provider="google_places")
     except Exception as exc:
         logger.warning("places.recommendation_init_failed", error_type=type(exc).__name__)
@@ -146,7 +161,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointer=checkpoint,
         checkpoint_mode=checkpoint_mode,
         place_recommendation_service=app.state.place_recommendation_service,
+        langfuse_client=_langfuse_client,
     )
+
+    # 5. Initialize UserService (PostgreSQL-backed auth)
+    app.state.user_service = None
+    dsn = os.environ.get("DATABASE_URL")
+    if dsn:
+        try:
+            app.state.user_service = await UserService.create(dsn)
+            logger.info("user_service.initialized", storage="postgres")
+        except Exception as exc:
+            logger.warning("user_service.init_failed", error=str(exc))
 
     logger.info(
         "app.startup",
@@ -154,10 +180,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         version=app.version,
         env=settings.APP_ENV,
         langfuse_enabled=_langfuse_cleanup is not None,
+        langfuse_client_attached=_langfuse_client is not None,
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
         agent_service_enabled=app.state.agent_service is not None,
         place_recommendation_enabled=app.state.place_recommendation_service is not None,
+        user_service_enabled=app.state.user_service is not None,
         checkpoint_mode=checkpoint_mode,
     )
 
@@ -168,6 +196,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     close_client = getattr(places_client, "aclose", None)
     if close_client is not None:
         await close_client()
+
+    # Close user service pool
+    user_service = getattr(app.state, "user_service", None)
+    if user_service is not None:
+        await user_service.close()
 
     # Shutdown phase
     if _langfuse_cleanup:
@@ -185,6 +218,12 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+# ── Rate Limiter ────────────────────────────────────────────────────────
+
+limiter = get_limiter()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 
 # ── Correlation ID middleware ────────────────────────────────────────────
@@ -243,11 +282,14 @@ async def log_requests(request: Request, call_next: Callable) -> JSONResponse:
 # Health router — no auth required (used by orchestrator healthchecks)
 app.include_router(health_router)
 
+# Auth router — no auth required (register/login are public)
+app.include_router(auth_router)
+
 # Chat router — requires API key auth
 app.include_router(chat_router, dependencies=[Depends(verify_api_key)])
 
-# Admin router — requires API key auth
-app.include_router(admin_router, dependencies=[Depends(verify_api_key)])
+# Admin router — each endpoint manages its own JWT auth via Depends(get_current_user)
+app.include_router(admin_router)
 
 
 # ── Root endpoint ───────────────────────────────────────────────────────

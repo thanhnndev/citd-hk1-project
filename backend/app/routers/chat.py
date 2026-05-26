@@ -11,12 +11,25 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.middleware.rate_limiter import get_limiter
 from app.models.request import ChatRequest
 from app.models.response import ChatResponse
+
+# Guardrails — input screening and output grounding
+try:
+    from agents.guardrails.input_guardrails import (
+        block_injection,
+        reject_off_topic,
+    )
+    from agents.guardrails.output_guardrails import verify_grounding
+    _GUARDRAILS_AVAILABLE = True
+except Exception:
+    _GUARDRAILS_AVAILABLE = False
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/chat")
+limiter = get_limiter()
 
 
 
@@ -51,6 +64,7 @@ def _agent_service_available(request: Request) -> bool:
     )
 
 @router.post("", response_model=ChatResponse)
+@limiter.limit("20/minute")
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     """Answer a user query through the shared agent service."""
     t0 = time.perf_counter()
@@ -67,6 +81,56 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
             },
         )
 
+    # --- Input guardrails ---
+    if _GUARDRAILS_AVAILABLE:
+        try:
+            injection_result = block_injection(body.message)
+            if injection_result.verdict == "blocked":
+                logger.warning(
+                    "guardrail.input_blocked_endpoint",
+                    session_id=body.session_id,
+                    reason=injection_result.reason,
+                    details=injection_result.details,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "input_blocked",
+                        "message": injection_result.reason or "Input blocked by security guardrails.",
+                        "session_id": body.session_id,
+                    },
+                )
+
+            topic_result = reject_off_topic(body.message)
+            if topic_result.verdict == "blocked":
+                logger.warning(
+                    "guardrail.topic_rejected_endpoint",
+                    session_id=body.session_id,
+                    reason=topic_result.reason,
+                    details=topic_result.details,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "off_topic",
+                        "message": (
+                            "This query is outside the scope of the tourism assistant. "
+                        "Please ask about travel, dining, or attractions."
+                    ),
+                    "session_id": body.session_id,
+                },
+            )
+        except HTTPException:
+            raise  # re-raise intentional guardrail blocks
+        except Exception as exc:
+            logger.warning(
+                "guardrail.degraded",
+                session_id=body.session_id,
+                error=str(exc),
+                reason="input_guardrail_crash",
+            )
+            # Fail-open: continue to agent service
+
     if hasattr(agent_service, "_llm_service"):
         agent_service._llm_service = getattr(request.app.state, "llm_service", None)
 
@@ -75,6 +139,32 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         message=body.message,
         language=body.language,
     )
+
+    # --- Output grounding check ---
+    if _GUARDRAILS_AVAILABLE:
+        try:
+            grounding_result = verify_grounding(response.message, response.citations)
+            if grounding_result.verdict == "flagged":
+                response.guardrail_status = "output_flagged"
+                response.guardrail_reason = grounding_result.reason
+                logger.warning(
+                    "guardrail.output_flagged_endpoint",
+                    session_id=body.session_id,
+                    reason=grounding_result.reason,
+                    details=grounding_result.details,
+                )
+            else:
+                response.guardrail_status = "pass"
+        except Exception as exc:
+            logger.warning(
+                "guardrail.degraded",
+                session_id=body.session_id,
+                error=str(exc),
+                reason="grounding_check_crash",
+            )
+            # Fail-open: request still passes through
+    else:
+        logger.debug("guardrail.degraded", reason="guardrails_not_available")
 
     elapsed = (time.perf_counter() - t0) * 1000
     logger.info(
@@ -91,6 +181,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     return response
 
 @router.get("/stream")
+@limiter.limit("20/minute")
 async def chat_stream(
     request: Request,
     message: str = Query(...),
@@ -102,6 +193,37 @@ async def chat_stream(
     sid = session_id.strip()
     if not query or not sid:
         return _error_stream("invalid_request")
+
+    # --- Input guardrails (before stream starts) ---
+    if _GUARDRAILS_AVAILABLE:
+        try:
+            injection_result = block_injection(query)
+            if injection_result.verdict == "blocked":
+                logger.warning(
+                    "guardrail.input_blocked_stream",
+                    session_id=sid,
+                    reason=injection_result.reason,
+                )
+                return _error_stream(f"input_blocked: {injection_result.reason}")
+
+            topic_result = reject_off_topic(query)
+            if topic_result.verdict == "blocked":
+                logger.warning(
+                    "guardrail.topic_rejected_stream",
+                    session_id=sid,
+                    reason=topic_result.reason,
+                )
+                return _error_stream(
+                    "off_topic: This query is outside the scope of the tourism assistant."
+                )
+        except Exception as exc:
+            logger.warning(
+                "guardrail.degraded",
+                session_id=sid,
+                error=str(exc),
+                reason="input_guardrail_crash_stream",
+            )
+            # Fail-open: continue to stream
 
     agent_service = getattr(request.app.state, "agent_service", None)
     if not _agent_service_available(request):
@@ -128,6 +250,27 @@ async def chat_stream(
             yield _sse_payload(f"[ERROR] {reason}")
             yield _sse_payload("[DONE]")
             return
+
+        # --- Output guardrails (post-stream, cannot block — tokens already sent) ---
+        if _GUARDRAILS_AVAILABLE:
+            try:
+                # Output guardrails need the full message and citations;
+                # in stream mode we log a degraded notice since we can't
+                # reconstruct the full response from SSE events here.
+                logger.info(
+                    "guardrail.degraded",
+                    session_id=sid,
+                    reason="output_guardrail_not_applicable_stream",
+                    details="Streaming responses cannot be re-validated after tokens are sent.",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "guardrail.degraded",
+                    session_id=sid,
+                    error=str(exc),
+                )
+
         logger.info("sse.stream_complete", session_id=sid)
+        yield _sse_payload("[DONE]")
 
     return _streaming_response(event_generator())

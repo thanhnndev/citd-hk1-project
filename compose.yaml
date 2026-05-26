@@ -70,7 +70,8 @@ services:
   # ── FastAPI Backend — Application layer ───────────────────────────────────
   backend:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: ham-ninh-backend
     ports:
       - "${HN_BACKEND_HOST_PORT:-48721}:8000"

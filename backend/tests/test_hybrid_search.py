@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from qdrant_client.models import Fusion, FusionQuery, SparseVector
 
-from app.services.hybrid_retriever import BM25Vectorizer
-from app.services.qdrant_service import (
+from agents.tools.hybrid_retriever import BM25Vectorizer
+from agents.tools.qdrant_service import (
     COLLECTION_NAME,
     DENSE_VECTOR_NAME,
     QdrantService,
@@ -235,7 +235,7 @@ class TestHybridRetriever:
         qdrant_raises: Exception | None = None,
     ):
         """Build a HybridRetriever with mocked dependencies."""
-        from app.services.hybrid_retriever import HybridRetriever
+        from agents.tools.hybrid_retriever import HybridRetriever
 
         qdrant_svc = MagicMock()
         if qdrant_raises:
@@ -305,7 +305,7 @@ class TestHybridRetriever:
         """answer_from_chunks with 2 chunks returns ChatResponse with non-empty message."""
         from app.models.rag import RAGChunk
         from app.models.response import Citation
-        from app.services.grounded_answer import GroundedAnswerService
+        from agents.guardrails.grounded_answer import GroundedAnswerService
 
         chunks = [
             RAGChunk(
@@ -456,10 +456,10 @@ class TestHybridIntegration:
     async def test_hybrid_collection_points_count(
         self, qdrant_service: QdrantService
     ) -> None:
-        """Collection must contain exactly 321 points after full corpus embed."""
+        """Collection must contain exactly 607 points after full corpus embed."""
         info = await qdrant_service.collection_info()
-        assert info["points_count"] == 321, (
-            f"Expected 321 points, got {info['points_count']}"
+        assert info["points_count"] == 607, (
+            f"Expected 607 points, got {info['points_count']}"
         )
 
     @pytest.mark.integration
@@ -471,8 +471,8 @@ class TestHybridIntegration:
         loaded_chunks,
     ) -> None:
         """For each Hàm Ninh query, hybrid search must return ≥1 chunk mentioning Hàm Ninh."""
-        from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
-        from app.services.retriever import Retriever
+        from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
+        from agents.tools.retriever import Retriever
 
         bm25 = BM25Vectorizer()
         bm25.fit([c.text for c in loaded_chunks])
@@ -500,7 +500,7 @@ class TestHybridIntegration:
         retriever,
     ) -> None:
         """Hybrid total_found must be >= keyword-only total_found for each query."""
-        from app.services.hybrid_retriever import BM25Vectorizer, HybridRetriever
+        from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 
         bm25 = BM25Vectorizer()
         bm25.fit([c.text for c in loaded_chunks])

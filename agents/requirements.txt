@@ -1,4 +1,4 @@
-# Agents Module — Python Dependencies
+# Agents Module — LangGraph Multi-Agent Orchestration
 # Ham Ninh Sustainable Tourism AI Assistant
 # Python 3.12 recommended
 
@@ -11,17 +11,11 @@ langchain-openai
 # Vector Database Client
 qdrant-client==1.18.0
 
-# Intent Routing
-semantic-router==0.0.20
-
-# ML — Ensemble Re-ranking (Random Forest + Gradient Boosting)
+# ML — Ensemble Re-ranking
 scikit-learn==1.8.0
 
 # RAG Evaluation
 ragas==0.4.3
-
-# Input/Output Guardrails
-nemoguardrails==0.17.0
 
 # Observability & Tracing
 langfuse==4.6.1

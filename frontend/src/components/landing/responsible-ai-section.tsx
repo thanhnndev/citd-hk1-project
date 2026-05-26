@@ -23,7 +23,7 @@ export function ResponsibleAiSection({ eyebrow, heading, body, axes }: Responsib
     <SectionShell id="responsible-ai" eyebrow={eyebrow} heading={heading} body={body}>
       <div className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         {axes.map((axis, index) => (
-          <Card key={axis.id} className="bg-background/70">
+          <Card key={axis.id} className="bg-background/70 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between gap-3">
               </div>

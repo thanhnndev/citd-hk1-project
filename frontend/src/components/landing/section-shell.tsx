@@ -26,7 +26,7 @@ export function SectionShell({
     <section id={id} aria-labelledby={`${id}-heading`} className={cn("scroll-mt-20 py-20 sm:py-28", className)}>
       <div className={cn("mx-auto w-full max-w-6xl px-6", contentClassName)}>
         <div className="mx-auto max-w-3xl text-center">
-          <Badge variant="outline" className="mb-4 border-primary/30 bg-primary/5 text-primary">
+          <Badge variant="outline" className="mb-4 border-primary/30 bg-primary/5 text-primary transition-colors duration-300">
             {eyebrow}
           </Badge>
           <h2 id={`${id}-heading`} className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">

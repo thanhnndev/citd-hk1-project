@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
-from app.services.agent_service import AgentService
+from agents.graph.agent_service import AgentService
 
 
 def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
@@ -19,7 +19,16 @@ def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
         price_level=2,
         local_factor=0.8,
         final_score=0.9,
-        score_breakdown=ScoreBreakdown(relevance=1.0, proximity=0.5, price=0.5, rating=0.92, accessibility=0.5),
+        score_breakdown=ScoreBreakdown(
+            tree1_locality=0.9,
+            tree2_proximity=0.8,
+            tree3_quality=0.85,
+            s_bag=0.85,
+            delta1_fairness=0.0,
+            delta2_access=0.0,
+            final_score=0.9,
+            rank=1,
+        ),
         accessibility_score=0.5,
         google_maps_uri="https://maps.example/ham-ninh-seafood",
     )
@@ -156,7 +165,7 @@ async def test_recommendation_service_preserves_pin_ready_candidate_fields() -> 
 
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
-    from app.services.place_recommendation_service import PlaceRecommendationService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidate = PlaceCandidate(
         place_id="places/pin-ready",
@@ -209,7 +218,7 @@ async def test_recommendation_service_negative_statuses_return_empty_places(stat
 
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
-    from app.services.place_recommendation_service import PlaceRecommendationService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
 
     places_tool = AsyncMock()
     request = PlaceSearchRequest(query="seafood")

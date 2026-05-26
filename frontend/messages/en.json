@@ -4,10 +4,59 @@
     "chat": "Chat",
     "map": "Map",
     "architecture": "Architecture",
+    "login": "Login",
+    "register": "Register",
+    "logout": "Logout",
     "localeLabel": "Language",
     "localeSwitcherLabel": "Select language",
     "copyright": "© {year} Ham Ninh AI Guide. Preserving heritage, supporting sustainable tourism.",
     "tagline": "Built for the community — responsible AI for Ham Ninh fishing village, Phu Quoc."
+  },
+  "Auth": {
+    "common": {
+      "emailLabel": "Email",
+      "passwordLabel": "Password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password"
+    },
+    "register": {
+      "eyebrow": "Create account",
+      "title": "Register",
+      "usernameLabel": "Username",
+      "usernamePlaceholder": "Username",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Password (min. 6 characters)",
+      "submitButton": "Create account",
+      "submitting": "Creating...",
+      "loginPrompt": "Already have an account?",
+      "loginLink": "Log in",
+      "successMessage": "Account created! Redirecting to login...",
+      "verifyPrompt": "Account created! Please check your email for the verification code."
+    },
+    "login": {
+      "eyebrow": "Welcome back",
+      "title": "Log in",
+      "emailPlaceholder": "email@example.com",
+      "passwordPlaceholder": "Password",
+      "submitButton": "Log in",
+      "submitting": "Logging in...",
+      "registerPrompt": "Don't have an account?",
+      "registerLink": "Register",
+      "verifyError": "Email not verified. Please check your inbox and verify your email before logging in."
+    },
+    "verify": {
+      "eyebrow": "Email verification",
+      "title": "Enter OTP code",
+      "instruction": "We sent a 6-digit verification code to",
+      "otpLabel": "OTP",
+      "otpPlaceholder": "000000",
+      "submitButton": "Verify",
+      "submitting": "Verifying...",
+      "resendButton": "Resend code",
+      "resendSuccess": "A new code has been sent! Please check your email.",
+      "successMessage": "Email verified successfully! Redirecting to login...",
+      "loginLink": "Go to login"
+    }
   },
   "Landing": {
     "hero": {
@@ -68,7 +117,7 @@
         },
         {
           "title": "Ensemble Re-ranker — Fairness Engine",
-          "description": "Combines Random Forest and Gradient Boosting to balance quality, distance, and local_factor."
+          "description": "Combines 3 pre-defined rule-based decision trees via bagging, plus 2 correction stumps, to balance quality, distance, and local_factor — no training required."
         }
       ]
     },
@@ -112,48 +161,72 @@
     "algorithmShowcase": {
       "eyebrow": "Algorithm",
       "heading": "Ensemble re-ranking turns place signals into a fairer order",
-      "body": "Shows how a Decision Tree grows into Random Forest bagging, Gradient Boosting, and a final explainable score.",
+      "body": "Shows how 3 pre-defined rule-based decision trees are combined via bagging and correction stumps into a final explainable score — no training required.",
       "chart": {
         "title": "Illustrative contribution to Final Score",
         "ariaLabel": "Bar chart showing example contributions of local factor, rating, and distance to the final score.",
         "description": "The values below are interface explanation data, not live Places API results.",
         "bars": [
           {
-            "key": "local_factor",
-            "label": "Local factor",
-            "value": 0.42,
-            "description": "How strongly a place is tied to local family businesses and traditional livelihoods."
+            "key": "tree1_locality",
+            "label": "Tree 1: Locality-first",
+            "value": 0.78,
+            "description": "First decision tree scores based on how strongly a place supports local community and livelihoods."
           },
           {
-            "key": "rating",
-            "label": "Rating",
-            "value": 0.33,
-            "description": "Perceived quality from normalized rating and review signals."
+            "key": "tree2_proximity",
+            "label": "Tree 2: Proximity-first",
+            "value": 0.65,
+            "description": "Second decision tree prioritizes places near the user's location or planned route."
           },
           {
-            "key": "distance",
-            "label": "Distance",
-            "value": 0.25,
-            "description": "Travel convenience from the user location or planned route."
+            "key": "tree3_quality",
+            "label": "Tree 3: Quality-first",
+            "value": 0.58,
+            "description": "Third decision tree evaluates quality from ratings and visitor feedback."
+          },
+          {
+            "key": "s_bag",
+            "label": "Bagging: Average of 3 trees",
+            "value": 0.67,
+            "description": "Combines all 3 trees via bagging to reduce variance and increase stability."
+          },
+          {
+            "key": "delta1_fairness",
+            "label": "Fairness adjustment (penalty for chains)",
+            "value": -0.045,
+            "description": "Penalty applied to chain businesses (η × -0.15) to reduce their ranking advantage and support small local vendors."
+          },
+          {
+            "key": "delta2_access",
+            "label": "Accessibility adjustment (+3%)",
+            "value": 0.03,
+            "description": "Bonus for places with high accessibility, supporting visitors with disabilities."
+          },
+          {
+            "key": "final_score",
+            "label": "Final score",
+            "value": 0.75,
+            "description": "The final ensemble result — combining bagged tree scores with fairness and accessibility adjustments."
           }
         ]
       },
       "steps": [
         {
           "title": "Decision Tree",
-          "description": "Learns simple thresholds over rating, distance, and local_factor."
+          "description": "Pre-defined thresholds over rating, distance, and local_factor — each tree applies a simple priority rule."
         },
         {
-          "title": "Random Forest",
-          "description": "Bags many trees to reduce variance when place data is noisy."
+          "title": "Bagging: Average of 3 trees",
+          "description": "Averages all 3 hand-written trees via simple mean to stabilize scores and reduce single-tree variance."
         },
         {
-          "title": "Gradient Boosting",
-          "description": "Sequentially learns remaining errors to reduce ranking bias."
+          "title": "Correction stumps: fairness + accessibility",
+          "description": "Applies 2 expert-defined corrections: fairness penalty for chain businesses, bonus for accessibility features."
         },
         {
-          "title": "Ensemble Score",
-          "description": "Combines 0.6 × RF and 0.4 × GBM into an explainable final_score."
+          "title": "Final score: clip and rank",
+          "description": "Clips the result to [0,1] and assigns a 1-based rank — fully explainable, no training needed."
         }
       ]
     },
@@ -183,8 +256,8 @@
           "description": "Place and routing data source in later slices."
         },
         {
-          "name": "scikit-learn",
-          "description": "Random Forest and Gradient Boosting for re-ranking."
+          "name": "Pre-defined Ensemble",
+          "description": "Hand-written decision trees with bagging and correction stumps for explainable re-ranking — no ML training."
         },
         {
           "name": "RAGAS",
@@ -230,7 +303,23 @@
     "retry": "Retry",
     "typing": "Thinking...",
     "noEvidence": "I couldn't find information about that. Try asking differently.",
-    "newQuestion": "Ask another question"
+    "newQuestion": "Ask another question",
+    "placeResultsHeading": "Recommended Places",
+    "viewOnMap": "View on Map",
+    "scoreLabel": "Score",
+    "noRating": "No rating",
+    "welcomeGreeting": "Hello! I'm your Ham Ninh AI Guide",
+    "welcomeSubtitle": "Ask me anything about Ham Ninh's culture, history, food, and places.",
+    "newConversation": "New conversation",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "retryMessage": "Retry",
+    "prompts": [
+      "What is the history of Ham Ninh fishing village?",
+      "Recommend local seafood restaurants",
+      "How do I get to Ham Ninh from Duong Dong?",
+      "What cultural festivals happen in Ham Ninh?"
+    ]
   },
   "Map": {
     "title": "Ham Ninh Place Proof Map",
@@ -264,7 +353,150 @@
     "responseNote": "Assistant note"
   },
   "Architecture": {
-    "title": "System Architecture"
+    "title": "System Architecture",
+    "overview": {
+      "eyebrow": "System Design",
+      "heading": "Multi-agent AI assistant for Ham Ninh fishing village",
+      "body": "The architecture combines Retrieval-Augmented Generation for cultural knowledge, Google Places API for location intelligence, ensemble re-ranking for fairness, and LangGraph-based agent orchestration — all served through a bilingual Next.js frontend with full observability.",
+      "cards": [
+        {
+          "title": "Data Flow",
+          "description": "User → Frontend → Agent Orchestrator → Workers (RAG, Maps) → SSE Streaming → Response"
+        }
+      ]
+    },
+    "ragPipeline": {
+      "eyebrow": "Knowledge Retrieval",
+      "heading": "RAG Pipeline — Citation-backed cultural Q&A",
+      "body": "Answers about Ham Ninh's culture, history, and cuisine are grounded in retrieved documents — not model guesswork. Every answer includes citations and is evaluated by RAGAS for faithfulness and relevance.",
+      "cards": [
+        {
+          "title": "Document Corpus",
+          "description": "Cultural documents are normalized, chunked, and embedded into a Qdrant vector store for fast similarity search."
+        },
+        {
+          "title": "Vector Search",
+          "description": "User queries are embedded and matched against the corpus using top-k similarity with configurable thresholds."
+        },
+        {
+          "title": "Grounded Answers",
+          "description": "The LLM generates answers anchored in retrieved context, with inline citations back to source documents."
+        }
+      ]
+    },
+    "mapsApi": {
+      "eyebrow": "Location Intelligence",
+      "heading": "Maps & Places API — Real-world place data",
+      "body": "Google Places API (New) provides nearby search, text search, place details, and autocomplete. Routes API powers computeRouteMatrix for distance-aware recommendations. A circuit breaker ensures graceful fallback when the API is unavailable.",
+      "cards": [
+        {
+          "title": "Place Discovery",
+          "description": "Nearby search and text search find restaurants, services, and cultural sites near Ham Ninh fishing village."
+        },
+        {
+          "title": "Route Planning",
+          "description": "computeRouteMatrix calculates distances between user location and candidate places for proximity-aware ranking."
+        },
+        {
+          "title": "Fallback Handling",
+          "description": "Circuit breaker detects API failures and returns curated fallback results instead of error pages."
+        }
+      ]
+    },
+    "ensembleReranker": {
+      "eyebrow": "Fairness Engine",
+      "heading": "Ensemble Re-ranking — Fair and explainable scoring",
+      "body": "Three pre-defined rule-based decision trees (Locality-first, Proximity-first, Quality-first) are combined via bagging. Two correction stumps apply fairness penalties for chains and accessibility bonuses. The local_factor ensures ≥40% local businesses appear in the top-5 results.",
+      "cards": [
+        {
+          "title": "Decision Trees",
+          "description": "Locality-first, Proximity-first, and Quality-first trees score places using hand-written rules — no training required."
+        },
+        {
+          "title": "Correction Stumps",
+          "description": "Fairness penalty reduces chain business rankings; accessibility bonus rewards places with disability-friendly features."
+        },
+        {
+          "title": "Fairness Constraint",
+          "description": "The local_factor boosts local businesses so at least 40% of top-5 results are community-run establishments."
+        }
+      ]
+    },
+    "orchestration": {
+      "eyebrow": "Supervisor",
+      "heading": "Agent Orchestration — LangGraph supervisor pattern",
+      "body": "A LangGraph supervisor coordinates specialized worker agents: the RAG Agent for cultural answers and the Maps & Service Agent for place data. Guardrails filter unsafe inputs, and SSE streaming delivers real-time chat responses with session durability.",
+      "cards": [
+        {
+          "title": "Supervisor Pattern",
+          "description": "The supervisor routes queries to the right worker agent based on intent — RAG for culture, Maps for places."
+        },
+        {
+          "title": "Streaming Responses",
+          "description": "Server-Sent Events (SSE) deliver token-level streaming for a responsive chat experience."
+        },
+        {
+          "title": "Session State",
+          "description": "LangGraph checkpoints preserve conversation history and agent state across session boundaries."
+        }
+      ]
+    },
+    "frontendShell": {
+      "eyebrow": "Platform",
+      "heading": "Frontend Shell & Observability",
+      "body": "Next.js 16 App Router powers the frontend with next-intl for bilingual support (English/Vietnamese). Langfuse traces agent workflows, health endpoints monitor system status, and responsive UI ensures accessibility across devices.",
+      "cards": [
+        {
+          "title": "App Shell",
+          "description": "Next.js 16 with App Router, responsive layout, and progressive enhancement from landing page to full chat/map."
+        },
+        {
+          "title": "i18n Support",
+          "description": "next-intl provides locale routing, message files, and server-side translation for all UI text in English and Vietnamese."
+        },
+        {
+          "title": "System Observability",
+          "description": "Langfuse traces, health endpoints, and structured logging provide visibility into agent performance and system health."
+        }
+      ]
+    }
+  },
+  "Admin": {
+    "gate": {
+      "loginRequired": "Login required",
+      "loginPrompt": "Please log in to access the admin dashboard.",
+      "loginButton": "Log in"
+    },
+    "dashboard": {
+      "title": "Admin Dashboard",
+      "corpus": {
+        "title": "Corpus",
+        "noData": "No data available"
+      },
+      "evaluation": {
+        "title": "RAGAS Evaluation",
+        "triggerButton": "Run evaluation",
+        "triggering": "Running...",
+        "lastVerdict": "Last verdict",
+        "noResults": "No evaluation results yet",
+        "error": "Unable to run evaluation"
+      },
+      "traces": {
+        "title": "Langfuse Traces",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "noData": "No trace data",
+        "error": "Unable to load trace status"
+      },
+      "fairness": {
+        "title": "Fairness Audit",
+        "totalAudits": "Total audits",
+        "meanLocalFactor": "Mean local factor",
+        "noData": "No audit data",
+        "error": "Unable to load fairness summary"
+      },
+      "fetchError": "Unable to load data"
+    }
   },
   "Common": {
     "loading": "Loading...",

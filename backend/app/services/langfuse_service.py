@@ -17,15 +17,15 @@ logger = structlog.get_logger(__name__)
 
 def init_langfuse(
     settings: Settings,
-) -> Callable[[], None] | None:
-    """Create and configure a Langfuse client, returning a cleanup function.
+) -> tuple[Callable[[], None] | None, Any | None]:
+    """Create and configure a Langfuse client, returning (cleanup_fn, client).
 
     Args:
         settings: Application settings containing LANGFUSE_* variables.
 
     Returns:
-        A shutdown callback that flushes and closes the Langfuse client,
-        or None if Langfuse is disabled (missing API keys).
+        A tuple of (shutdown_callback, langfuse_client). Both are None
+        if Langfuse is disabled (missing API keys or import error).
     """
     public_key = settings.LANGFUSE_PUBLIC_KEY
     secret_key = settings.LANGFUSE_SECRET_KEY
@@ -35,7 +35,7 @@ def init_langfuse(
             "langfuse.disabled",
             reason="LANGFUSE_PUBLIC_KEY or LANGFUSE_SECRET_KEY not set",
         )
-        return None
+        return (None, None)
 
     try:
         from langfuse import Langfuse  # type: ignore[import-untyped]
@@ -62,14 +62,14 @@ def init_langfuse(
             except Exception:
                 logger.exception("langfuse.cleanup_failed")
 
-        return _cleanup
+        return (_cleanup, client)
 
     except ImportError:
         logger.warning(
             "langfuse.disabled",
             reason="langfuse package not installed",
         )
-        return None
+        return (None, None)
     except Exception:
         logger.exception("langfuse.init_failed")
-        return None
+        return (None, None)

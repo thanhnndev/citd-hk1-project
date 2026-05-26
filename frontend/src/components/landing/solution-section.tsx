@@ -27,10 +27,10 @@ export function SolutionSection({ eyebrow, heading, body, pillars }: SolutionSec
           const Icon = icons[index % icons.length];
 
           return (
-            <Card key={pillar.title} className="relative overflow-hidden border-primary/10 bg-card">
+            <Card key={pillar.title} className="relative overflow-hidden border-primary/10 bg-card transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10">
               <CardContent className="space-y-5">
                 <Badge variant="secondary">Agent {index + 1}</Badge>
-                <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-300 group-hover:scale-110">
                   <Icon aria-hidden="true" className="size-5" />
                 </div>
                 <div>

@@ -7,7 +7,7 @@ import pytest
 
 from app.core.config import Settings
 from app.models.places import PlaceDetailsRequest, PlaceNearbyRequest, PlaceSearchRequest, PlaceToolStatus
-from app.services.places_service import GooglePlacesService, normalize_place
+from agents.tools.places_service import GooglePlacesService, normalize_place
 
 
 class FakeResponse:

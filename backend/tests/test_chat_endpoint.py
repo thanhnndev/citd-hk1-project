@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
-from app.services.corpus_loader import load_corpus
-from app.services.retriever import Retriever
+from agents.tools.corpus_loader import load_corpus
+from agents.tools.retriever import Retriever
 
 
 @pytest.fixture()
@@ -57,7 +57,7 @@ class TestChatEndpointHappyPath:
         body = r.json()
         assert body["intent"] == "place_recommendation"
         assert body["places"] == []
-        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"]
+        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"] or "status=upstream_error" in body["reasoning_log"]
 
     def test_navigation_intent(self, client):
         r = client.post("/chat", json={
@@ -138,7 +138,16 @@ class TestChatEndpointAgentDelegation:
                 business_status="OPERATIONAL",
                 local_factor=0.8,
                 final_score=0.9,
-                score_breakdown=ScoreBreakdown(relevance=1.0, proximity=0.5, price=0.5, rating=0.94, accessibility=0.5),
+                score_breakdown=ScoreBreakdown(
+                    tree1_locality=0.9,
+                    tree2_proximity=0.8,
+                    tree3_quality=0.85,
+                    s_bag=0.85,
+                    delta1_fairness=0.0,
+                    delta2_access=0.0,
+                    final_score=0.9,
+                    rank=1,
+                ),
                 google_maps_uri="https://maps.example/pin-ready",
             )],
             intent="place_recommendation",

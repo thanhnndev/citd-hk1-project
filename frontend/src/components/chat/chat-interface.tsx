@@ -3,13 +3,19 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble } from "./message-bubble";
-import { sendChat, streamChat, type ChatResponse, type Citation } from "@/lib/chat-api";
-import { ArrowUp, RotateCcw, Loader2 } from "lucide-react";
+import { WelcomeScreen } from "./welcome-screen";
+import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult } from "@/lib/chat-api";
+import { ArrowUp, RotateCcw, Loader2, Trash2 } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
+  places?: PlaceResult[];
+  guardrailStatus?: string;
+  fallback?: boolean;
+  langfuseTraceId?: string | null;
+  cacheHit?: boolean;
 }
 
 interface ChatInterfaceProps {
@@ -24,6 +30,17 @@ interface ChatInterfaceProps {
     citations: string;
     noEvidence: string;
     newQuestion: string;
+    placeResultsHeading?: string;
+    viewOnMap?: string;
+    scoreLabel?: string;
+    noRating?: string;
+    welcomeGreeting?: string;
+    welcomeSubtitle?: string;
+    newConversation?: string;
+    copy?: string;
+    copied?: string;
+    retryMessage?: string;
+    prompts?: string[];
   };
 }
 
@@ -121,6 +138,11 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               ...lastMessage,
               content: displayText,
               citations: response.citations ?? [],
+              places: response.places ?? [],
+              guardrailStatus: response.guardrail_status,
+              fallback: response.fallback,
+              langfuseTraceId: response.langfuse_trace_id,
+              cacheHit: response.cache_hit,
             };
             return next;
           }
@@ -131,6 +153,11 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               role: "assistant",
               content: displayText,
               citations: response.citations ?? [],
+              places: response.places ?? [],
+              guardrailStatus: response.guardrail_status,
+              fallback: response.fallback,
+              langfuseTraceId: response.langfuse_trace_id,
+              cacheHit: response.cache_hit,
             },
           ];
         });
@@ -177,6 +204,30 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     }
   }, [messages, handleSubmit]);
 
+  const handleClearConversation = useCallback(() => {
+    setMessages([]);
+    setError(null);
+    setLoading(false);
+    setInput("");
+  }, []);
+
+  const handlePromptClick = useCallback(
+    (prompt: string) => {
+      handleSubmit(prompt);
+    },
+    [handleSubmit],
+  );
+
+  const handleRetryMessage = useCallback(
+    (index: number) => {
+      // Find the user message before this assistant message and re-send it
+      if (index > 0 && messages[index - 1]?.role === "user") {
+        handleSubmit(messages[index - 1].content);
+      }
+    },
+    [messages, handleSubmit],
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -203,10 +254,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         aria-label={translations.title}
       >
         {messages.length === 0 && !error && (
-          <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
-            <p className="text-lg font-medium mb-1">{translations.title}</p>
-            <p className="text-sm">{translations.placeholder}</p>
-          </div>
+          <WelcomeScreen
+            onPromptClick={handlePromptClick}
+            translations={{
+              greeting: translations.welcomeGreeting ?? translations.title,
+              subtitle: translations.welcomeSubtitle ?? translations.placeholder,
+              promptChips: translations.prompts ?? [],
+            }}
+          />
         )}
 
         {messages.map((msg, i) => (
@@ -215,7 +270,19 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             role={msg.role}
             content={msg.content}
             citations={msg.citations}
+            places={msg.places}
+            guardrailStatus={msg.guardrailStatus}
+            fallback={msg.fallback}
+            langfuseTraceId={msg.langfuseTraceId}
+            cacheHit={msg.cacheHit}
             typingLabel={translations.typing}
+            onRetry={msg.role === "assistant" ? () => handleRetryMessage(i) : undefined}
+            placeTranslations={{
+              placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
+              viewOnMap: translations.viewOnMap ?? "View on Map",
+              scoreLabel: translations.scoreLabel ?? "Score",
+              noRating: translations.noRating ?? "No rating",
+            }}
           />
         ))}
 
@@ -255,6 +322,19 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             className="flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 min-h-[40px] max-h-[120px]"
             aria-label={translations.placeholder}
           />
+          {messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-xl shrink-0 h-10 w-10 text-muted-foreground hover:text-destructive"
+              onClick={handleClearConversation}
+              disabled={loading}
+              aria-label={translations.newConversation ?? "New conversation"}
+              title={translations.newConversation ?? "New conversation"}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
           <Button
             onClick={() => handleSubmit()}
             disabled={loading || !input.trim()}

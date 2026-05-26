@@ -2,14 +2,17 @@ import pytest
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse
-from app.services.agent_service import (
+from agents.graph.agent_service import (
     AgentService,
     InMemoryAgentCheckpointer,
+    NODE_TIMEOUT_ANSWER,
+    NODE_TIMEOUT_RETRIEVE,
+    NodeTimeoutError,
     PostgresAgentCheckpointer,
     create_agent_checkpointer,
 )
-from app.services.grounded_answer import detect_intent
-from app.services.retriever import citation_from_chunk
+from agents.guardrails.grounded_answer import detect_intent
+from agents.tools.retriever import citation_from_chunk
 
 
 @pytest.fixture
@@ -286,7 +289,7 @@ async def test_checkpoint_factory_returns_postgres_contract_when_asyncpg_connect
         assert kwargs["max_size"] == 5
         return pool
 
-    monkeypatch.setattr("app.services.agent_service.asyncpg.create_pool", fake_create_pool)
+    monkeypatch.setattr("agents.graph.agent_service.asyncpg.create_pool", fake_create_pool)
 
     checkpointer, mode = await create_agent_checkpointer("postgresql://user:secret@example.test/db")
 
@@ -294,3 +297,354 @@ async def test_checkpoint_factory_returns_postgres_contract_when_asyncpg_connect
     assert isinstance(checkpointer, PostgresAgentCheckpointer)
     assert pool.conn.executed
     assert await checkpointer.load_history("empty") == []
+
+
+# ---------------------------------------------------------------------------
+# Semantic cache integration tests
+# ---------------------------------------------------------------------------
+
+class FakeEmbeddingService:
+    """Stub embedding service that returns deterministic embeddings."""
+
+    def __init__(self, dimension: int = 1536):
+        self.dimension = dimension
+        self.embed_calls: list[str] = []
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.embed_calls.extend(texts)
+        # Simple deterministic embedding: hash-based vector
+        result = []
+        for text in texts:
+            vec = [0.0] * self.dimension
+            h = hash(text) % self.dimension
+            vec[h] = 1.0
+            result.append(vec)
+        return result
+
+
+class FakeSemanticCache:
+    """Stub semantic cache that tracks calls without needing Redis."""
+
+    def __init__(self, hit_response: str | None = None):
+        self.hit_response = hit_response
+        self.lookup_calls: list[tuple[str, list[float]]] = []
+        self.store_calls: list[tuple[str, list[float], str]] = []
+
+    async def lookup(self, query: str, query_embedding: list[float]) -> str | None:
+        self.lookup_calls.append((query, query_embedding))
+        return self.hit_response
+
+    async def store(
+        self, query: str, query_embedding: list[float], response: str
+    ) -> None:
+        self.store_calls.append((query, query_embedding, response))
+
+
+@pytest.mark.asyncio
+async def test_agent_uses_semantic_cache_on_hit(ham_ninh_chunk):
+    """When semantic cache hits, retrieval uses cached response directly."""
+    cache = FakeSemanticCache(hit_response="Cached: Ham Ninh is a fishing village.")
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=cache,
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "cache-hit-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # Cache was queried
+    assert len(cache.lookup_calls) == 1
+    # Cache hit returned synthetic chunk from cached text
+    assert len(result_state["chunks"]) == 1
+    assert result_state["chunks"][0].source_type == "cache"
+    # Real retriever should NOT have been called (cache hit short-circuits)
+    assert len(retriever.queries) == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_stores_in_semantic_cache_on_miss(ham_ninh_chunk):
+    """When semantic cache misses, retrieval proceeds and result is stored."""
+    cache = FakeSemanticCache(hit_response=None)  # Always miss
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=cache,
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "cache-miss-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # Cache was queried (miss)
+    assert len(cache.lookup_calls) == 1
+    # Cache was stored with the retrieval result
+    assert len(cache.store_calls) == 1
+    stored_query, stored_embedding, stored_response = cache.store_calls[0]
+    assert stored_query == "lang chai Ham Ninh"
+    assert "Ham Ninh" in stored_response
+    # Real retriever was called
+    assert len(retriever.queries) == 1
+    # Chunks came from real retriever
+    assert len(result_state["chunks"]) == 1
+    assert result_state["chunks"][0].source_type == "guide"
+
+
+@pytest.mark.asyncio
+async def test_agent_retrieval_not_broken_when_cache_fails(ham_ninh_chunk):
+    """Cache failure must NOT break the retrieval path."""
+    class BrokenCache:
+        async def lookup(self, query, embedding):
+            raise ConnectionError("Redis is down")
+
+        async def store(self, query, embedding, response):
+            raise ConnectionError("Redis is down")
+
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=BrokenCache(),
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "cache-broken-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    # Should not raise — cache failure is caught
+    result_state = await svc._retrieve_node(state)
+
+    # Retrieval still returned real chunks
+    assert len(result_state["chunks"]) == 1
+    assert result_state["chunks"][0].source_type == "guide"
+
+
+@pytest.mark.asyncio
+async def test_agent_skips_cache_when_not_configured(ham_ninh_chunk):
+    """Without semantic_cache, retrieval works normally (no cache calls)."""
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([ham_ninh_chunk])
+
+    svc = AgentService(
+        retriever=retriever,
+        # No semantic_cache
+    )
+
+    state = {
+        "session_id": "no-cache-session",
+        "message": "lang chai Ham Ninh",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "lang chai Ham Ninh",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # Retrieval worked normally
+    assert len(result_state["chunks"]) == 1
+    assert len(retriever.queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_skips_store_when_no_chunks_returned():
+    """When retrieval returns empty results, cache store is skipped."""
+    cache = FakeSemanticCache(hit_response=None)
+    embedding_svc = FakeEmbeddingService()
+    retriever = FakeRetriever([])  # Empty retriever
+
+    svc = AgentService(
+        retriever=retriever,
+        semantic_cache=cache,
+        embedding_service=embedding_svc,
+    )
+
+    state = {
+        "session_id": "empty-session",
+        "message": "khong-co-du-lieu",
+        "language": "vi",
+        "history": [],
+        "retrieval_query": "khong-co-du-lieu",
+        "fallback_reason": None,
+        "intent": "general",
+    }
+
+    result_state = await svc._retrieve_node(state)
+
+    # No chunks returned
+    assert len(result_state["chunks"]) == 0
+    # Cache store was NOT called (nothing to store)
+    assert len(cache.store_calls) == 0
+    # But lookup was attempted
+    assert len(cache.lookup_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Node Timeout (ROB-06)
+# ---------------------------------------------------------------------------
+
+class TestNodeTimeoutError:
+    """Tests for per-node timeout error class."""
+
+    def test_exception_message(self) -> None:
+        from agents.graph.agent_service import NodeTimeoutError
+
+        err = NodeTimeoutError("retrieve", 10)
+        assert err.node_name == "retrieve"
+        assert err.timeout_seconds == 10
+        assert "retrieve" in str(err)
+        assert "10s" in str(err)
+
+    def test_is_exception(self) -> None:
+        from agents.graph.agent_service import NodeTimeoutError
+
+        assert issubclass(NodeTimeoutError, Exception)
+
+    def test_timeout_constants_exist(self) -> None:
+        from agents.graph.agent_service import (
+            NODE_TIMEOUT_ANSWER,
+            NODE_TIMEOUT_RETRIEVE,
+        )
+
+        assert NODE_TIMEOUT_RETRIEVE == 10
+        assert NODE_TIMEOUT_ANSWER == 15
+        assert isinstance(NODE_TIMEOUT_RETRIEVE, int)
+        assert isinstance(NODE_TIMEOUT_ANSWER, int)
+
+
+# ---------------------------------------------------------------------------
+# Cultural Context Ordering (SOC-05)
+# ---------------------------------------------------------------------------
+
+class TestCulturalContextOrdering:
+    """Tests for SOC-05: cultural context before commercial recommendations."""
+
+    def _make_chunk(self, domain: str = "food", text: str = "test",
+                    source_type: str = "entity", title: str = "Test") -> RAGChunk:
+        return RAGChunk(
+            chunk_id="test-1",
+            source_id="test",
+            title=title,
+            url="",
+            domain=domain,
+            source_type=source_type,
+            reliability="medium",
+            language="vi",
+            location="Hàm Ninh",
+            text=text,
+            chunk_index=0,
+            total_chunks=1,
+        )
+
+    def test_extracts_cultural_chunks_by_domain(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="food", text="restaurant"),
+            self._make_chunk(domain="culture", text="festival traditions"),
+            self._make_chunk(domain="history", text="ancient temple"),
+            self._make_chunk(domain="food", text="noodle shop"),
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) == 2  # culture + history
+        assert all(c.domain in ("culture", "history") for c in cultural)
+
+    def test_extracts_cultural_chunks_by_title(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="food", title="Lễ hội Dinh Cậu"),
+            self._make_chunk(domain="food", title="Quán ốc"),
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) == 1
+        assert "Lễ hội Dinh Cậu" in cultural[0].title
+
+    def test_limits_to_3_chunks(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="culture", text=f"Cultural fact {i}")
+            for i in range(10)
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) <= 3
+
+    def test_returns_empty_for_no_cultural_chunks(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="food", text="restaurant"),
+            self._make_chunk(domain="shopping", text="mall"),
+        ]
+
+        cultural = svc._extract_cultural_context(chunks)
+        assert len(cultural) == 0
+
+    def test_builds_cultural_intro_vi(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="culture", text="Hàm Ninh có truyền thống đánh bắt cá từ thế kỷ 18"),
+        ]
+
+        intro = svc._build_cultural_intro(chunks, "vi")
+        assert "Hàm Ninh" in intro
+        assert "Bối cảnh văn hóa" in intro
+
+    def test_builds_cultural_intro_en(self) -> None:
+        from agents.graph.agent_service import AgentService
+
+        svc = AgentService(retriever=None)
+
+        chunks = [
+            self._make_chunk(domain="culture", text="Ham Ninh has a fishing tradition since the 18th century"),
+        ]
+
+        intro = svc._build_cultural_intro(chunks, "en")
+        assert "Cultural Context" in intro

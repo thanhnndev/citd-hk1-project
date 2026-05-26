@@ -23,7 +23,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.core.config import Settings  # noqa: E402
 from app.models.places import HAM_NINH_CENTER, PlaceCandidate, PlaceSearchRequest, PlaceToolStatus  # noqa: E402
-from app.services.places_service import GooglePlacesService  # noqa: E402
+from agents.tools.places_service import GooglePlacesService  # noqa: E402
 
 QUERY = "quán ăn hải sản hoặc điểm dịch vụ du lịch ở Hàm Ninh Phú Quốc"
 FAKE_PREFIXES = ("fake", "test", "dummy", "example")
