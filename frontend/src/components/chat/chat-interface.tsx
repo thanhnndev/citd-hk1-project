@@ -194,7 +194,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, [input]);
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-4rem)] md:h-[calc(100dvh-5rem)]">
+    <div className="flex flex-col" style={{ height: 'calc(100dvh - 64px)' }}>
       {/* Messages area */}
       <div
         className="flex-1 overflow-y-auto px-4 py-4 space-y-4"

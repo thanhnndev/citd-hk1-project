@@ -4,6 +4,8 @@ import { notFound } from 'next/navigation';
 import { PlaceProofMap } from '@/components/map/place-proof-map';
 import { routing } from '@/i18n/routing';
 
+import { SiteFooter } from '@/components/layout/site-footer';
+
 type Props = Readonly<{ params: Promise<{ locale: string }> }>;
 
 export default async function MapPage({ params }: Props) {
@@ -24,7 +26,7 @@ export default async function MapPage({ params }: Props) {
     unavailable: t('unavailable'),
     noResults: t('noResults'),
     fallback: t('fallback'),
-    resultCount: t('resultCount'),
+    resultCount: t('resultCount', { count: 0 }),
     detailTitle: t('detailTitle'),
     selectPlace: t('selectPlace'),
     pinReady: t('pinReady'),
@@ -45,8 +47,9 @@ export default async function MapPage({ params }: Props) {
   };
 
   return (
-    <div lang={locale}>
-      <PlaceProofMap locale={locale} translations={translations} />
-    </div>
-  );
+  <div lang={locale}>
+    <PlaceProofMap locale={locale} translations={translations} />
+    <SiteFooter locale={locale} />
+  </div>
+);
 }

@@ -26,8 +26,6 @@ export function ResponsibleAiSection({ eyebrow, heading, body, axes }: Responsib
           <Card key={axis.id} className="bg-background/70">
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-semibold text-primary">0{index + 1}</span>
-                <CheckCircle2 aria-hidden="true" className="size-5 text-primary" />
               </div>
               <div>
                 <h3 className="text-lg font-semibold tracking-tight text-foreground">{axis.title}</h3>

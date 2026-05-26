@@ -1,6 +1,6 @@
 import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { notFound } from 'next/navigation';
-
+import { SiteFooter } from '@/components/layout/site-footer';
 import { AlgorithmShowcase } from '@/components/landing/algorithm-showcase';
 import { DemoCtaSection } from '@/components/landing/demo-cta-section';
 import { HeroSection } from '@/components/landing/hero-section';
@@ -97,6 +97,8 @@ export default async function LocalePage({ params }: LocalePageProps) {
         secondaryCta={t('demo.secondaryCta')}
         note={t('demo.note')}
         items={demoItems}
+      />
+      <SiteFooter locale={locale} 
       />
     </div>
   );
