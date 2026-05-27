@@ -199,6 +199,24 @@ This S02 task creates an audit inspection surface. Verification for this report 
 | Initial same-command attempt before `backend/pytest.ini` path fix | 4 | Static node checks passed; repo-root pytest import failed before monthly fairness ran. | Failure localized to `ModuleNotFoundError: No module named 'agents'` from `backend/tests/conftest.py`; `backend/pytest.ini` now includes `..` so repo-root imports are available under the original verification command. |
 | `pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py` | 0 | 48 passed, 13 warnings. | Targeted backend-only rerun confirmed the import-path fix before the aggregate gate. |
 
+### S04 Reconciliation Outcome
+
+S04 records the requirement-status reconciliation contract that S05 can cite without weakening S01-S03 audit boundaries. The canonical reconciliation matrix is `docs/M011-S04-REQUIREMENT-RECONCILIATION.md`, and the source-tree diagnostic is `scripts/verify-m011-s04-reconciliation.mjs`.
+
+| Requirement Set | Reconciliation Action | Evidence | Caveat Boundary |
+|---|---|---|---|
+| R013, R015, R029, R031 | Validate only where deterministic corpus, grounded-answer, audit-process, or bounded S03 remediation evidence directly supports the requirement. | `docs/M011-S04-REQUIREMENT-RECONCILIATION.md`; S01/S02/S03/S04 verifier scripts; backend corpus/admin/fairness tests cited by S03. | Validation is scoped to the evidenced behavior and must not expand into live RAG quality, provider success, or production metrics. |
+| R007, R008, R010, R011, R026, R028, R033 | Keep active when implementation is partial, credentialed proof is blocked, frontend polish/nonfunctional checks are pending, or S05 owns strongest-practical verification. | `.gsd/REQUIREMENTS.md`; `docs/M011-REQUIREMENTS-AUDIT.md`; `docs/M011-S04-REQUIREMENT-RECONCILIATION.md`; current admin/frontend/backend surfaces. | Keep `credential_blocked`, `deferred_major_scope`, `missing_operational_metrics`, `frontend_nonfunctional_pending`, and `endpoint_naming_drift` language intact. |
+| R032, R034 | Validate after reconciliation evidence only when the matrix, S04 verifier, and official `.gsd/REQUIREMENTS.md` reconciliation path preserve explicit deferrals. | `docs/M011-S04-REQUIREMENT-RECONCILIATION.md`; `scripts/verify-m011-s04-reconciliation.mjs`; this audit appendix. | Do not silently close RAGAS CI/CD, Redis semantic cache, live provider proof, production fairness history, frontend nonfunctional proof, or S05 verification scope. |
+
+The `.gsd/REQUIREMENTS.md` update boundary remains DB-backed/official-tool owned. S04 did not manually rewrite the canonical requirements file; if an official update operation is unavailable or blocked, the durable source evidence is this audit section plus `docs/M011-S04-REQUIREMENT-RECONCILIATION.md`, and S05 must treat unsupported status changes as drift.
+
+Blocked or deferred requirement-update operations:
+
+- Live OpenAI, Google, Qdrant, Langfuse, RAGAS, semantic cache, production fairness history, and frontend performance/accessibility proof were not run or claimed in S04.
+- Credential-dependent checks require valid credentials, running services, and network access before any `credential_blocked` row can become a live pass.
+- The exact combined static gate for S05 reuse is `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs`.
+
 ## Confidence Notes
 
 - High confidence: documentation structure, repository structure, credential-blocked classification, and current admin route names observed directly from source.
