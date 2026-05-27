@@ -255,6 +255,17 @@ S05 records the final M011 verification matrix from local execution on 2026-05-2
 - RAGAS CI/CD, semantic cache, session durability, and infra/runtime checks remain `deferred_major_scope`, partial, or environment-blocked unless future diagnostics document an explicit bounded result.
 - Endpoint history keeps `endpoint_naming_drift` visible; current source route names remain the authority over stale prior prose.
 
+### GSD Requirement ID Coverage Addendum
+
+This audit primarily uses canonical `REQ-*` rows from `docs/REQUIREMENTS.md`, while `.gsd/REQUIREMENTS.md` tracks project contract IDs as `R###`. The crosswalk below makes the retry-specific `R###` coverage explicit without changing any S05 caveat or closeout boundary.
+
+| GSD ID | Coverage Decision | Evidence Anchor | Caveat Boundary |
+|---|---|---|---|
+| R012 | Absent from active implementation scope; classified as an anti-feature/out-of-scope contract, not validated product behavior. | `.gsd/REQUIREMENTS.md` Out of Scope entry: no booking/payment system, no CRM, no fine-tuning LLM from scratch, no native mobile app; `docs/REQUIREMENTS.md` section 2.3. | Do not read R012 as a delivered feature or a validation pass. Its correct audit state is no current active GSD contract / out-of-scope / not validated. |
+| R027 | Covered by the auth/admin lifecycle evidence boundary: register -> verify email -> login -> admin dashboard. | `.gsd/REQUIREMENTS.md` R027; `scripts/verify-s07-auth-e2e.sh` exit-0 evidence from M010/S07 T03. | This is mocked browser/API/SMTP E2E evidence with 10 API calls mocked; it is not live production email, provider, or deployment proof. |
+
+Partial-ID mappings must preserve this vocabulary: `credential_blocked`, `environment_blocked`, `deferred_major_scope`, `frontend_nonfunctional_pending`, `missing_operational_metrics`, and `endpoint_naming_drift`. The R027 crosswalk does not upgrade live OpenAI/Qdrant, Google Places/Routes, Langfuse, RAGAS CI/CD, semantic cache, session durability, frontend nonfunctional, or production operational-metrics surfaces beyond the evidence already recorded above.
+
 ### S05 Deferred and Blocked Items
 
 | Deferred Surface | Current Closeout Result | Unblock Condition |
