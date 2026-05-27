@@ -89,6 +89,8 @@ test('M011/S03 audit report preserves bounded remediation candidates and caveat 
       'Bounded fix',
       'Bounded verification',
       'Explicit deferral',
+      'S03 Remediation Outcomes',
+      'fixed+deferred',
       'credential_blocked',
       'endpoint_naming_drift',
       'version_drift',
@@ -97,6 +99,23 @@ test('M011/S03 audit report preserves bounded remediation candidates and caveat 
       'RAGAS/semantic cache scope decision',
     ],
     'M011 audit report',
+  );
+
+  assertContainsAll(
+    audit,
+    [
+      'Reconcile admin endpoint naming',
+      'Add/administer route table verifier',
+      'Record frontend non-functional proof',
+      'Strengthen fairness audit evidence',
+      'Preserve credential-blocked provider gates',
+      'Update version contract',
+      'scripts/verify-m011-s03-bounded-fixes.mjs',
+      'POST /admin/eval/trigger',
+      'NO_DATA is an honest local result',
+      'No Redis semantic-cache production behavior or RAGAS CI/CD is implemented',
+    ],
+    'M011 S03 remediation outcome log',
   );
 });
 

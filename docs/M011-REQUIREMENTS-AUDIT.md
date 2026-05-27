@@ -164,6 +164,21 @@ Credential-blocked outcomes are honest audit states, not failures. They must not
 | Update version contract | Bounded docs/status fix | Compare `docs/REQUIREMENTS.md` tech-stack versions to manifests and mark drift explicitly. | REQ-05 |
 | RAGAS/semantic cache scope decision | Explicit deferral | Treat RAGAS CI/CD and Redis semantic cache as major follow-up work unless already implemented by current code. | REQ-09A |
 
+## S03 Remediation Outcomes
+
+S03 keeps the audit bounded: small source/test/documentation gaps are fixed or guarded by static diagnostics, while live-provider, production-metrics, and major subsystem gaps remain explicit deferrals for S04/S05 or later milestones.
+
+| Candidate | Outcome | Status | Evidence | Bounded Caveat |
+|---|---|---|---|---|
+| Reconcile admin endpoint naming | Current source and tests use `POST /admin/eval/trigger`; stale `/admin/eval` wording remains documented only as historical drift. | fixed | `backend/app/routers/admin.py`, `backend/tests/test_admin_eval_endpoint.py`, `frontend/src/lib/admin-api.ts`, `frontend/src/app/api/admin/route.ts`, `scripts/verify-m011-s03-bounded-fixes.mjs` | Do not add `POST /admin/eval` compatibility without a separate product decision. |
+| Add/administer route table verifier | The S03 static verifier asserts `/admin` route names and `Depends(get_current_user)` coverage for embed, eval, traces, fairness, and stats. | fixed | `scripts/verify-m011-s03-bounded-fixes.mjs`, `backend/tests/test_admin_embed_auth.py`, `backend/tests/test_admin_eval_endpoint.py`, `backend/tests/test_admin_stats_endpoint.py`, `backend/tests/test_admin_traces_endpoint.py` | Static route/auth proof does not replace runtime API or browser verification. |
+| Record frontend non-functional proof | Exact FCP/accessibility lab proof remains outside this bounded slice; S05 should run fresh frontend build/browser/performance checks. | deferred | `frontend/package.json`, `frontend/tests/s07-auth-e2e.test.mjs`, `docs/M010-CLOSEOUT-EVIDENCE.md` | `prior_evidence_may_drift`; no new FCP <= 1.5s claim is made here. |
+| Strengthen fairness audit evidence | Local fairness proof is bounded to JSONL aggregation, admin fairness tests, and script `PASS`/`FAIL`/`NO_DATA` output; production operational metrics remain deferred. | fixed+deferred | `scripts/monthly_fairness_audit.py`, `backend/tests/test_fairness_audit.py`, `backend/tests/test_admin_traces_endpoint.py`, `scripts/verify-m011-s03-bounded-fixes.mjs` | `NO_DATA` is an honest local result when no snapshots exist; durable monthly history is still `missing_operational_metrics`. |
+| Clarify backend module verdict granularity | Backend status remains split across concrete endpoints and requirement IDs instead of a single broad pass/fail bucket. | fixed | REQ-06, REQ-09C, REQ-12 notes in this report | S04 owns `.gsd/REQUIREMENTS.md` status reconciliation. |
+| Preserve credential-blocked provider gates | Google, OpenAI, Qdrant, Langfuse, and full live workflow proof remain `credential_blocked` until real credentials/services are available. | deferred | `scripts/verify-google-places-live.py`, `scripts/verify-embedding-idempotency.py`, `backend/requirements.txt`, `agents/requirements.txt` | Mocked or static checks must not be reported as live provider success. |
+| Update version contract | Manifest evidence is recorded for frontend/backend/agent dependency drift; runtime/version reconciliation remains for S05. | fixed+deferred | `frontend/package.json`, `backend/requirements.txt`, `agents/requirements.txt`, `scripts/verify-m011-s03-bounded-fixes.mjs` | `version_drift`; manifests are static evidence, not installed runtime proof. |
+| RAGAS/semantic cache scope decision | RAGAS CI/CD and production semantic cache proof are explicitly deferred as major follow-up work. | deferred | REQ-09A notes in this report, `backend/requirements.txt`, `agents/requirements.txt` | No Redis semantic-cache production behavior or RAGAS CI/CD is implemented by this S03 task. |
+
 ## Verification Appendix
 
 This S02 task creates an audit inspection surface. Verification for this report is intentionally lightweight and static; S05 owns strongest practical local verification.
