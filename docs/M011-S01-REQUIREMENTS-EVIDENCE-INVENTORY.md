@@ -51,7 +51,7 @@
 ## Missing / Drift Markers To Preserve
 
 - `credential_blocked`: `scripts/verify-google-places-live.py`, `scripts/verify-embedding-idempotency.py`, and Langfuse trace proof require external credentials or services.
-- `endpoint_naming_drift`: requirements specify `POST /admin/eval/trigger`, while current code/tests may expose `POST /admin/eval`; confirm exact routes before verdicting.
+- `endpoint_naming_drift`: requirements specify `POST /admin/eval/trigger`, while current code/tests may expose `POST /admin/eval`; confirm exact routes before verdicting. Also confirm actual admin endpoint coverage for `admin/embed` and `admin/ingest` before treating admin evidence as current.
 - `version_drift`: `docs/REQUIREMENTS.md` version claims should be checked against package manifests and runtime environment.
 - `missing_operational_metrics`: Responsible AI fairness, reliability, and observability need durable metrics/logs beyond deterministic code tests.
 - `prior_evidence_may_drift`: M002-M010 evidence is useful, but S02 should prefer current source and fresh command output.
