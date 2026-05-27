@@ -170,10 +170,11 @@ This S02 task creates an audit inspection surface. Verification for this report 
 
 | Check | Expected Result | Notes |
 |---|---|---|
-| `test -s docs/M011-REQUIREMENTS-AUDIT.md` | Exit 0 | Confirms durable report exists and is non-empty. |
-| Manual coverage review | All S01 audit IDs present | REQ-01 through REQ-08, REQ-09A through REQ-09D, REQ-10 through REQ-14 included. |
-| Caveat preservation review | Required labels present | `credential_blocked`, `endpoint_naming_drift`, `version_drift`, `missing_operational_metrics`, `prior_evidence_may_drift`. |
-| S03 candidate review | Candidate section present | Bounded fixes and explicit deferrals listed without implementing them. |
+| `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs` | Exit 0; 7/7 tests passed on 2026-05-22 | Static traceability proof only: confirms S01 inventory coverage and S02 report shape/caveat/verdict preservation; does not prove live OpenAI, Google, Qdrant, Postgres/Redis, or Langfuse behavior. |
+| `test -s docs/M011-REQUIREMENTS-AUDIT.md` | Covered by node:test report existence assertion | Confirms durable report exists and is non-empty. |
+| Coverage review | Covered by node:test canonical ID assertions | REQ-01 through REQ-08, REQ-09A through REQ-09D, REQ-10 through REQ-14 included. |
+| Caveat preservation review | Covered by node:test caveat assertions | `credential_blocked`, `endpoint_naming_drift`, `version_drift`, `missing_operational_metrics`, `prior_evidence_may_drift`. |
+| S03 candidate review | Covered by node:test section assertions | Bounded fixes and explicit deferrals listed without implementing them. |
 
 ## Confidence Notes
 
