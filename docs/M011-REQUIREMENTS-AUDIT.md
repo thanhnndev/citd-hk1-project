@@ -266,6 +266,13 @@ This audit primarily uses canonical `REQ-*` rows from `docs/REQUIREMENTS.md`, wh
 
 Partial-ID mappings must preserve this vocabulary: `credential_blocked`, `environment_blocked`, `deferred_major_scope`, `frontend_nonfunctional_pending`, `missing_operational_metrics`, and `endpoint_naming_drift`. The R027 crosswalk does not upgrade live OpenAI/Qdrant, Google Places/Routes, Langfuse, RAGAS CI/CD, semantic cache, session durability, frontend nonfunctional, or production operational-metrics surfaces beyond the evidence already recorded above.
 
+
+### S06 Aggregate Validation Evidence
+
+S06 reran the official S01-S06 aggregate static gate after adding the requirement-ID coverage remediation verifier. The command was `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs scripts/verify-m011-s05-closeout.mjs scripts/verify-m011-s06-coverage-remediation.mjs`; it exited 0 in gsd_exec run `2c27a5ab-48e6-4094-83ce-1271f453ac53` with 30 tests reported, 30 passed, 0 failed, and duration 144.693408 ms from the node:test report.
+
+This evidence extends the S05 aggregate static gate with the S06 verifier only. It does not rerun or upgrade credentialed provider, runtime, frontend nonfunctional, production fairness, RAGAS, semantic-cache, session-durability, infra, or broad backend evidence; the existing `credential_blocked`, `environment_blocked`, `partial`, `not_run`, and `deferred_major_scope` classifications remain intact.
+
 ### S05 Deferred and Blocked Items
 
 | Deferred Surface | Current Closeout Result | Unblock Condition |
