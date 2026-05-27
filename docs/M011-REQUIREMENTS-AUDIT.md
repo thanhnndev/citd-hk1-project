@@ -191,6 +191,14 @@ This S02 task creates an audit inspection surface. Verification for this report 
 | Caveat preservation review | Covered by node:test caveat assertions | `credential_blocked`, `endpoint_naming_drift`, `version_drift`, `missing_operational_metrics`, `prior_evidence_may_drift`. |
 | S03 candidate review | Covered by node:test section assertions | Bounded fixes and explicit deferrals listed without implementing them. |
 
+### S03 Targeted Remediation Verification
+
+| Check | Exit Code | Result | Notes |
+|---|---:|---|---|
+| `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs && pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py && python3 scripts/monthly_fairness_audit.py --days 30` | 0 | Static checks passed; targeted backend pytest passed; monthly fairness audit reported `PASS`. | 18/18 node:test assertions passed, 48 backend tests passed with 13 warnings, and local fairness aggregation found 33 snapshots, 33 places, 100.0% local business share, and 0/33 snapshot violations. This is local audit evidence, not production operational history. |
+| Initial same-command attempt before `backend/pytest.ini` path fix | 4 | Static node checks passed; repo-root pytest import failed before monthly fairness ran. | Failure localized to `ModuleNotFoundError: No module named 'agents'` from `backend/tests/conftest.py`; `backend/pytest.ini` now includes `..` so repo-root imports are available under the original verification command. |
+| `pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py` | 0 | 48 passed, 13 warnings. | Targeted backend-only rerun confirmed the import-path fix before the aggregate gate. |
+
 ## Confidence Notes
 
 - High confidence: documentation structure, repository structure, credential-blocked classification, and current admin route names observed directly from source.
