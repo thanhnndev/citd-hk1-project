@@ -46,6 +46,166 @@ services:
     networks:
       - ham_ninh
 
+
+  # -- Langfuse Postgres - Self-hosted observability metadata ----------------
+  langfuse-postgres:
+    image: postgres:18
+    container_name: ham-ninh-langfuse-postgres
+    ports:
+      - "${HN_LANGFUSE_POSTGRES_HOST_PORT:-47544}:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:-langfuse}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  # -- ClickHouse - Langfuse trace/event analytics store ---------------------
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.12
+    container_name: ham-ninh-langfuse-clickhouse
+    user: "101:101"
+    ports:
+      - "${HN_LANGFUSE_CLICKHOUSE_HTTP_HOST_PORT:-48123}:8123"
+      - "${HN_LANGFUSE_CLICKHOUSE_NATIVE_HOST_PORT:-49000}:9000"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-clickhouse}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  # -- MinIO - S3-compatible event upload storage for Langfuse ---------------
+  langfuse-minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: ham-ninh-langfuse-minio
+    command: server /data --address ":9000" --console-address ":9001"
+    ports:
+      - "${HN_LANGFUSE_MINIO_API_HOST_PORT:-49001}:9000"
+      - "${HN_LANGFUSE_MINIO_CONSOLE_HOST_PORT:-49002}:9001"
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-miniosecret}
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  langfuse-minio-create-bucket:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: ham-ninh-langfuse-minio-create-bucket
+    depends_on:
+      langfuse-minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://langfuse-minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${LANGFUSE_S3_EVENT_UPLOAD_BUCKET}
+      "
+    restart: no
+    networks:
+      - ham_ninh
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: ham-ninh-langfuse-worker
+    env_file:
+      - .env
+    environment: &langfuse_app_environment
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-langfuse}@langfuse-postgres:5432/langfuse
+      NEXTAUTH_URL: ${LANGFUSE_HOST:-http://localhost:43000}
+      SALT: ${LANGFUSE_SALT:-change-me-generate-with-openssl-rand-hex-16}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-clickhouse}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: ${LANGFUSE_S3_EVENT_UPLOAD_REGION:-us-east-1}
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-miniosecret}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      langfuse-minio-create-bucket:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
+  langfuse:
+    image: langfuse/langfuse:3
+    container_name: ham-ninh-langfuse
+    ports:
+      - "${HN_LANGFUSE_HOST_PORT:-43000}:3000"
+    env_file:
+      - .env
+    environment:
+      <<: *langfuse_app_environment
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-generate-with-openssl-rand-hex-32}
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/public/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      langfuse-minio-create-bucket:
+        condition: service_completed_successfully
+      langfuse-worker:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - ham_ninh
+
   # ── Qdrant v1.13.6 — Vector database for RAG embeddings ──────────────────
   qdrant:
     image: qdrant/qdrant:v1.13.6
@@ -79,6 +239,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ham_ninh}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ham_ninh}
+      LANGFUSE_HOST: http://langfuse:3000
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 5s
@@ -90,6 +251,8 @@ services:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      langfuse:
         condition: service_healthy
     volumes:
       - ./data:/data:ro
@@ -104,3 +267,7 @@ networks:
 volumes:
   postgres_data:
   qdrant_data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
