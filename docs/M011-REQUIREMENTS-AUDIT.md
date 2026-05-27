@@ -222,3 +222,50 @@ Blocked or deferred requirement-update operations:
 - High confidence: documentation structure, repository structure, credential-blocked classification, and current admin route names observed directly from source.
 - Medium confidence: frontend, ensemble, guardrail, and admin auth status because this task relies on current source plus prior evidence rather than fresh full test runs.
 - Lower confidence: operational fairness, live RAG/Places/Langfuse quality, FCP/accessibility, and exact runtime dependency versions until S05 executes the verification suite.
+
+## S05 Final Verification and Closeout
+
+S05 records the final M011 verification matrix from local execution on 2026-05-27. Result values are intentionally bounded to `RESULT=passed`, `RESULT=failed`, `RESULT=partial`, `RESULT=credential_blocked`, `RESULT=environment_blocked`, `RESULT=not_run`, and `RESULT=durable_verified` so blocked provider/runtime work is not overstated.
+
+| Surface | Command or Evidence | Result | gsd_exec Evidence ID / Timestamp | Caveats and Unblock Condition |
+|---|---|---|---|---|
+| static | `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs scripts/verify-m011-s05-closeout.mjs` | `RESULT=passed` | `56448b69-0f63-4c52-987f-b04877197c59`; 2026-05-27 | 26/26 node:test assertions passed. Static proof only; preserves `credential_blocked`, `deferred_major_scope`, `missing_operational_metrics`, `frontend_nonfunctional_pending`, and `endpoint_naming_drift`. |
+| backend | `pytest -q` | `RESULT=failed` | `239d9ff7-df17-40fc-9446-ac635bdf936d`; 2026-05-27 | Broad pytest failed during collection: `agents/graph/test_agent_service.py` imports `app.models.rag` but repo-root collection has no `app` module. This is recorded as a real broad-suite failure, not hidden by narrower tests. |
+| backend | `pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py` | `RESULT=passed` | `a253f885-7e83-4691-8a8f-907afd856c36`; 2026-05-27 | Targeted S03 subset passed: 48 tests passed with 13 warnings. This supports admin route/auth/fairness evidence only and does not prove live OpenAI/Qdrant/Google/Langfuse behavior. |
+| frontend | `bun --cwd=frontend run type-check` | `RESULT=passed` | `227370bf-5b28-4278-ada0-37c8612e6402`; 2026-05-27 | TypeScript check completed successfully. This does not measure FCP <= 1.5s or WCAG 2.2 AA. |
+| frontend | `bun --cwd=frontend run lint` | `RESULT=passed` | `64feb981-d035-4d88-bb11-12db2ea86e3f`; 2026-05-27 | ESLint completed successfully. Frontend performance/accessibility remains `frontend_nonfunctional_pending`. |
+| frontend | `bun --cwd=frontend run build` | `RESULT=passed` | `dd4a523e-f8c0-432f-ae3e-323969f1ae9b`; 2026-05-27 | Next.js production build completed successfully. No browser, lab performance, or accessibility pass is claimed from this build alone. |
+| fairness | `python3 scripts/monthly_fairness_audit.py --days 30` | `RESULT=partial` | `60f74758-81a1-4dff-a28a-0e81d66fb694`; 2026-05-27 | Local monthly audit reported PASS over 33 snapshots, 33 places, 100.0% local business share, and 0/33 violations. This is local snapshot evidence; production fairness history remains `missing_operational_metrics`. |
+| provider | `python3 scripts/verify-google-places-live.py` | `RESULT=failed` | `83060ee1-47a2-4c50-ac86-136c39b80cb8`; 2026-05-27 | Initial invocation failed before provider logic with `ModuleNotFoundError: No module named 'agents'`; rerun below records intended credential blocker with repo `PYTHONPATH`. |
+| provider | `PYTHONPATH=. python3 scripts/verify-google-places-live.py` | `RESULT=credential_blocked` | `4b67c915-42a4-466e-8562-7c60d94d7df5`; 2026-05-27 | Google Places and Google Routes live proof remains `credential_blocked` because `GOOGLE_PLACES_API_KEY` is missing. Unblock with valid Google credentials, enabled APIs, and network access; rerun without exposing secrets. |
+| provider | `python3 scripts/verify-embedding-idempotency.py` | `RESULT=credential_blocked` | `93ac5d5a-0ad1-44c8-a730-91fc95ce5e19`; 2026-05-27 | OpenAI/Qdrant live embedding proof remains `credential_blocked`; output requested a valid `OPENAI_API_KEY` plus running Qdrant/backend before idempotency can be proven live. |
+| runtime | `python3 scripts/verify-session-durability.py` | `RESULT=failed` | `8843b539-4b2f-4c96-8ffb-1d4c308d9538`; 2026-05-27 | Initial invocation failed before durability logic with `ModuleNotFoundError: No module named 'agents'`; rerun below records the intended local runtime result with repo `PYTHONPATH`. |
+| runtime | `PYTHONPATH=. python3 scripts/verify-session-durability.py` | `RESULT=partial` | `3a91a97d-983c-4e57-9808-940e5fc2529d`; 2026-05-27 | Diagnostic reported status `rescope_required`: session history is durable only with `CHECKPOINT_MODE=postgres`; current memory mode is process-local. Treat as partial/rescope evidence, not durable pass. |
+| runtime | `bash scripts/verify-infra.sh` | `RESULT=environment_blocked` | `87e8b26a-f736-4b8a-935d-6979876b15fc`; 2026-05-27 | Infra verifier reported 3 passed and 9 failed: compose service presence/health for postgres, redis, qdrant, and backend was not available, while host-level qdrant/redis/postgres connectivity checks passed. Unblock by starting the intended compose/runtime services. |
+| runtime | Live Langfuse trace ingestion/query diagnostic | `RESULT=not_run` | 2026-05-27 closeout classification | No dedicated live Langfuse command was available in the T02 matrix. Live Langfuse proof remains `credential_blocked` until valid host/public/secret keys and reachable service evidence exist. |
+| runtime | RAGAS CI/CD and Redis semantic cache production behavior | `RESULT=not_run` | 2026-05-27 closeout classification | These are `deferred_major_scope` items from S04, not silently completed by S05 local diagnostics. |
+
+### S05 Caveat Preservation
+
+- Live OpenAI/Qdrant proof remains `credential_blocked` until a valid `OPENAI_API_KEY`, running Qdrant collection, backend service, and documented `RESULT=passed` or `RESULT=durable_verified` evidence exist.
+- Live Google Places/Routes proof remains `credential_blocked` until valid Google credentials, enabled APIs, network access, and a documented live `RESULT=passed` evidence line exist.
+- Live Langfuse trace ingestion/query proof remains `credential_blocked` until valid Langfuse host/public/secret keys and reachable service evidence exist.
+- Frontend performance/accessibility is `frontend_nonfunctional_pending`; type-check, lint, and build passed, but no FCP <= 1.5s or WCAG pass is claimed without a fresh browser/lab diagnostic.
+- Production fairness history and `missing_operational_metrics` remain deferred until durable production-style snapshots exist beyond local fixture aggregation.
+- RAGAS CI/CD, semantic cache, session durability, and infra/runtime checks remain `deferred_major_scope`, partial, or environment-blocked unless future diagnostics document an explicit bounded result.
+- Endpoint history keeps `endpoint_naming_drift` visible; current source route names remain the authority over stale prior prose.
+
+### S05 Deferred and Blocked Items
+
+| Deferred Surface | Current Closeout Result | Unblock Condition |
+|---|---|---|
+| frontend performance/accessibility | `RESULT=not_run`; `frontend_nonfunctional_pending` | Run fresh browser/accessibility/performance diagnostics and record pass/fail/blocked evidence. |
+| production fairness history | `RESULT=partial`; `missing_operational_metrics` | Provide durable production-style fairness snapshots or explicitly scope them to a future operational milestone. |
+| RAGAS CI/CD | `RESULT=not_run`; `deferred_major_scope`; provider prerequisites remain `credential_blocked` | Provide OpenAI/provider credentials plus CI/CD wiring and recorded RAGAS outputs. |
+| semantic cache | `RESULT=not_run`; `deferred_major_scope` | Implement or verify Redis semantic-cache behavior with deterministic tests and runtime diagnostics. |
+| session durability | `RESULT=partial`; `deferred_major_scope` | Run with `CHECKPOINT_MODE=postgres` and a valid database DSN, then record `RESULT=passed` or `RESULT=durable_verified` only if the diagnostic proves durable behavior. |
+| infra/runtime checks | `RESULT=environment_blocked` | Start the required compose/runtime services and record dated diagnostics. |
+| broad backend suite | `RESULT=failed` | Fix repo-root collection/import path for `agents/graph/test_agent_service.py` or run an officially supported broad backend command that includes the needed app import path. |
+
+Credential-blocked, environment-blocked, deferred, failed, partial, and not-run rows are honest closeout outcomes. They must not be represented as live provider success unless the row includes `RESULT=passed` or `RESULT=durable_verified` from the corresponding live diagnostic.
+
