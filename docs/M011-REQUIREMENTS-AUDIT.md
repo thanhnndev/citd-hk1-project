@@ -229,7 +229,7 @@ S05 records the final M011 verification matrix from local execution on 2026-05-2
 
 | Surface | Command or Evidence | Result | gsd_exec Evidence ID / Timestamp | Caveats and Unblock Condition |
 |---|---|---|---|---|
-| static | `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs scripts/verify-m011-s05-closeout.mjs` | `RESULT=passed` | `56448b69-0f63-4c52-987f-b04877197c59`; 2026-05-27 | 26/26 node:test assertions passed. Static proof only; preserves `credential_blocked`, `deferred_major_scope`, `missing_operational_metrics`, `frontend_nonfunctional_pending`, and `endpoint_naming_drift`. |
+| static | `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs scripts/verify-m011-s05-closeout.mjs` | `RESULT=passed` | `feece3b1-02c6-49b5-a823-8ea025b269fa`; 2026-05-27 | T03 rerun passed 26/26 node:test assertions. Static proof only; preserves `credential_blocked`, `deferred_major_scope`, `missing_operational_metrics`, `frontend_nonfunctional_pending`, and `endpoint_naming_drift`. |
 | backend | `pytest -q` | `RESULT=failed` | `239d9ff7-df17-40fc-9446-ac635bdf936d`; 2026-05-27 | Broad pytest failed during collection: `agents/graph/test_agent_service.py` imports `app.models.rag` but repo-root collection has no `app` module. This is recorded as a real broad-suite failure, not hidden by narrower tests. |
 | backend | `pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py` | `RESULT=passed` | `a253f885-7e83-4691-8a8f-907afd856c36`; 2026-05-27 | Targeted S03 subset passed: 48 tests passed with 13 warnings. This supports admin route/auth/fairness evidence only and does not prove live OpenAI/Qdrant/Google/Langfuse behavior. |
 | frontend | `bun --cwd=frontend run type-check` | `RESULT=passed` | `227370bf-5b28-4278-ada0-37c8612e6402`; 2026-05-27 | TypeScript check completed successfully. This does not measure FCP <= 1.5s or WCAG 2.2 AA. |
@@ -267,5 +267,16 @@ S05 records the final M011 verification matrix from local execution on 2026-05-2
 | infra/runtime checks | `RESULT=environment_blocked` | Start the required compose/runtime services and record dated diagnostics. |
 | broad backend suite | `RESULT=failed` | Fix repo-root collection/import path for `agents/graph/test_agent_service.py` or run an officially supported broad backend command that includes the needed app import path. |
 
+
 Credential-blocked, environment-blocked, deferred, failed, partial, and not-run rows are honest closeout outcomes. They must not be represented as live provider success unless the row includes `RESULT=passed` or `RESULT=durable_verified` from the corresponding live diagnostic.
+
+### S05 Requirement Status Closeout
+
+| Requirement | S05 Evidence-Supported Closeout | Canonical Status Handling |
+|---|---|---|
+| R033 | Supported for validation by the strongest practical local suite: aggregate static gate passed, targeted backend/admin/fairness tests passed, frontend type-check/lint/build passed, provider diagnostics recorded credential blockers, and runtime/infra limitations were classified without promotion. | `.gsd/REQUIREMENTS.md` should be reconciled only through the official GSD requirement updater. This T03 task did not hand-edit the canonical projection. |
+| R034 | Supported as explicit deferral evidence: RAGAS CI/CD, semantic cache, live provider proof, production fairness history, frontend nonfunctional proof, session durability, and infra/runtime gaps remain named with unblock conditions. | Official updater reconciliation is still needed if the system requires canonical status movement; absent an available updater in this executor surface, the audit report and S04 matrix remain the durable evidence contract. |
+| R007/R008/R010/R026/R028 | Remain active/partial/deferred where caveats require live credentials, production metrics, or UX/nonfunctional proof. | Do not mark validated from static, mocked, or credential-blocked evidence alone. |
+
+No official requirement-status updater was available in the executor tool surface for this task. Per the S05 plan, `.gsd/REQUIREMENTS.md` was inspected but not manually edited; any future canonical status change should cite this section, `docs/M011-S04-REQUIREMENT-RECONCILIATION.md`, and the T03 static gate evidence ID `feece3b1-02c6-49b5-a823-8ea025b269fa`.
 
