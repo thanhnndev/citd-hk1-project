@@ -23,6 +23,7 @@ from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from agents.ml.ensemble_reranker import EnsembleReranker
 from agents.ml.feature_extractor import FeatureExtractor
+from agents.tools.places_service import GoongPlacesService
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,12 @@ class PlaceRecommendationService:
 
     def __init__(
         self,
-        places_tool: TextSearchPlacesTool,
+        places_tool: TextSearchPlacesTool | None = None,
         *,
         max_result_count: int = DEFAULT_MAX_RESULTS,
         routes_service: RoutesServiceProtocol | None = None,
     ) -> None:
-        self._places_tool = places_tool
+        self._places_tool = places_tool or GoongPlacesService()
         self._max_result_count = max(1, min(max_result_count, 20))
         self._routes_service = routes_service
 
@@ -279,13 +280,13 @@ def _maps_url(place_id: str) -> str:
 
 def _message_for_status(status: PlaceToolStatus, *, result_count: int = 0) -> str:
     if status == PlaceToolStatus.OK:
-        return f"I found {result_count} Ham Ninh place option(s) from Google Places."
+        return f"I found {result_count} Ham Ninh place option(s) from Goong Places."
     if status == PlaceToolStatus.EMPTY:
-        return "I could not find matching Ham Ninh places from Google Places for that request."
+        return "I could not find matching Ham Ninh places from Goong Places for that request."
     if status == PlaceToolStatus.CREDENTIALS_BLOCKED:
         return "Place recommendations are unavailable because the server Places credentials are not configured."
     if status == PlaceToolStatus.UPSTREAM_ERROR:
-        return "Place recommendations are temporarily unavailable because Google Places could not be reached. Please try again shortly."
+        return "Place recommendations are temporarily unavailable because Goong Places could not be reached. Please try again shortly."
     if status == PlaceToolStatus.INVALID_REQUEST:
         return "I could not search for places because the request was invalid. Please try a shorter Ham Ninh place request."
     return "Place recommendations are unavailable right now. Please try again later."

@@ -166,6 +166,33 @@ async def test_full_recommend_returns_reranked_with_ensemble_breakdown() -> None
     assert local_in_top >= 2
 
 
+@pytest.mark.asyncio
+async def test_default_recommendation_service_uses_goong_places(monkeypatch) -> None:
+    """Default construction should use GoongPlacesService while preserving reranking."""
+    import agents.services.place_recommendation_service as prs_module
+
+    class FakeGoongPlacesService:
+        async def text_search(self, request: PlaceSearchRequest) -> PlaceToolResponse:
+            return PlaceToolResponse(
+                status=PlaceToolStatus.OK,
+                source=PlaceToolSource.GOONG_PLACES,
+                candidates=[
+                    _candidate("goong-default", local_factor=0.8, display_name="Goong Default"),
+                ],
+                request=request,
+                retrieved_at=datetime.now(UTC),
+            )
+
+    monkeypatch.setattr(prs_module, "GoongPlacesService", FakeGoongPlacesService)
+
+    service = prs_module.PlaceRecommendationService()
+    response = await service.recommend(query="seafood", language="en", session_id="s-goong")
+
+    assert len(response.places) == 1
+    assert response.places[0].place_id == "goong-default"
+    assert "source=goong_places" in (response.reasoning_log or "")
+    assert response.message == "I found 1 Ham Ninh place option(s) from Goong Places."
+
 # ---------------------------------------------------------------------------
 # Test 6 — Ensemble fallback path
 # ---------------------------------------------------------------------------
@@ -208,7 +235,7 @@ async def test_ensemble_failure_falls_back_to_grounded() -> None:
     )
 
     # Monkey-patch _reranked_results to always raise
-    import app.services.place_recommendation_service as prs_module
+    import agents.services.place_recommendation_service as prs_module
 
     original = prs_module._reranked_results
 
