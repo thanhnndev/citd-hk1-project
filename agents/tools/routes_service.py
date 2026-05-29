@@ -16,7 +16,7 @@ from app.models.request import LatLng
 logger = logging.getLogger(__name__)
 
 ROUTES_BASE_URL = "https://rsapi.goong.io"
-DISTANCE_MATRIX_PATH = "/DistanceMatrix"
+DISTANCE_MATRIX_PATH = "/v2/distancematrix"
 
 # ── Circuit breaker thresholds ─────────────────────────────────
 FAILURE_WINDOW_SECONDS = 60   # Look-back window for counting failures

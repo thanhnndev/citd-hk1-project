@@ -27,9 +27,9 @@ from app.models.request import LatLng
 logger = logging.getLogger(__name__)
 
 PLACES_BASE_URL = "https://rsapi.goong.io"
-AUTOCOMPLETE_PATH = "/Place/AutoComplete"
-TEXT_SEARCH_PATH = "/Place/TextSearch"
-DETAILS_PATH = "/Place/Detail"
+AUTOCOMPLETE_PATH = "/v2/place/autocomplete"
+TEXT_SEARCH_PATH = "/v2/place/autocomplete"
+DETAILS_PATH = "/v2/place/detail"
 
 _GOONG_STATUS_OK = {"OK", "ZERO_RESULTS"}
 _UPSTREAM_AUTH_CODES = {"REQUEST_DENIED", "INVALID_REQUEST"}
