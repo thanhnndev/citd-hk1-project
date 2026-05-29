@@ -284,3 +284,40 @@ Interpretation:
 - This is blocked-live proof only; it does not satisfy credentialed Goong Places/Routes success.
 - The verifier behaved correctly for missing credentials by avoiding upstream calls and preserving sanitized diagnostics.
 - Future S09 remediation may claim backend live success only after a real `GOONG_API_KEY` is present and this verifier exits with terminal `RESULT=passed`.
+
+## S09 Browser Live Map Proof
+
+Status: credential_blocked.
+
+Command:
+
+```bash
+cd frontend && node --test tests/s06-goong-map-live.test.mjs
+```
+
+Outcome:
+
+- Exit code: 0
+- Terminal result: `RESULT=credential_blocked {"reason":"missing_or_placeholder_NEXT_PUBLIC_GOONG_MAPTILES_KEY"}`
+- Evidence run: `.gsd/exec/d03faaa4-48c1-4d6a-aabd-09ba195d3569.stdout`
+- Goong signal count: not observed because the verifier exited before browser launch when the public tile credential was missing or placeholder.
+- Rendered marker count: not observed for the same credential-blocked reason.
+- Selected place id: not observed for the same credential-blocked reason.
+
+Sanitized output excerpt:
+
+```text
+RESULT=credential_blocked {"reason":"missing_or_placeholder_NEXT_PUBLIC_GOONG_MAPTILES_KEY"}
+✔ S06 Goong live map verifier observes tiles, pins, and marker selection (1.851866ms)
+ℹ tests 1
+ℹ pass 1
+ℹ fail 0
+ℹ duration_ms 434.459256
+```
+
+Interpretation:
+
+- This is browser blocked-live evidence, not credentialed live Goong tile success.
+- No usable `NEXT_PUBLIC_GOONG_MAPTILES_KEY` was present at verifier startup, so the Next.js server/browser flow was intentionally not launched.
+- The verifier remains scoped to mock only `/api/chat` once credentials are available; real Goong style/tile network activity, two coordinate-bearing markers, coordinate-less marker exclusion, and marker selection are required before it can print `RESULT=passed`.
+- The server-only `GOONG_API_KEY` is not used by this browser verifier and is not exposed to browser evidence.
