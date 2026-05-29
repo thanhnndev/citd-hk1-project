@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Verify the M012 Goong scope reconciliation artifact stays explicit.
 
-The check intentionally reads only docs/ artifacts so it can guard wording drift in
-human-readable evidence without coupling to generated or local GSD state.
+The check intentionally reads only docs/ artifacts and the M012 roadmap so it can
+guard wording drift in human-readable evidence without coupling to runtime state.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS_ROOT = REPO_ROOT / "docs"
 RECONCILIATION_DOC = DOCS_ROOT / "M012-GOONG-SCOPE-RECONCILIATION.md"
 EVIDENCE_DOC = DOCS_ROOT / "M012-GOONG-VERIFICATION-EVIDENCE.md"
+ROADMAP = REPO_ROOT / ".gsd" / "milestones" / "M012-4ucdfp" / "M012-4ucdfp-ROADMAP.md"
 
 REQUIRED_HEADINGS = (
     "## Credential Boundary",
@@ -42,6 +43,10 @@ REQUIRED_EVIDENCE_LINKS = (
     "S07 scope boundary",
 )
 
+ROADMAP_BOUNDARY_LINKS = (
+    "docs/M012-GOONG-SCOPE-RECONCILIATION.md",
+)
+
 FORBIDDEN_OVERCLAIMS = (
     re.compile(r"credentialed\s+live\s+(?:goong\s+)?success\s+(?:is\s+)?(?:complete|completed|validated|passed|proven)", re.I),
     re.compile(r"live\s+(?:goong\s+)?(?:places|routes|provider)\s+success\s+(?:is\s+)?(?:complete|completed|validated|passed|proven)", re.I),
@@ -60,10 +65,37 @@ def read_doc(path: Path) -> str:
         raise ValueError(f"refusing to read non-docs path: {path}")
     return path.read_text(encoding="utf-8")
 
+def read_roadmap(path: Path) -> str:
+    if path != ROADMAP:
+        raise ValueError(f"refusing to read unexpected roadmap path: {path}")
+    return path.read_text(encoding="utf-8")
+
 
 def require_contains(text: str, path: Path, needles: tuple[str, ...], label: str) -> list[Failure]:
     return [Failure(path, f"missing {label}: {needle}") for needle in needles if needle not in text]
 
+
+
+def extract_markdown_section(text: str, heading: str, path: Path) -> tuple[str | None, list[Failure]]:
+    pattern = re.compile(rf"^{re.escape(heading)}\s*$", re.M)
+    match = pattern.search(text)
+    if not match:
+        return None, [Failure(path, f"missing roadmap section: {heading}")]
+    next_heading = re.search(r"^##\s+", text[match.end():], re.M)
+    end = match.end() + next_heading.start() if next_heading else len(text)
+    return text[match.end():end].strip(), []
+
+def require_populated_boundary_map(text: str, path: Path) -> list[Failure]:
+    boundary_text, failures = extract_markdown_section(text, "## Boundary Map", path)
+    if boundary_text is None:
+        return failures
+    if not boundary_text or boundary_text.lower() == "not provided.":
+        failures.append(Failure(path, "roadmap Boundary Map section is not populated"))
+        return failures
+    failures.extend(require_contains(boundary_text, path, ROADMAP_BOUNDARY_LINKS, "roadmap boundary source link"))
+    failures.extend(require_contains(boundary_text, path, IN_SCOPE_REQUIREMENTS, "roadmap M012-scoped requirement id"))
+    failures.extend(require_contains(boundary_text, path, OUT_OF_SCOPE_REQUIREMENTS, "roadmap out-of-scope active requirement id"))
+    return failures
 
 def require_requirement_rows(text: str, path: Path) -> list[Failure]:
     failures: list[Failure] = []
@@ -103,9 +135,10 @@ def main() -> int:
     try:
         reconciliation_text = read_doc(RECONCILIATION_DOC)
         evidence_text = read_doc(EVIDENCE_DOC)
+        roadmap_text = read_roadmap(ROADMAP)
     except OSError as exc:
         print("RESULT=failed")
-        print(f"M012 scope reconciliation verifier could not read docs artifact: {exc}")
+        print(f"M012 scope reconciliation verifier could not read validation artifact: {exc}")
         return 1
 
     failures.extend(require_contains(reconciliation_text, RECONCILIATION_DOC, REQUIRED_HEADINGS, "boundary heading"))
@@ -115,6 +148,8 @@ def main() -> int:
     failures.extend(forbid_overclaims(reconciliation_text, RECONCILIATION_DOC))
     failures.extend(require_contains(evidence_text, EVIDENCE_DOC, REQUIRED_EVIDENCE_LINKS, "S07 evidence link"))
     failures.extend(forbid_overclaims(evidence_text, EVIDENCE_DOC))
+    failures.extend(require_populated_boundary_map(roadmap_text, ROADMAP))
+    failures.extend(forbid_overclaims(roadmap_text, ROADMAP))
 
     if failures:
         print("RESULT=failed")
@@ -124,8 +159,8 @@ def main() -> int:
         return 1
 
     print("RESULT=passed")
-    print("M012 scope reconciliation verifier passed: scope headings, credential seams, requirement ids, and evidence links are present.")
-    print("Scanned docs only: docs/M012-GOONG-SCOPE-RECONCILIATION.md, docs/M012-GOONG-VERIFICATION-EVIDENCE.md")
+    print("M012 scope reconciliation verifier passed: scope headings, credential seams, requirement ids, evidence links, and roadmap boundary map are present.")
+    print("Scanned static artifacts: docs/M012-GOONG-SCOPE-RECONCILIATION.md, docs/M012-GOONG-VERIFICATION-EVIDENCE.md, .gsd/milestones/M012-4ucdfp/M012-4ucdfp-ROADMAP.md")
     return 0
 
 
