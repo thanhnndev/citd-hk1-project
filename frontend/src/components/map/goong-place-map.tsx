@@ -23,6 +23,7 @@ type GoongPlaceMapProps = Readonly<{
   selectedPlaceId: string | null;
   onMarkerSelect: (placeId: string) => void;
   missingTokenLabel: string;
+  unavailableLabel: string;
   emptyLabel: string;
   selectPlaceLabel: string;
 }>;
@@ -32,6 +33,7 @@ export function GoongPlaceMap({
   selectedPlaceId,
   onMarkerSelect,
   missingTokenLabel,
+  unavailableLabel,
   emptyLabel,
   selectPlaceLabel,
 }: GoongPlaceMapProps) {
@@ -100,7 +102,7 @@ export function GoongPlaceMap({
   }
 
   if (mapError) {
-    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{emptyLabel}</div>;
+    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{unavailableLabel}</div>;
   }
 
   if (pinnedPlaces.length === 0) {

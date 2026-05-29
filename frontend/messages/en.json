@@ -323,7 +323,7 @@
   },
   "Map": {
     "title": "Ham Ninh Place Proof Map",
-    "intro": "Inspect live place recommendations returned by the backend agent: result cards, selected details, pin-ready coordinates, and Google Maps links without loading a browser map SDK.",
+    "intro": "Inspect live place recommendations returned by the backend agent on a real Goong map: result cards, selected details, synchronized pins, and neutral source links.",
     "defaultQuery": "Recommend local seafood restaurants and family-run places near Ham Ninh fishing village with accessibility details.",
     "queryLabel": "Place recommendation query",
     "searchPlaceholder": "Ask for places or services in Ham Ninh...",
@@ -338,7 +338,7 @@
     "selectPlace": "Select place",
     "pinReady": "pin ready",
     "pinUnavailable": "Pin unavailable: coordinates were not returned for this place.",
-    "mapsLink": "Open in Google Maps",
+    "mapsLink": "Open source place link",
     "rating": "Rating",
     "reviews": "Reviews",
     "openNow": "Open now",
@@ -350,7 +350,10 @@
     "address": "Address",
     "coordinates": "Coordinates",
     "unknown": "Unknown",
-    "responseNote": "Assistant note"
+    "responseNote": "Assistant note",
+    "missingMapToken": "Goong map tiles are not configured. Results remain available as cards until NEXT_PUBLIC_GOONG_MAPTILES_KEY is set.",
+    "mapUnavailable": "The Goong map could not initialize. Result cards and place details are still available.",
+    "noPins": "No map pins can be drawn because these results do not include usable coordinates."
   },
   "Architecture": {
     "title": "System Architecture",

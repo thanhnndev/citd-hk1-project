@@ -27,6 +27,9 @@ type MapProofTranslations = Readonly<{
   selectPlace: string;
   pinReady: string;
   pinUnavailable: string;
+  missingMapToken: string;
+  mapUnavailable: string;
+  noPins: string;
   mapsLink: string;
   rating: string;
   reviews: string;
@@ -172,8 +175,9 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
                 places={places}
                 selectedPlaceId={selectedPlaceId}
                 onMarkerSelect={setSelectedPlaceId}
-                missingTokenLabel={translations.unavailable}
-                emptyLabel={translations.pinUnavailable}
+                missingTokenLabel={translations.missingMapToken}
+                unavailableLabel={translations.mapUnavailable}
+                emptyLabel={translations.noPins}
                 selectPlaceLabel={translations.selectPlace}
               />
               <CardContent className="p-5">

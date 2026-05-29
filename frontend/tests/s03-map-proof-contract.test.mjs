@@ -17,7 +17,8 @@ const viMessagesPath = path.join(frontendDir, 'messages/vi.json');
 const requiredMapKeys = [
   'title', 'intro', 'defaultQuery', 'queryLabel', 'searchPlaceholder', 'submit',
   'loading', 'error', 'unavailable', 'noResults', 'fallback', 'resultCount',
-  'detailTitle', 'selectPlace', 'pinReady', 'pinUnavailable', 'mapsLink',
+  'detailTitle', 'selectPlace', 'pinReady', 'pinUnavailable', 'missingMapToken',
+  'mapUnavailable', 'noPins', 'mapsLink',
   'rating', 'reviews', 'openNow', 'closedNow', 'openUnknown', 'businessStatus',
   'type', 'accessibility', 'address', 'coordinates', 'unknown', 'responseNote',
 ];
@@ -76,6 +77,8 @@ test('GoongPlaceMap component owns Goong Mapbox GL initialization and token fall
   assert.doesNotMatch(source, /process\.env\.GOONG_API_KEY/);
   assert.doesNotMatch(source, /fetch\s*\(/);
   assert.match(source, /missing(?:Map)?Token|missing-token|NEXT_PUBLIC_GOONG_MAPTILES_KEY/i);
+  assert.match(source, /unavailableLabel/);
+  assert.match(source, /emptyLabel/);
   assert.match(source, /onMarkerSelect/);
   assert.match(source, /selectedPlaceId/);
 });
@@ -87,6 +90,9 @@ test('PlaceProofMap keeps recommendation intelligence on sendChat and delegates 
 
   assert.match(source, /import\s+\{\s*GoongPlaceMap\s*\}\s+from ['"]@\/components\/map\/goong-place-map['"]/);
   assert.match(source, /<GoongPlaceMap\b/);
+  assert.match(source, /missingTokenLabel=\{translations\.missingMapToken\}/);
+  assert.match(source, /unavailableLabel=\{translations\.mapUnavailable\}/);
+  assert.match(source, /emptyLabel=\{translations\.noPins\}/);
   assert.doesNotMatch(source, /staticPlotPosition/);
   assert.match(source, /import\s+\{[^}]*\bsendChat\b/);
   assert.match(source, /sendChat\(/);
@@ -129,6 +135,7 @@ test('Map message catalogs include matching non-empty proof-surface keys', () =>
   for (const [locale, mapMessages] of Object.entries(catalogs)) {
     assert.ok(mapMessages, `${locale} catalog must include Map messages`);
     assert.deepEqual(Object.keys(mapMessages).sort(), [...requiredMapKeys].sort(), `${locale} Map keys must match the S03 contract`);
+    assert.doesNotMatch(mapMessages.intro + mapMessages.mapsLink, /Google Maps|Google Maps SDK/i, `${locale} Map copy should not brand the neutral source link as Google-owned UI`);
     for (const key of requiredMapKeys) {
       assert.equal(typeof mapMessages[key], 'string', `${locale} Map.${key} must be a string`);
       assert.ok(mapMessages[key].trim().length > 0, `${locale} Map.${key} must not be empty`);
