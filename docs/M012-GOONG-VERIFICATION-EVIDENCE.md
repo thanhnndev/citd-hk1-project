@@ -144,6 +144,61 @@ Outcome:
 
 This document remains the human-readable audit surface for mocked regression, frontend build/contract, zero-reference closeout, and credential-aware live verifier status.
 
+## S06 Credentialed Runtime Readiness Closeout
+
+Status: credential_blocked locally; regression gates passed.
+
+Runtime boundary:
+
+- `GOONG_API_KEY` is server-only and is consumed by `scripts/verify-goong-live.py` for Places and Routes verification. It must never be exposed to browser code or evidence logs.
+- `NEXT_PUBLIC_GOONG_MAPTILES_KEY` is browser-public and must be present before starting/building Next.js for browser live tile proof. Missing, fake, or placeholder values produce terminal `RESULT=credential_blocked`.
+- The browser verifier mocks only `/api/chat` with coordinate-bearing agent places so the `/vi/map` UI can exercise real Goong style/tile network, agent pins, and marker selection without backend/LLM credentials.
+- `RESULT=credential_blocked` is accepted blocked-live evidence, not live Goong success. Live success requires terminal `RESULT=passed` with real credentials.
+
+Backend live proof command:
+
+```bash
+python3 scripts/verify-goong-live.py
+```
+
+Outcome:
+
+- Exit code: 0
+- Terminal result: `RESULT=credential_blocked`
+- Sanitized status: `goong_api_key_status` was `missing`.
+- Evidence run: `.gsd/exec/a3abbc9a-46a5-4ba4-8659-312c73e5e8a4.stdout`
+- Interpretation: blocked-live proof only; no real `GOONG_API_KEY` was available.
+
+Browser map proof command:
+
+```bash
+cd frontend && node --test tests/s06-goong-map-live.test.mjs
+```
+
+Outcome:
+
+- Exit code: 0
+- Terminal result: `RESULT=credential_blocked {"reason":"missing_or_placeholder_NEXT_PUBLIC_GOONG_MAPTILES_KEY"}`
+- Evidence run: `.gsd/exec/924ffab3-a9de-4136-9153-34512da89ec6.stdout`
+- Interpretation: blocked-live browser proof only; the verifier did not launch a credentialed browser/server flow because no usable public Goong map tiles key was present.
+
+Final S06 regression gates:
+
+| # | Command | Exit Code | Verdict | Duration |
+|---|---------|-----------|---------|----------|
+| 1 | `python3 scripts/verify-s05-zero-<legacy-provider>-references.py` | 0 | pass, `RESULT=passed` | 1477ms |
+| 2 | `cd backend && pytest -q tests/test_verify_goong_live.py --tb=short` | 0 | pass, 5 passed | 6208ms |
+| 3 | `cd frontend && node --test tests/s03-map-proof-contract.test.mjs` | 0 | pass, 6 passed | 159ms |
+| 4 | `cd frontend && node --test tests/s06-goong-map-live.test.mjs` | 0 | pass, credential_blocked due to missing/placeholder public map tiles key | 515ms |
+| 5 | `cd frontend && bun run build` | 0 | pass, Next.js production build completed | 13582ms |
+| 6 | `python3 scripts/verify-goong-live.py` | 0 | pass, credential_blocked due to missing server Goong key | 541ms |
+
+Sanitization notes:
+
+- No secrets, raw upstream Places/Routes payloads, raw tile responses, or full network responses are recorded.
+- Evidence records only terminal `RESULT=` lines, credential presence classifications, command status, and test/build summaries.
+- Credentialed runtime success remains pending until real `GOONG_API_KEY` and `NEXT_PUBLIC_GOONG_MAPTILES_KEY` are supplied and the respective verifiers report `RESULT=passed`.
+
 ## Verification Evidence
 
 | # | Command | Exit Code | Verdict | Duration |
