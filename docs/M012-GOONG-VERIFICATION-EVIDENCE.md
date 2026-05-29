@@ -144,6 +144,34 @@ Outcome:
 
 This document remains the human-readable audit surface for mocked regression, frontend build/contract, zero-reference closeout, and credential-aware live verifier status.
 
+## S08 Scope And Roadmap Boundary Remediation
+
+Status: static remediation passed.
+
+S08 made the producer/contract/consumer boundary visible from the M012 roadmap while keeping `docs/M012-GOONG-SCOPE-RECONCILIATION.md` as the canonical detailed reconciliation artifact. The roadmap `## Boundary Map` now links back to that reconciliation and preserves the M012-scoped requirement ids separately from unrelated active gaps.
+
+Requirement boundary:
+
+- M012-scoped Goong migration claims remain limited to R008, R017, R019, R020, R021, R032, and R034 evidence in the reconciliation artifact.
+- R007, R010, R011, R026, and R028 remain active out-of-scope gaps for M012; S08 does not convert them into missing M012 work or mark them complete.
+- Official requirement statuses are unchanged by this evidence addendum.
+
+Credential semantics preserved:
+
+- `RESULT=credential_blocked` remains blocked-live evidence when required Goong credentials or public map tokens are missing, fake, or placeholders.
+- Credentialed live Goong success requires a terminal `RESULT=passed` from the relevant live verifier run with real credentials; S08 does not claim that proof.
+
+Static commands rerun for S08:
+
+```bash
+python3 scripts/verify-m012-scope-reconciliation.py && python3 scripts/verify-s05-zero-<legacy-provider>-references.py
+```
+
+Interpretation:
+
+- The scope verifier guards required reconciliation headings, credential seams, requirement ids, evidence links, and the populated roadmap boundary map.
+- The zero-reference verifier guards against accidental stale provider wording in active files while excluding generated/vendor/cache paths and immutable `data/` corpus files.
+
 ## S06 Credentialed Runtime Readiness Closeout
 
 Status: credential_blocked locally; regression gates passed.
