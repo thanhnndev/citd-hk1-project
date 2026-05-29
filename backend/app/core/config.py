@@ -33,10 +33,9 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
-    # ── Goong / Google APIs ─────────────────────────────────────
+    # ── Goong APIs ──────────────────────────────────────────────
     # Optional: blank values let Places/Routes services fail honestly at runtime.
     GOONG_API_KEY: str = ""
-    GOOGLE_ROUTES_API_KEY: str = ""
 
     # ── Langfuse ────────────────────────────────────────────────
     LANGFUSE_PUBLIC_KEY: str = ""

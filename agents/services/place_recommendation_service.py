@@ -24,6 +24,7 @@ from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from agents.ml.ensemble_reranker import EnsembleReranker
 from agents.ml.feature_extractor import FeatureExtractor
 from agents.tools.places_service import GoongPlacesService
+from agents.tools.routes_service import GoongRoutesService
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class PlaceRecommendationService:
     ) -> None:
         self._places_tool = places_tool or GoongPlacesService()
         self._max_result_count = max(1, min(max_result_count, 20))
-        self._routes_service = routes_service
+        self._routes_service = routes_service if routes_service is not None else GoongRoutesService()
 
     async def recommend(self, *, query: str, language: str = "vi", session_id: str) -> ChatResponse:
         started = time.perf_counter()

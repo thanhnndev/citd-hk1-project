@@ -1,4 +1,4 @@
-"""Tests for Google Routes service: computeRouteMatrix, circuit breaker, and candidate enrichment."""
+"""Tests for Goong Routes service: DistanceMatrix, circuit breaker, and enrichment."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from app.models.places import PlaceCandidate, RouteContext
 from app.models.request import LatLng
 from agents.tools.routes_service import (
     CircuitBreaker,
+    GoongRoutesService,
     GoogleRoutesService,
     COOLDOWN_SECONDS,
     FAILURE_THRESHOLD,
@@ -42,18 +43,22 @@ class FakeRoutesClient:
         self.response = response
         self.calls: list[dict] = []
 
-    async def post(
-        self, path: str, *, json: object, headers: object
+    async def get(
+        self, path: str, *, params: object
     ) -> FakeResponse:
-        self.calls.append({"path": path, "json": json, "headers": headers})
+        self.calls.append({"path": path, "params": params})
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
 
 
-def _settings(routes_key: str = "test-routes-key") -> Settings:
-    return Settings(OPENAI_API_KEY="openai-test", GOOGLE_ROUTES_API_KEY=routes_key)
+def _settings(routes_key: str = "test-goong-key") -> Settings:
+    return Settings(OPENAI_API_KEY="openai-test", GOONG_API_KEY=routes_key)
 
+
+
+def test_google_routes_service_alias_remains_available() -> None:
+    assert GoogleRoutesService is GoongRoutesService
 
 def _candidate(name: str, lat: float, lng: float) -> PlaceCandidate:
     return PlaceCandidate(
@@ -135,13 +140,13 @@ async def test_computeRouteMatrix_returns_results_on_success() -> None:
 
     fake_response = FakeResponse(
         status_code=200,
-        payload=[
-            {"destinationIndex": 0, "distanceMeters": 5000, "durationSeconds": 300, "status": "OK"},
-            {"destinationIndex": 1, "distanceMeters": 8000, "durationSeconds": 480, "status": "OK"},
-        ],
+        payload={"rows": [{"elements": [
+            {"status": "OK", "distance": {"value": 5000}, "duration": {"value": 300}},
+            {"status": "OK", "distance": {"value": 8000}, "duration": {"value": 480}},
+        ]}]},
     )
     client = FakeRoutesClient(fake_response)
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     results = await service.computeRouteMatrix(origin, [dest1, dest2])
 
@@ -150,27 +155,21 @@ async def test_computeRouteMatrix_returns_results_on_success() -> None:
     assert results[1]["distanceMeters"] == 8000
     assert len(client.calls) == 1
 
-    # Verify request body shape
-    body = client.calls[0]["json"]
-    assert body["travelMode"] == "DRIVE"
-    assert body["routingPreference"] == "TRAFFIC_UNAWARE"
-    assert len(body["origins"]) == 1
-    assert body["origins"][0]["location"]["latLng"]["latitude"] == 10.0
-    assert len(body["destinations"]) == 2
-
-    # Verify headers
-    headers = client.calls[0]["headers"]
-    assert headers["X-Goog-Api-Key"] == "test-routes-key"
-    assert "distanceMeters" in headers["X-Goog-FieldMask"]
+    params = client.calls[0]["params"]
+    assert client.calls[0]["path"] == "/DistanceMatrix"
+    assert params["origins"] == "10.0,106.0"
+    assert params["destinations"] == "10.1,106.1|10.2,106.2"
+    assert params["vehicle"] == "car"
+    assert params["api_key"] == "test-goong-key"
 
 
 @pytest.mark.asyncio
 async def test_computeRouteMatrix_records_success_on_ok() -> None:
     """A successful response should record_success, clearing any prior failures."""
     client = FakeRoutesClient(
-        FakeResponse(status_code=200, payload=[{"status": "OK"}])
+        FakeResponse(status_code=200, payload={"rows": [{"elements": [{"status": "OK"}]}]})
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
     service._circuit_breaker.record_failure()
     service._circuit_breaker.record_failure()
 
@@ -184,11 +183,11 @@ async def test_computeRouteMatrix_records_success_on_ok() -> None:
 
 @pytest.mark.asyncio
 async def test_missing_key_returns_empty_with_log() -> None:
-    """When GOOGLE_ROUTES_API_KEY is blank, return empty list without outbound call."""
+    """When GOONG_API_KEY is blank, return empty list without outbound call."""
     client = FakeRoutesClient(
-        FakeResponse(status_code=200, payload=[{"status": "OK"}])
+        FakeResponse(status_code=200, payload={"rows": [{"elements": [{"status": "OK"}]}]})
     )
-    service = GoogleRoutesService(settings=_settings(routes_key=""), client=client)
+    service = GoongRoutesService(settings=_settings(routes_key=""), client=client)
 
     results = await service.computeRouteMatrix(
         LatLng(lat=10.0, lng=106.0),
@@ -203,9 +202,9 @@ async def test_missing_key_returns_empty_with_log() -> None:
 async def test_circuit_open_returns_empty() -> None:
     """When circuit breaker is open, return empty without outbound call."""
     client = FakeRoutesClient(
-        FakeResponse(status_code=200, payload=[{"status": "OK"}])
+        FakeResponse(status_code=200, payload={"rows": [{"elements": [{"status": "OK"}]}]})
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
     for _ in range(FAILURE_THRESHOLD):
         service._circuit_breaker.record_failure()
 
@@ -222,7 +221,7 @@ async def test_circuit_open_returns_empty() -> None:
 async def test_timeout_records_failure() -> None:
     """Timeout should log warning, record failure, and return empty."""
     client = FakeRoutesClient(httpx.TimeoutException("timed out"))
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     results = await service.computeRouteMatrix(
         LatLng(lat=10.0, lng=106.0),
@@ -236,11 +235,36 @@ async def test_timeout_records_failure() -> None:
     assert service.is_open is True  # now at threshold
 
 
+
+@pytest.mark.asyncio
+async def test_transport_error_records_failure() -> None:
+    """Transport errors should log safely, record failure, and return empty."""
+    client = FakeRoutesClient(httpx.ConnectError("network blocked"))
+    service = GoongRoutesService(settings=_settings(), client=client)
+
+    results = await service.computeRouteMatrix(
+        LatLng(lat=10.0, lng=106.0),
+        [LatLng(lat=10.1, lng=106.1)],
+    )
+
+    assert results == []
+    assert service.is_open is False
+
+@pytest.mark.asyncio
+async def test_empty_destinations_returns_empty_without_call() -> None:
+    client = FakeRoutesClient(FakeResponse(status_code=200, payload={"rows": [{"elements": []}]}))
+    service = GoongRoutesService(settings=_settings(), client=client)
+
+    results = await service.computeRouteMatrix(LatLng(lat=10.0, lng=106.0), [])
+
+    assert results == []
+    assert len(client.calls) == 0
+
 @pytest.mark.asyncio
 async def test_429_records_failure_and_returns_empty() -> None:
     """429 rate limit should trip circuit breaker and return empty."""
     client = FakeRoutesClient(FakeResponse(status_code=429, payload={}))
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     for _ in range(FAILURE_THRESHOLD):
         await service.computeRouteMatrix(
@@ -255,7 +279,7 @@ async def test_429_records_failure_and_returns_empty() -> None:
 async def test_5xx_records_failure_and_returns_empty() -> None:
     """500-range errors should trip circuit breaker and return empty."""
     client = FakeRoutesClient(FakeResponse(status_code=503, payload={}))
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     for _ in range(FAILURE_THRESHOLD):
         await service.computeRouteMatrix(
@@ -270,7 +294,7 @@ async def test_5xx_records_failure_and_returns_empty() -> None:
 async def test_401_does_not_trip_circuit_breaker() -> None:
     """Auth errors (401/403) should NOT trip the circuit breaker."""
     client = FakeRoutesClient(FakeResponse(status_code=401, payload={}))
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     for _ in range(FAILURE_THRESHOLD + 5):
         await service.computeRouteMatrix(
@@ -286,7 +310,7 @@ async def test_401_does_not_trip_circuit_breaker() -> None:
 async def test_403_does_not_trip_circuit_breaker() -> None:
     """403 should behave like 401 — no circuit trip."""
     client = FakeRoutesClient(FakeResponse(status_code=403, payload={}))
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     for _ in range(FAILURE_THRESHOLD + 5):
         await service.computeRouteMatrix(
@@ -301,7 +325,7 @@ async def test_403_does_not_trip_circuit_breaker() -> None:
 async def test_4xx_non_429_returns_empty_no_trip() -> None:
     """Generic 4xx (e.g. 400) should return empty but not trip circuit."""
     client = FakeRoutesClient(FakeResponse(status_code=400, payload={}))
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     results = await service.computeRouteMatrix(
         LatLng(lat=10.0, lng=106.0),
@@ -318,7 +342,7 @@ async def test_malformed_json_records_failure() -> None:
     client = FakeRoutesClient(
         FakeResponse(status_code=200, json_error=ValueError("bad json"))
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     results = await service.computeRouteMatrix(
         LatLng(lat=10.0, lng=106.0),
@@ -341,13 +365,13 @@ async def test_enrich_candidates_populates_route_context() -> None:
     client = FakeRoutesClient(
         FakeResponse(
             status_code=200,
-            payload=[
-                {"destinationIndex": 0, "distanceMeters": 5000, "durationSeconds": 300, "status": "OK"},
-                {"destinationIndex": 1, "distanceMeters": 8000, "durationSeconds": 480, "status": "OK"},
-            ],
+            payload={"rows": [{"elements": [
+                {"status": "OK", "distance": {"value": 5000}, "duration": {"value": 300}},
+                {"status": "OK", "distance": {"value": 8000}, "duration": {"value": 480}},
+            ]}]},
         )
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     result = await service.enrich_candidates([c1, c2], origin)
 
@@ -366,9 +390,9 @@ async def test_enrich_candidates_returns_unchanged_when_key_missing() -> None:
     c1 = _candidate("Restaurant A", 10.1, 106.1)
 
     client = FakeRoutesClient(
-        FakeResponse(status_code=200, payload=[{"status": "OK"}])
+        FakeResponse(status_code=200, payload={"rows": [{"elements": [{"status": "OK"}]}]})
     )
-    service = GoogleRoutesService(settings=_settings(routes_key=""), client=client)
+    service = GoongRoutesService(settings=_settings(routes_key=""), client=client)
 
     result = await service.enrich_candidates([c1], origin)
 
@@ -384,9 +408,9 @@ async def test_enrich_candidates_returns_unchanged_when_circuit_open() -> None:
     c1 = _candidate("Restaurant A", 10.1, 106.1)
 
     client = FakeRoutesClient(
-        FakeResponse(status_code=200, payload=[{"status": "OK"}])
+        FakeResponse(status_code=200, payload={"rows": [{"elements": [{"status": "OK"}]}]})
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
     for _ in range(FAILURE_THRESHOLD):
         service._circuit_breaker.record_failure()
 
@@ -407,10 +431,10 @@ async def test_enrich_candidates_skips_candidates_without_location() -> None:
     client = FakeRoutesClient(
         FakeResponse(
             status_code=200,
-            payload=[{"destinationIndex": 0, "distanceMeters": 5000, "status": "OK"}],
+            payload={"rows": [{"elements": [{"status": "OK", "distance": {"value": 5000}}]}]},
         )
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     result = await service.enrich_candidates([c1, c2], origin)
 
@@ -426,9 +450,9 @@ async def test_enrich_candidates_skips_candidates_without_location() -> None:
 async def test_enrich_candidates_empty_list_returns_empty() -> None:
     """Empty candidate list should return empty without API call."""
     client = FakeRoutesClient(
-        FakeResponse(status_code=200, payload=[{"status": "OK"}])
+        FakeResponse(status_code=200, payload={"rows": [{"elements": [{"status": "OK"}]}]})
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     result = await service.enrich_candidates([], LatLng(lat=10.0, lng=106.0))
 
@@ -445,7 +469,7 @@ async def test_enrich_candidates_handles_api_error_gracefully() -> None:
     client = FakeRoutesClient(
         FakeResponse(status_code=500, payload={})
     )
-    service = GoogleRoutesService(settings=_settings(), client=client)
+    service = GoongRoutesService(settings=_settings(), client=client)
 
     result = await service.enrich_candidates([c1], origin)
 

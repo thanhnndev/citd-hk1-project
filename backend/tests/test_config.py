@@ -1,4 +1,4 @@
-"""Tests for application settings validation and optional upstream credentials."""
+"""Tests for application settings validation and optional Goong credentials."""
 
 import pytest
 from pydantic import ValidationError
@@ -7,8 +7,7 @@ from app.core.config import Settings
 
 
 def test_settings_instantiates_without_goong_api_key(monkeypatch):
-    """Goong Places key is optional so services can report blocked status."""
-    # Route migration is intentionally deferred; S01 only replaces Places credentials.
+    """Goong key is optional so Places/Routes services can report blocked status."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.delenv("GOONG_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_ROUTES_API_KEY", raising=False)
@@ -17,12 +16,11 @@ def test_settings_instantiates_without_goong_api_key(monkeypatch):
 
     assert settings.OPENAI_API_KEY == "test-openai-key"
     assert settings.GOONG_API_KEY == ""
-    assert settings.GOOGLE_ROUTES_API_KEY == ""
+    assert not hasattr(settings, "GOOGLE_ROUTES_API_KEY")
 
 
 def test_settings_preserves_empty_goong_api_key(monkeypatch):
     """Explicit blank Goong credential remains blank instead of failing startup."""
-    # GOOGLE_ROUTES_API_KEY remains route-owned compatibility until the routes slice.
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("GOONG_API_KEY", "")
     monkeypatch.setenv("GOOGLE_ROUTES_API_KEY", "")
@@ -30,7 +28,7 @@ def test_settings_preserves_empty_goong_api_key(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.GOONG_API_KEY == ""
-    assert settings.GOOGLE_ROUTES_API_KEY == ""
+    assert not hasattr(settings, "GOOGLE_ROUTES_API_KEY")
 
 
 def test_settings_still_requires_openai_api_key(monkeypatch):
