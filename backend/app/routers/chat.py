@@ -11,6 +11,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.core.config import get_settings
 from app.middleware.rate_limiter import get_limiter
 from app.models.request import ChatRequest
 from app.models.response import ChatResponse
@@ -30,6 +31,7 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/chat")
 limiter = get_limiter()
+chat_rate_limit = get_settings().RATE_LIMIT_CHAT
 
 
 
@@ -64,7 +66,7 @@ def _agent_service_available(request: Request) -> bool:
     )
 
 @router.post("", response_model=ChatResponse)
-@limiter.limit("20/minute")
+@limiter.limit(chat_rate_limit)
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     """Answer a user query through the shared agent service."""
     t0 = time.perf_counter()
@@ -181,7 +183,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     return response
 
 @router.get("/stream")
-@limiter.limit("20/minute")
+@limiter.limit(chat_rate_limit)
 async def chat_stream(
     request: Request,
     message: str = Query(...),

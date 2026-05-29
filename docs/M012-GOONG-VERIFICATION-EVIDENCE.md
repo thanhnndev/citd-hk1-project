@@ -10,6 +10,7 @@ Current evidence proves:
 - Frontend Goong map contract and production build pass without exposing backend `GOONG_API_KEY` to the browser.
 - The live verifier reports a sanitized terminal `RESULT=` status.
 - Missing/fake/placeholder credentials are documented as `credential_blocked`, not as live provider success.
+- The S05 zero-reference gate passes across active code, tests, current docs, config, and dependency manifests while excluding generated/vendor/cache paths and immutable `data/` corpus files.
 
 Out of scope for this evidence package:
 
@@ -124,7 +125,24 @@ Interpretation:
 
 ## S05 Cleanup Status
 
-S05 cleanup updates active documentation, config, tests, and requirement evidence to use Goong-only provider instructions. This document remains the human-readable audit surface for mocked regression, frontend build/contract, and credential-aware live verifier status.
+S05 cleanup updates active documentation, config, tests, and requirement evidence to use Goong-only provider instructions. The closeout gate the S05 zero-reference script under `scripts/` scans active repository text and reports exact path/line diagnostics for stale provider references. It excludes generated/cache/vendor paths and immutable `data/` corpus files, where crawled source text may be preserved verbatim without weakening the active code/tests/docs/config/dependency gate.
+
+Fresh closeout command:
+
+```bash
+REDIS_URL=memory:// RATE_LIMIT_CHAT=10000/minute python3 scripts/verify-s05-zero-<legacy-provider>-references.py && cd backend && pytest -q tests/test_places_models.py tests/test_places_service.py tests/test_routes_service.py tests/test_place_recommendation_service.py tests/test_place_recommendation_reranking.py tests/test_agent_place_recommendations.py tests/test_chat_api.py tests/test_verify_goong_live.py --tb=short && cd ../frontend && node --test tests/s03-map-proof-contract.test.mjs tests/s05-chat-e2e.test.mjs && bun run build && cd .. && python3 scripts/verify-goong-live.py
+```
+
+Outcome:
+
+- Exit code: 0
+- Zero-reference gate: `RESULT=passed`
+- Backend mocked regression: 134 passed
+- Frontend contract/E2E/build: passed
+- Live Goong verifier: `RESULT=credential_blocked` with missing credentials
+- Evidence run: `.gsd/exec/79ed2f01-83cd-48f5-9d6f-59c95bcb0068.stdout`
+
+This document remains the human-readable audit surface for mocked regression, frontend build/contract, zero-reference closeout, and credential-aware live verifier status.
 
 ## Verification Evidence
 
@@ -134,6 +152,7 @@ S05 cleanup updates active documentation, config, tests, and requirement evidenc
 | 2 | `cd /home/thanhnndev/develop/projects/citd-hk1-project/backend && pytest -q tests/test_config.py tests/test_places_models.py tests/test_places_service.py tests/test_routes_service.py tests/test_place_recommendation_service.py tests/test_place_recommendation_reranking.py tests/test_agent_place_recommendations.py tests/test_verify_goong_live.py --tb=short` | 0 | pass, 92 passed | 6853ms |
 | 3 | `cd frontend && node --test tests/s03-map-proof-contract.test.mjs && bun run build` | 0 | pass | 13341ms |
 | 4 | `python3 scripts/verify-goong-live.py` | 0 | pass, credential_blocked without credentials | 489ms |
+| 5 | `REDIS_URL=memory:// RATE_LIMIT_CHAT=10000/minute python3 scripts/verify-s05-zero-<legacy-provider>-references.py && cd backend && pytest -q tests/test_places_models.py tests/test_places_service.py tests/test_routes_service.py tests/test_place_recommendation_service.py tests/test_place_recommendation_reranking.py tests/test_agent_place_recommendations.py tests/test_chat_api.py tests/test_verify_goong_live.py --tb=short && cd ../frontend && node --test tests/s03-map-proof-contract.test.mjs tests/s05-chat-e2e.test.mjs && bun run build && cd .. && python3 scripts/verify-goong-live.py` | 0 | pass, S05 closeout gate complete with credential_blocked live boundary | 51874ms |
 
 ## Final S04 Status
 

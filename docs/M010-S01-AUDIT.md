@@ -167,7 +167,7 @@ When a verification script requires external API keys (OPENAI_API_KEY, Google Pl
 ### R021 — Places contracts preserve fairness ranking fields
 - **Status:** ✅ PASS
 - **Validated by:** M005-muzhoo/S03
-- **Evidence files:** Backend tests confirm ChatResponse.places preserves rating, review_count, price_level, accessibility, location, types, google_maps_uri, open_now, business_status
+- **Evidence files:** Backend tests confirm ChatResponse.places preserves rating, review_count, price_level, accessibility, location, types, map_uri, open_now, business_status
 - **Notes:** All fairness-ready and pin-ready fields preserved.
 
 ### R022 — Ensemble terminology accuracy (frontend)

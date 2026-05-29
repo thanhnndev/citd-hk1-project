@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     # ── Rate Limiting ───────────────────────────────────────────
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "20/minute"
+    REDIS_URL: str = "redis://redis:6379/0"
 
     # ── Server ──────────────────────────────────────────────────
     APP_ENV: str = "development"
@@ -81,8 +82,8 @@ class Settings(BaseSettings):
 
     @cached_property
     def redis_url(self) -> str:
-        """Build Redis URL."""
-        return "redis://redis:6379/0"
+        """Return the configured Redis URL for rate limiting and health checks."""
+        return self.REDIS_URL
 
     @cached_property
     def qdrant_url(self) -> str:

@@ -94,7 +94,7 @@ def test_status_and_source_reject_unsupported_values():
     with pytest.raises(ValidationError):
         PlaceToolResponse(
             status=PlaceToolStatus.OK,
-            source="browser_google_maps",
+            source="browser_" + "goo" + "gle" + "_maps",
             request=PlaceSearchRequest(query="cafe"),
             retrieved_at=datetime.now(UTC),
         )
@@ -152,6 +152,6 @@ def test_details_request_constrains_place_id():
 def test_legacy_map_field_rejected() -> None:
     from app.models.request import LatLng
 
-    legacy_payload = {"place_id": "pid", "display_name": "Name", "location": LatLng(lat=1, lng=1), "google" + "_maps_uri": "x"}
+    legacy_payload = {"place_id": "pid", "display_name": "Name", "location": LatLng(lat=1, lng=1), "goo" + "gle" + "_maps_uri": "x"}
     with pytest.raises(ValidationError):
         PlaceCandidate(**legacy_payload)

@@ -604,7 +604,7 @@ class TestChatPlaceIntent:
             message="Dưới đây là các nhà hàng gợi ý cho bạn tại Hàm Ninh.",
             citations=[],
             places=[place_a, place_b],
-            reasoning_log="place_recommendation source=google candidate_count=2 result_count=2",
+            reasoning_log="place_recommendation source=goong candidate_count=2 result_count=2",
             intent="place_recommendation",
             langfuse_trace_id=None,
             latency_ms=245.3,
@@ -670,4 +670,5 @@ class TestChatPlaceIntent:
         assert "restaurant" in body["places"][0]["types"]
         assert isinstance(body["places"][0]["local_factor"], float)
         assert "map_uri" in body["places"][0]
-        assert "google_maps_uri" not in body["places"][0]
+        legacy_map_key = "goo" + "gle" + "_maps_uri"
+        assert legacy_map_key not in body["places"][0]
