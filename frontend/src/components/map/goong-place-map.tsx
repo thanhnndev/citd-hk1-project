@@ -6,6 +6,9 @@ import "mapbox-gl/dist/mapbox-gl.css";
 
 import { type PlaceResult } from "@/lib/chat-api";
 
+const HAM_NINH_CENTER: [number, number] = [104.0496843, 10.1835208];
+const HARMLESS_MAPBOX_TOKEN = "goong-public-tiles";
+
 function hasLocation(place: PlaceResult): place is PlaceResult & { location: { lat: number; lng: number } } {
   return (
     typeof place.location?.lat === "number" &&
@@ -40,14 +43,15 @@ export function GoongPlaceMap({
   const pinnedPlaces = useMemo(() => places.filter(hasLocation), [places]);
 
   useEffect(() => {
-    if (!containerRef.current || !token || mapRef.current) return;
+    if (!containerRef.current || !token || pinnedPlaces.length === 0 || mapRef.current) return;
 
     try {
+      mapboxgl.accessToken = mapboxgl.accessToken || HARMLESS_MAPBOX_TOKEN;
       mapRef.current = new mapboxgl.Map({
         container: containerRef.current,
         style: `https://tiles.goong.io/assets/goong_map_web.json?api_key=${token}`,
-        center: pinnedPlaces[0] ? [pinnedPlaces[0].location.lng, pinnedPlaces[0].location.lat] : [103.995, 10.19],
-        zoom: pinnedPlaces.length > 0 ? 12 : 10,
+        center: HAM_NINH_CENTER,
+        zoom: 12,
       });
       mapRef.current.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
       mapRef.current.on("error", () => setMapError("map-unavailable"));
@@ -61,7 +65,7 @@ export function GoongPlaceMap({
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [pinnedPlaces, token]);
+  }, [pinnedPlaces.length, token]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -92,21 +96,20 @@ export function GoongPlaceMap({
   }, [onMarkerSelect, pinnedPlaces, selectPlaceLabel, selectedPlaceId]);
 
   if (!token) {
-    return <div className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{missingTokenLabel}</div>;
+    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{missingTokenLabel}</div>;
   }
 
   if (mapError) {
-    return <div className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{emptyLabel}</div>;
+    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{emptyLabel}</div>;
+  }
+
+  if (pinnedPlaces.length === 0) {
+    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{emptyLabel}</div>;
   }
 
   return (
     <div className="relative h-80 overflow-hidden bg-muted">
       <div ref={containerRef} className="h-full w-full" />
-      {pinnedPlaces.length === 0 && (
-        <div className="absolute inset-0 grid place-items-center bg-background/80 p-8 text-center text-sm font-medium text-muted-foreground">
-          {emptyLabel}
-        </div>
-      )}
     </div>
   );
 }

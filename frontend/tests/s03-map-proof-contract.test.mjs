@@ -71,6 +71,10 @@ test('GoongPlaceMap component owns Goong Mapbox GL initialization and token fall
   assert.match(source, /process\.env\.NEXT_PUBLIC_GOONG_MAPTILES_KEY/);
   assert.match(source, /tiles\.goong\.io/);
   assert.match(source, /style\.json\?api_key=|api_key=\$\{/);
+  assert.match(source, /HAM_NINH_CENTER[^\n]*104\.0496843[^\n]*10\.1835208/);
+  assert.match(source, /mapboxgl\.accessToken\s*=.*HARMLESS_MAPBOX_TOKEN/);
+  assert.doesNotMatch(source, /process\.env\.GOONG_API_KEY/);
+  assert.doesNotMatch(source, /fetch\s*\(/);
   assert.match(source, /missing(?:Map)?Token|missing-token|NEXT_PUBLIC_GOONG_MAPTILES_KEY/i);
   assert.match(source, /onMarkerSelect/);
   assert.match(source, /selectedPlaceId/);
