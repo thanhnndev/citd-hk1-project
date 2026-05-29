@@ -10,9 +10,11 @@ from agents.tools.retriever import Retriever
 from agents.tools.qdrant_service import QdrantService
 from agents.tools.embedding_service import EmbeddingService
 
-# Ensure required app secrets are set before any app module imports.
-# Google credentials are optional and should remain absent unless a test opts in.
+# Ensure required app secrets and local-only rate-limit storage are set before
+# any app module imports.
 os.environ["OPENAI_API_KEY"] = "fake-test-key"
+os.environ.setdefault("REDIS_URL", "memory://")
+os.environ.setdefault("RATE_LIMIT_CHAT", "10000/minute")
 
 
 def _resolve_corpus_path() -> str:

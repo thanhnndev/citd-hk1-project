@@ -10,7 +10,7 @@ from agents.ml.feature_extractor import FeatureExtractor, haversine
 
 
 def make_candidate(**overrides: object) -> PlaceCandidate:
-    """Factory mirroring the google_place() pattern — start with defaults, apply overrides."""
+    """Factory mirroring the place fixture pattern -- start with defaults, apply overrides."""
     base = PlaceCandidate(
         place_id="ChIJtest",
         display_name="Test Restaurant",

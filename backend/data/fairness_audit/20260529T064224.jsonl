@@ -1,0 +1,6 @@
+{"timestamp": "2026-05-29T06:42:24.220264+00:00", "trace_id": null, "count": 1, "mean": 0.8, "min": 0.8, "max": 0.8, "local_factors": [0.8], "distribution": {"<0.1": 0, "0.1-0.3": 0, "0.3-0.5": 0, ">0.5": 1}}
+{"timestamp": "2026-05-29T06:42:24.235289+00:00", "trace_id": null, "count": 1, "mean": 0.8, "min": 0.8, "max": 0.8, "local_factors": [0.8], "distribution": {"<0.1": 0, "0.1-0.3": 0, "0.3-0.5": 0, ">0.5": 1}}
+{"timestamp": "2026-05-29T06:42:24.290447+00:00", "trace_id": null, "count": 1, "mean": 0.8, "min": 0.8, "max": 0.8, "local_factors": [0.8], "distribution": {"<0.1": 0, "0.1-0.3": 0, "0.3-0.5": 0, ">0.5": 1}}
+{"timestamp": "2026-05-29T06:42:24.928379+00:00", "trace_id": null, "count": 1, "mean": 0.8, "min": 0.8, "max": 0.8, "local_factors": [0.8], "distribution": {"<0.1": 0, "0.1-0.3": 0, "0.3-0.5": 0, ">0.5": 1}}
+{"timestamp": "2026-05-29T06:42:24.942747+00:00", "trace_id": null, "count": 1, "mean": 0.8, "min": 0.8, "max": 0.8, "local_factors": [0.8], "distribution": {"<0.1": 0, "0.1-0.3": 0, "0.3-0.5": 0, ">0.5": 1}}
+{"timestamp": "2026-05-29T06:42:24.995911+00:00", "trace_id": null, "count": 1, "mean": 0.8, "min": 0.8, "max": 0.8, "local_factors": [0.8], "distribution": {"<0.1": 0, "0.1-0.3": 0, "0.3-0.5": 0, ">0.5": 1}}
