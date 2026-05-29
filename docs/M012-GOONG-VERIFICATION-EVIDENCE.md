@@ -410,7 +410,7 @@ S10 formal closeout re-ran all four verifier scripts independently to produce fr
 | 1 | `python3 scripts/verify-goong-live.py` | 0 | `RESULT=credential_blocked` (missing GOONG_API_KEY) | `.gsd/exec/d86bd2d0-2c0b-49d6-97d0-72bd46b7c1d6.stdout` |
 | 2 | `cd frontend && node --test tests/s06-goong-map-live.test.mjs` | 0 | `RESULT=credential_blocked` (missing NEXT_PUBLIC_GOONG_MAPTILES_KEY) | `.gsd/exec/99513886-9974-4c1e-bfe0-08fe5e27161a.stdout` |
 | 3 | `python3 scripts/verify-m012-scope-reconciliation.py` | 0 | `RESULT=passed` | `.gsd/exec/46fd3da1-e97a-4788-be88-1ab7f9f4372c.stdout` |
-| 4 | `python3 scripts/verify-s05-zero-google-references.py` | 0 | `RESULT=passed` | `.gsd/exec/940486dc-125b-42ef-945e-7442962e1698.stdout` |
+| 4 | `python3 scripts/verify-s05-zero-<legacy-provider>-references.py` | 0 | `RESULT=passed` | `.gsd/exec/940486dc-125b-42ef-945e-7442962e1698.stdout` |
 
 ### RESULT= Lines
 
