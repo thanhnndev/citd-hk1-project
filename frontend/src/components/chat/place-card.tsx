@@ -51,7 +51,7 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
       {/* Footer: Maps link */}
       <div className="border-t px-3 py-2">
         <a
-          href={place.google_maps_uri}
+          href={place.map_uri}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-xs text-primary hover:underline"

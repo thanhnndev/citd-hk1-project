@@ -252,7 +252,7 @@
           "description": "Vector database cho RAG văn hóa Hàm Ninh."
         },
         {
-          "name": "Google Maps Platform",
+          "name": "Goong Maps Platform",
           "description": "Nguồn dữ liệu địa điểm và tuyến đường trong các slice sau."
         },
         {

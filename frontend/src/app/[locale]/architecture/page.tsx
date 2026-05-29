@@ -168,7 +168,7 @@ export default async function ArchitecturePage({ params }: Props) {
           <Badge variant="outline" className="mb-4 border-primary/30 bg-primary/5 text-primary">
             {t('title')}
           </Badge>
-          <p>Built with Next.js 16, FastAPI, LangGraph, Qdrant, and Google Maps Platform.</p>
+          <p>Built with Next.js 16, FastAPI, LangGraph, Qdrant, and Goong Maps Platform.</p>
         </div>
       </footer>
     </div>

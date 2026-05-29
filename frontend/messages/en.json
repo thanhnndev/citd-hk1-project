@@ -252,7 +252,7 @@
           "description": "Vector database for Ham Ninh cultural RAG."
         },
         {
-          "name": "Google Maps Platform",
+          "name": "Goong Maps Platform",
           "description": "Place and routing data source in later slices."
         },
         {

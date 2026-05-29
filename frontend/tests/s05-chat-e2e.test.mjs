@@ -6,6 +6,7 @@
 
 import { chromium } from '@playwright/test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 
 const BASE_URL = process.env.FRONTEND_URL ?? 'http://localhost:3000';
 const CHAT_URL = `${BASE_URL}/vi/chat`;
@@ -41,6 +42,50 @@ function postFallbackFulfill(sessionId) {
       latency_ms: 12,
     }),
   };
+}
+
+async function isServerReady() {
+  try {
+    const response = await fetch(BASE_URL, { signal: AbortSignal.timeout(1000) });
+    return response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+async function startFrontendServerIfNeeded() {
+  if (process.env.FRONTEND_URL || (await isServerReady())) return undefined;
+
+  const child = spawn('bun', ['run', 'dev'], {
+    cwd: process.cwd(),
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const logs = [];
+  child.stdout.on('data', (chunk) => logs.push(chunk.toString()));
+  child.stderr.on('data', (chunk) => logs.push(chunk.toString()));
+
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (await isServerReady()) return child;
+    if (child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  child.kill('SIGTERM');
+  throw new Error(`Timed out waiting for frontend dev server at ${BASE_URL}. Logs:\n${logs.join('').slice(-4000)}`);
+}
+
+async function stopFrontendServer(child) {
+  if (!child || child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 5000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 async function installChatMocks(page, seenRequests) {
@@ -156,7 +201,7 @@ async function installChatMocks(page, seenRequests) {
                 final_score: 0.87,
                 rank: 1,
               },
-              google_maps_uri: 'https://maps.google.com/?q=ChIJplace001',
+              map_uri: 'https://map.goong.io/place/ChIJplace001',
             },
             {
               place_id: 'ChIJplace002',
@@ -181,7 +226,7 @@ async function installChatMocks(page, seenRequests) {
                 final_score: 0.79,
                 rank: 2,
               },
-              google_maps_uri: 'https://maps.google.com/?q=ChIJplace002',
+              map_uri: 'https://map.goong.io/place/ChIJplace002',
             },
           ],
           latency_ms: 145,
@@ -200,6 +245,7 @@ async function submitQuestion(page, question) {
 }
 
 async function main() {
+  const server = await startFrontendServerIfNeeded();
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
@@ -267,6 +313,7 @@ async function main() {
   } finally {
     await context.close();
     await browser.close();
+    await stopFrontendServer(server);
   }
 }
 

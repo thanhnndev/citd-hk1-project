@@ -51,7 +51,7 @@ export interface PlaceResult {
   score_breakdown: ScoreBreakdown;
   accessibility_score?: number | null;
   accessibility_warning?: string | null;
-  google_maps_uri: string;
+  map_uri: string;
 }
 
 export interface Citation {
