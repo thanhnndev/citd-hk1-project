@@ -157,7 +157,7 @@ class GoongRoutesService:
     ) -> list[dict[str, Any]]:
         """Compute driving distances and durations from one origin to many destinations.
 
-        GETs ``https://rsapi.goong.io/DistanceMatrix`` with sanitized query params.
+        GETs ``https://rsapi.goong.io/v2/distancematrix`` with sanitized query params.
 
         Returns a list of result dicts (one per destination, in request order).
         Each dict contains keys from the field mask:

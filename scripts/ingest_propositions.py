@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 from collections import Counter
 
-# Ensure project root is on path
+# Ensure project root and backend are on path (agents/ lives at project root)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 from agents.tools.proposition_chunker import PropositionChunker

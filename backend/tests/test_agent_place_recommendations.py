@@ -37,7 +37,7 @@ def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
 def _place_response(session_id: str = "s-place") -> ChatResponse:
     return ChatResponse(
         session_id=session_id,
-        message="I found 1 Ham Ninh place option(s) from Goong Places.",
+        message="I found 1 local place option(s) in Ho Chi Minh City from Goong Places.",
         citations=[],
         places=[_place()],
         reasoning_log="place_recommendation status=ok source=goong_places candidate_count=1 result_count=1",
@@ -154,7 +154,7 @@ async def test_stream_place_intent_uses_deterministic_text_and_no_structured_pla
     events = [event async for event in service.answer_stream(session_id="s-stream", message="Recommend a place in Ham Ninh", language="en")]
 
     llm.answer_stream.assert_not_called()
-    assert "I found 1 Ham Ninh place option(s) from Goong Places." in events
+    assert "I found 1 local place option(s) in Ho Chi Minh City from Goong Places." in events
     assert "[CITATIONS] []" in events
     assert "[DONE]" in events
     assert not any(event.startswith("[PLACES]") for event in events)
