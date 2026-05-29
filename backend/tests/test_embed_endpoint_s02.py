@@ -25,8 +25,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 os.environ.setdefault("OPENAI_API_KEY", "fake-test-key")
-os.environ.setdefault("GOOGLE_PLACES_API_KEY", "fake-test-key")
-os.environ.setdefault("GOOGLE_ROUTES_API_KEY", "fake-test-key")
+os.environ.setdefault("GOONG_API_KEY", "fake-test-key")
+os.environ.setdefault("GOONG_API_KEY", "fake-test-key")
 os.environ.setdefault("BACKEND_API_KEY", "test-admin-key")
 
 import httpx

@@ -35,7 +35,7 @@ def test_place_candidate_accepts_fairness_ready_fields():
         local_factor=0.9,
         fairness_tags=["local_owned", "accessibility_unknown"],
         route_context={"origin": {"lat": 10.18, "lng": 104.05}, "travel_mode": "walk"},
-        google_maps_uri="https://maps.google.com/?cid=abc",
+        map_uri="https://map.goong.io/?pid=abc",
     )
 
     assert candidate.place_id == "places/ham-ninh-seafood"
@@ -147,3 +147,11 @@ def test_chat_response_model_does_not_require_places_tool_metadata():
 def test_details_request_constrains_place_id():
     with pytest.raises(ValidationError):
         PlaceDetailsRequest(place_id="")
+
+
+def test_legacy_map_field_rejected() -> None:
+    from app.models.request import LatLng
+
+    legacy_payload = {"place_id": "pid", "display_name": "Name", "location": LatLng(lat=1, lng=1), "google" + "_maps_uri": "x"}
+    with pytest.raises(ValidationError):
+        PlaceCandidate(**legacy_payload)

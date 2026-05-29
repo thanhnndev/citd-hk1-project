@@ -320,7 +320,7 @@ def normalize_place(place: Mapping[str, Any], *, origin: LatLng | None = None) -
         accessibility_options=dict(accessibility),
         national_phone_number=_string(place.get("formatted_phone_number")) or _string(place.get("nationalPhoneNumber")),
         international_phone_number=_string(place.get("international_phone_number")) or _string(place.get("internationalPhoneNumber")),
-        google_maps_uri=_string(place.get("url")) or _string(place.get("googleMapsUri")),
+        map_uri=_string(place.get("url")) or _string(place.get("googleMapsUri")),
         website_uri=_string(place.get("website")) or _string(place.get("websiteUri")),
         fairness_tags=accessibility_tags or ["accessibility_unknown"],
         route_context=RouteContext(origin=origin, distance_meters=distance_meters) if distance_meters is not None else None,
@@ -427,5 +427,3 @@ def _haversine_meters(origin: LatLng, destination: LatLng) -> int:
     return round(radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 
-# Backwards-compatible import while downstream callers migrate naming.
-GooglePlacesService = GoongPlacesService

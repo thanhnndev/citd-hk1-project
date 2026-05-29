@@ -11,7 +11,7 @@ from app.models.request import LatLng
 from agents.tools.routes_service import (
     CircuitBreaker,
     GoongRoutesService,
-    GoogleRoutesService,
+    GoongRoutesService,
     COOLDOWN_SECONDS,
     FAILURE_THRESHOLD,
     FAILURE_WINDOW_SECONDS,
@@ -57,8 +57,10 @@ def _settings(routes_key: str = "test-goong-key") -> Settings:
 
 
 
-def test_google_routes_service_alias_remains_available() -> None:
-    assert GoogleRoutesService is GoongRoutesService
+def test_google_routes_service_alias_removed() -> None:
+    import agents.tools.routes_service as routes_service
+
+    assert not hasattr(routes_service, "GoogleRoutesService")
 
 def _candidate(name: str, lat: float, lng: float) -> PlaceCandidate:
     return PlaceCandidate(

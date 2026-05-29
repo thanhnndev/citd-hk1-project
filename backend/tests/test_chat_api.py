@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Ensure required env vars before importing app modules
-for _k in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
+for _k in ("OPENAI_API_KEY", "GOONG_API_KEY", "GOONG_API_KEY"):
     os.environ.setdefault(_k, "fake-test-key")
 
 from app.main import app
@@ -572,7 +572,7 @@ class TestChatPlaceIntent:
             final_score=final_score,
             score_breakdown=sb,
             accessibility_score=0.75,
-            google_maps_uri=f"https://maps.google.com/?q={place_id}",
+            map_uri=f"https://map.goong.io/?pid={place_id}",
         )
 
     def test_place_intent_returns_ensemble_scores(self, client):
@@ -669,4 +669,5 @@ class TestChatPlaceIntent:
         assert isinstance(body["places"][0]["types"], list)
         assert "restaurant" in body["places"][0]["types"]
         assert isinstance(body["places"][0]["local_factor"], float)
-        assert "google_maps_uri" in body["places"][0]
+        assert "map_uri" in body["places"][0]
+        assert "google_maps_uri" not in body["places"][0]

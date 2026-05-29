@@ -219,7 +219,7 @@ def _reranked_results(
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
                 accessibility_warning=candidate.accessibility_warning,
-                google_maps_uri=candidate.google_maps_uri
+                map_uri=candidate.map_uri
                 or _maps_url(candidate.place_id),
             )
         )
@@ -267,7 +267,7 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
                 ),
                 accessibility_score=accessibility_score,
                 accessibility_warning=candidate.accessibility_warning,
-                google_maps_uri=candidate.google_maps_uri
+                map_uri=candidate.map_uri
                 or _maps_url(candidate.place_id),
             )
         )
@@ -276,7 +276,7 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
 
 
 def _maps_url(place_id: str) -> str:
-    return f"https://www.google.com/maps/search/?api=1&query_place_id={quote(place_id, safe='')}"
+    return f"https://map.goong.io/?pid={quote(place_id, safe='')}"
 
 
 def _message_for_status(status: PlaceToolStatus, *, result_count: int = 0) -> str:

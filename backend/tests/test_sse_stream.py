@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Ensure required env vars before importing app modules.
-for _key in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
+for _key in ("OPENAI_API_KEY", "GOONG_API_KEY", "GOONG_API_KEY"):
     os.environ.setdefault(_key, "fake-test-key")
 
 from app.main import app

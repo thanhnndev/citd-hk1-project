@@ -88,13 +88,13 @@ class PlaceResult(BaseModel):
                         "rank": 1,
                     },
                     "accessibility_score": 0.75,
-                    "google_maps_uri": "https://maps.google.com/?q=ChIJ123abc",
+                    "map_uri": "https://map.goong.io/?pid=ChIJ123abc",
                 }
             ]
         }
     )
 
-    place_id: str = Field(description="Google Places unique identifier.")
+    place_id: str = Field(description="Goong Places unique identifier.")
     display_name: str = Field(description="Human-readable name of the place.")
     formatted_address: str | None = Field(
         default=None,
@@ -116,12 +116,12 @@ class PlaceResult(BaseModel):
         default=None,
         ge=0.0,
         le=5.0,
-        description="Google Maps rating (0-5), or null if unrated.",
+        description="Provider rating (0-5), or null if unrated.",
     )
     user_rating_count: int | None = Field(
         default=None,
         ge=0,
-        description="Number of Google Maps user ratings, or null when unavailable.",
+        description="Number of Provider user ratings, or null when unavailable.",
     )
     price_level: int | None = Field(
         default=None,
@@ -156,8 +156,8 @@ class PlaceResult(BaseModel):
         default=None,
         description="Specific accessibility caveat if known.",
     )
-    google_maps_uri: str = Field(
-        description="Deep link to open the place in Google Maps.",
+    map_uri: str = Field(
+        description="Deep link to open the place in a provider map.",
     )
 
 

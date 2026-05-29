@@ -30,7 +30,7 @@ def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
             rank=1,
         ),
         accessibility_score=0.5,
-        google_maps_uri="https://maps.example/ham-ninh-seafood",
+        map_uri="https://maps.example/ham-ninh-seafood",
     )
 
 
@@ -179,7 +179,7 @@ async def test_recommendation_service_preserves_pin_ready_candidate_fields() -> 
         price_level=2,
         open_now=True,
         business_status="OPERATIONAL",
-        google_maps_uri="https://maps.example/pin-ready",
+        map_uri="https://maps.example/pin-ready",
     )
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()

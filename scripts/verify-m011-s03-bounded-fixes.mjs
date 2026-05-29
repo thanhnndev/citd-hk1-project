@@ -191,6 +191,6 @@ test('M011/S03 version and provider drift remain documented as static or credent
 
   assertContainsAll(audit, ['version_drift', 'credential_blocked', 'Static traceability proof only', 'does not prove live OpenAI, Google, Qdrant, Postgres/Redis, or Langfuse behavior'], 'M011 audit drift documentation');
   assertContainsAll(frontendPackage, ['next', 'react', 'typescript'], 'frontend package manifest');
-  assertContainsAll(backendRequirements, ['openai==', 'qdrant-client==', 'ragas==', 'google-maps-places=='], 'backend requirements');
-  assertContainsAll(agentsRequirements, ['qdrant-client==', 'ragas==', 'langfuse==', 'google-maps-places=='], 'agents requirements');
+  assertContainsAll(backendRequirements, ['openai==', 'qdrant-client==', 'ragas=='], 'backend requirements');
+  assertContainsAll(agentsRequirements, ['qdrant-client==', 'ragas==', 'langfuse=='], 'agents requirements');
 });

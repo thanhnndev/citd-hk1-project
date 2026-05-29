@@ -148,7 +148,7 @@ class TestChatEndpointAgentDelegation:
                     final_score=0.9,
                     rank=1,
                 ),
-                google_maps_uri="https://maps.example/pin-ready",
+                map_uri="https://map.goong.io/?pid=pin-ready",
             )],
             intent="place_recommendation",
             langfuse_trace_id=None,

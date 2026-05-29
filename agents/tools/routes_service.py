@@ -374,4 +374,4 @@ def _normalize_goong_matrix(payload: object) -> list[dict[str, Any]] | None:
 
 
 # Temporary compatibility alias; S05 owns final zero-Google cleanup.
-GoogleRoutesService = GoongRoutesService
+GoongRoutesService = GoongRoutesService

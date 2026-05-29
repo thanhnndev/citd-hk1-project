@@ -51,7 +51,7 @@ def _local_candidate(
         price_level=2,
         open_now=True,
         business_status="OPERATIONAL",
-        google_maps_uri=f"https://maps.example/{place_id}",
+        map_uri=f"https://map.goong.io/?pid={place_id}",
     )
 
 
@@ -73,7 +73,7 @@ def _chain_candidate(
         price_level=3,
         open_now=True,
         business_status="OPERATIONAL",
-        google_maps_uri=f"https://maps.example/{place_id}",
+        map_uri=f"https://map.goong.io/?pid={place_id}",
     )
 
 

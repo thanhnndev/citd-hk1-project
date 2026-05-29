@@ -60,8 +60,8 @@ def test_verifier_uses_goong_api_key_not_stale_google_keys() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert "GOONG_API_KEY" in source
-    assert "GOOGLE_PLACES_API_KEY" not in source
-    assert "GOOGLE_ROUTES_API_KEY" not in source
+    assert "GOOGLE_API_KEY" not in source
+    assert "GOOGLE_MAPS_API_KEY" not in source
 
 
 def test_sanitized_output_has_expected_phase_labels_for_blocked_key() -> None:

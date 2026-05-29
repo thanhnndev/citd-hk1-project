@@ -38,8 +38,8 @@ setup: ## Copy .env.example to .env if .env doesn't exist
 		echo ".env created from .env.example"; \
 		echo "Edit .env and fill in real API keys before running:"; \
 		echo "  - OPENAI_API_KEY (required for agent LLM & embeddings)"; \
-		echo "  - GOOGLE_PLACES_API_KEY (required for places search)"; \
-		echo "  - GOOGLE_ROUTES_API_KEY (required for routing)"; \
+		echo "  - GOONG_API_KEY (required for places search)"; \
+		echo "  - GOONG_API_KEY (required for routing)"; \
 		echo "  - LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY (observability)"; \
 	else \
 		echo ".env already exists — skipping setup"; \

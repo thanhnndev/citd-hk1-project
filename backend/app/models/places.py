@@ -105,7 +105,7 @@ class PlaceCandidate(BaseModel):
     accessibility_options: dict[str, bool] = Field(default_factory=dict, max_length=20)
     national_phone_number: str | None = Field(default=None, max_length=80)
     international_phone_number: str | None = Field(default=None, max_length=80)
-    google_maps_uri: str | None = Field(default=None, max_length=2048)
+    map_uri: str | None = Field(default=None, max_length=2048)
     website_uri: str | None = Field(default=None, max_length=2048)
     accessibility_score: float | None = Field(default=None, ge=0.0, le=1.0)
     accessibility_warning: str | None = Field(default=None, max_length=240)

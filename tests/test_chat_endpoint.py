@@ -7,8 +7,8 @@ import sys
 
 # Mirror backend/tests/conftest.py for repo-root compatibility gates.
 os.environ["OPENAI_API_KEY"] = "fake-test-key"
-os.environ["GOOGLE_PLACES_API_KEY"] = ""
-os.environ["GOOGLE_ROUTES_API_KEY"] = ""
+os.environ["GOONG_API_KEY"] = ""
+os.environ["GOONG_API_KEY"] = ""
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "backend"))

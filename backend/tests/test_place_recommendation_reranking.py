@@ -40,7 +40,7 @@ def _candidate(
         price_level=price_level,
         open_now=True,
         business_status="OPERATIONAL",
-        google_maps_uri=f"https://maps.example/{place_id}",
+        map_uri=f"https://maps.example/{place_id}",
     )
 
 
