@@ -321,3 +321,33 @@ Interpretation:
 - No usable `NEXT_PUBLIC_GOONG_MAPTILES_KEY` was present at verifier startup, so the Next.js server/browser flow was intentionally not launched.
 - The verifier remains scoped to mock only `/api/chat` once credentials are available; real Goong style/tile network activity, two coordinate-bearing markers, coordinate-less marker exclusion, and marker selection are required before it can print `RESULT=passed`.
 - The server-only `GOONG_API_KEY` is not used by this browser verifier and is not exposed to browser evidence.
+
+## S09 Static Scope Closeout
+
+Status: static validation passed; credentialed acceptance remains pending.
+
+Closeout boundary:
+
+- M012-scoped requirement ids remain visible as R008, R017, R019, R020, R021, R032, and R034.
+- R007, R010, R011, R026, and R028 remain explicit out-of-scope active gaps and are not counted as S09 failures or marked complete by Goong migration evidence.
+- No `.gsd/REQUIREMENTS.md` status change was made because the current backend and browser live verifier evidence remains `RESULT=credential_blocked`, not credentialed `RESULT=passed` proof.
+- No stakeholder approval artifact was present to narrow milestone success criteria, so M012 credentialed backend/browser acceptance remains pending.
+
+Static closeout command:
+
+```bash
+python3 scripts/verify-m012-scope-reconciliation.py && python3 scripts/verify-s05-zero-<legacy-provider>-references.py
+```
+
+Outcome:
+
+- Combined exit code: 0
+- Scope reconciliation terminal result: `RESULT=passed`
+- Zero-reference terminal result: `RESULT=passed`
+- Evidence run: `.gsd/exec/f2fc2597-beef-432a-a7d6-28740dd0c98d.stdout`
+
+Interpretation:
+
+- The static scope guard confirms required reconciliation headings, credential seams, requirement ids, evidence links, and roadmap boundary map are present.
+- The zero-reference guard confirms active files do not reintroduce stale legacy provider references.
+- These static passes close the wording/scope validation task only; they do not convert `credential_blocked` backend or browser evidence into credentialed live Goong success.
