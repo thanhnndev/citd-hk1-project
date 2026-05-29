@@ -53,6 +53,32 @@ M012 out of scope:
 - Proving unrelated product requirements such as complete business onboarding, trained ranking models, production auth policy, observability vendor delivery, or non-Goong data ingestion outcomes.
 - Publishing secrets or raw upstream provider payloads as audit evidence.
 
+## Requirement Scope Matrix
+
+This matrix is the M012 reconciliation surface for requirement integrity rules R032 and R034. It does not replace `.gsd/REQUIREMENTS.md`; no official requirement updater was available in this execution environment, so the evidence-backed boundary remains documented here.
+
+| Requirement | Current Requirement Status | M012 Scope Status | M012 Evidence And Limits | Boundary Interpretation |
+|---|---|---|---|---|
+| R008 | validated | M012 validated at mocked/static/build level; credentialed proof pending | S05 zero-reference gate reported `RESULT=passed`; backend Goong Places/Routes regression suite passed; frontend Goong map contract, chat E2E, and production build passed; backend live verifier currently reports `RESULT=credential_blocked` without a real `GOONG_API_KEY`. | M012 supports the Goong-only Places/Routes/map migration and proves blocked-live behavior. It must not be cited as credentialed live provider success until `scripts/verify-goong-live.py` reports terminal `RESULT=passed` with real credentials. |
+| R017 | validated | Supported by M012, not broadened | Backend Goong Places producer returns normalized `PlaceToolResponse`/`PlaceCandidate` contracts under mocked regression tests and remains the agent-owned producer for place candidates. | M012 preserves the backend Places ownership boundary and migration evidence. It does not add a new claim about live Hàm Ninh candidate quality without credentialed Goong proof. |
+| R019 | validated | Supported by M012, not broadened | Frontend `/map` and `PlaceProofMap` consume chat/API place results, render list/detail/pin-ready data, and use `GoongPlaceMap` with `NEXT_PUBLIC_GOONG_MAPTILES_KEY`; static contract/build gates pass. | M012 validates the Goong renderer and browser credential seam at static/build level. Live tile rendering remains pending until the browser verifier reports terminal `RESULT=passed` with a usable public map tiles key. |
+| R020 | validated | M012 directly reinforces fail-honest behavior | Backend live verifier classifies missing/fake/placeholder server credentials as `RESULT=credential_blocked`; browser verifier classifies missing/placeholder public map tile credentials as `RESULT=credential_blocked`; evidence records sanitized status only. | `credential_blocked` is successful blocked-live evidence and failure visibility, not live provider success. This distinction is part of the M012 validation boundary. |
+| R021 | validated | Supported by M012, not broadened | Goong Places candidate contracts preserve fairness-ready and pin-ready fields through backend response models and frontend map/list consumers; regression gates cover mocked contract shape. | M012 keeps the feature seam available for ranking and inspection. It does not claim new fairness ranking, trained ranking models, or live field completeness beyond mocked/static evidence. |
+| R032 | active | M012 complies through this reconciliation artifact | Claims in this document are tied to concrete scripts, tests, builds, and evidence docs; credentialed live success is explicitly marked pending when only `credential_blocked` evidence exists. | Requirement status changes should only occur through an official updater or future validated evidence. This task intentionally leaves `.gsd/REQUIREMENTS.md` untouched. |
+| R034 | active | M012 complies by keeping major gaps explicit | Credentialed backend Goong proof, credentialed browser tile proof, and unrelated product capabilities remain open or out-of-scope instead of being silently counted as completed by migration tests. | M012 narrows its closeout to evidence-backed Goong migration coverage and defers broader/unrelated work to its owning requirements. |
+
+## Out-of-Scope Active Requirement Gaps
+
+These active requirements remain visible because they are not completed by the M012 Goong migration. Their active status is not evidence of M012 failure; it prevents migration evidence from overclaiming unrelated product readiness.
+
+| Requirement | Active Gap | M012 Relationship | Guardrail |
+|---|---|---|---|
+| R007 | RAG cultural Q&A with Qdrant/hybrid retrieval still needs credentialed embedding/Qdrant proof and RAGAS/live LLM evidence where noted in `.gsd/REQUIREMENTS.md`. | Out of scope/unrelated to Goong Places, Routes, and map tile migration. | Do not cite Goong verifier, map build, or zero-reference results as RAG/Qdrant/OpenAI/RAGAS validation. |
+| R010 | Compliance gaps remain for semantic cache, RAGAS CI/CD, monthly fairness audit script, and unified audit script. | Out of scope/unrelated to Goong provider migration except for general evidence honesty. | Do not treat sanitized Goong evidence as compliance subsystem delivery. |
+| R011 | Admin endpoints such as `/admin/eval/trigger`, `/admin/traces`, and `/admin/ingest` remain unimplemented or not fully wired as described. | Out of scope/unrelated to M012 Goong runtime proof. | Do not infer admin API readiness from backend Goong tests or frontend map build success. |
+| R026 | Frontend `/admin` dashboard, corpus stats, evaluation results, trace viewer UI, and authenticated dashboard flow remain active gaps. | Out of scope/unrelated to Goong map/Places evidence. | Do not cite `/vi/map` or chat place proof surfaces as admin dashboard validation. |
+| R028 | Chat UX polish gaps remain for welcome screen, suggested prompts, copy/retry actions, and typing animations. | Out of scope/unrelated to provider migration, although chat place cards and map proof surfaces may continue to work. | Do not broaden M012 frontend build success into complete chat UX polish. |
+
 ## Verification Surfaces Executors Can Rerun
 
 Use these commands from the repository root unless a command changes into a subdirectory:
