@@ -170,7 +170,7 @@ async def test_computeRouteMatrix_returns_results_on_success() -> None:
     assert len(client.calls) == 1
 
     params = client.calls[0]["params"]
-    assert client.calls[0]["path"] == "/DistanceMatrix"
+    assert client.calls[0]["path"] == "/v2/distancematrix"
     assert params["origins"] == "10.0,106.0"
     assert params["destinations"] == "10.1,106.1|10.2,106.2"
     assert params["vehicle"] == "car"

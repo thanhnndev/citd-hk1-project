@@ -96,7 +96,7 @@ async def test_text_search_normalizes_goong_payload_and_rest_params():
     assert candidate.route_context and candidate.route_context.distance_meters == 42
     assert candidate.fairness_tags == ["accessibility_unknown"]
     path, params = client.calls[0]
-    assert path == "/Place/TextSearch"
+    assert path == "/v2/place/autocomplete"
     assert params["input"] == "seafood"
     assert params["location"] == "10.1835208,104.0496843"
     assert params["radius"] == 5000
@@ -119,7 +119,7 @@ async def test_text_search_hydrates_prediction_details_for_coordinates():
     assert response.status == PlaceToolStatus.OK
     assert response.candidates[0].location is not None
     assert response.candidates[0].route_context and response.candidates[0].route_context.distance_meters is not None
-    assert client.calls[1][0] == "/Place/Detail"
+    assert client.calls[1][0] == "/v2/place/detail"
     assert client.calls[1][1]["place_id"] == "prediction_1"
 
 
@@ -136,7 +136,7 @@ async def test_nearby_search_uses_center_radius_metadata_and_empty_results_envel
     assert response.metadata["endpoint"] == "goong_autocomplete_nearby_approximation"
     assert response.metadata["radius_meters"] == 5000
     path, params = client.calls[0]
-    assert path == "/Place/TextSearch"
+    assert path == "/v2/place/autocomplete"
     assert params["input"] == "restaurant"
     assert params["location"] == "10.1835208,104.0496843"
     assert params["radius"] == 5000
@@ -217,7 +217,7 @@ async def test_details_normalizes_single_goong_detail_payload():
     assert response.status == PlaceToolStatus.OK
     assert response.candidates[0].price_level == 3
     path, params = client.calls[0]
-    assert path == "/Place/Detail"
+    assert path == "/v2/place/detail"
     assert params["place_id"] == "goong_ham_ninh"
 
 

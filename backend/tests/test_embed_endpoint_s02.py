@@ -101,17 +101,17 @@ class TestEmbedEndpoint:
         fake_vecs = _fake_vectors(CORPUS_CHUNK_COUNT)
 
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=fake_vecs,
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=CORPUS_CHUNK_COUNT,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
                     response = await client.post(
@@ -137,17 +137,17 @@ class TestEmbedEndpoint:
         """Response body validates as EmbedResponse Pydantic model."""
         n = 3
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(n),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=n,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
                     response = await client.post(
@@ -167,12 +167,12 @@ class TestEmbedEndpoint:
         import openai
 
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             side_effect=openai.OpenAIError("invalid api key"),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                 new_callable=AsyncMock,
             ):
                 response = await client.post(
@@ -209,17 +209,17 @@ class TestEmbedEndpoint:
     ) -> None:
         """After successful embed, app.state.bm25_vectorizer is set and usable."""
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(CORPUS_CHUNK_COUNT),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=CORPUS_CHUNK_COUNT,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
                     response = await client.post(
@@ -255,17 +255,17 @@ class TestEmbedEndpoint:
         """embed.done event is emitted after successful embed (verified via stdout)."""
         n = 3
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(n),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=n,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
                     response = await client.post(
@@ -294,16 +294,16 @@ class TestEmbedEndpoint:
             headers=httpx.Headers({"content-type": "text/plain"}),
         )
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(CORPUS_CHUNK_COUNT),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                 new_callable=AsyncMock,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                    "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                     new_callable=AsyncMock,
                     side_effect=qdrant_error,
                 ):
