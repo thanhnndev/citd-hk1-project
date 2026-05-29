@@ -1,4 +1,4 @@
-"""Contracts for mockable Google Places API tool calls and normalized results."""
+"""Contracts for mockable Goong Places API tool calls and normalized results."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.request import LatLng
 
-HAM_NINH_CENTER = LatLng(lat=10.1794, lng=104.0491)
+HAM_NINH_CENTER = LatLng(lat=10.1835208, lng=104.0496843)
 DEFAULT_SEARCH_RADIUS_METERS = 5_000
 MAX_SEARCH_RADIUS_METERS = 50_000
 
@@ -28,7 +28,7 @@ class PlaceToolStatus(StrEnum):
 class PlaceToolSource(StrEnum):
     """Inspectable source of the returned place candidates."""
 
-    GOOGLE_PLACES_NEW = "google_places_new"
+    GOONG_PLACES = "goong_places"
     MOCK = "mock"
     CACHE = "cache"
 
@@ -51,7 +51,7 @@ class RouteContext(BaseModel):
 
 
 class PlaceSearchRequest(BaseModel):
-    """Text search request normalized before reaching Google Places."""
+    """Text search request normalized before reaching Goong Places."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -76,7 +76,7 @@ class PlaceNearbyRequest(BaseModel):
 
 
 class PlaceDetailsRequest(BaseModel):
-    """Details lookup request by Google place id."""
+    """Details lookup request by Goong place id."""
 
     model_config = ConfigDict(extra="forbid")
 

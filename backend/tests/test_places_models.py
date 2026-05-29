@@ -1,4 +1,4 @@
-"""Tests for normalized Google Places tool contracts."""
+"""Tests for normalized Goong Places tool contracts."""
 
 from datetime import UTC, datetime
 
@@ -25,7 +25,7 @@ def test_place_candidate_accepts_fairness_ready_fields():
         place_id="places/ham-ninh-seafood",
         display_name="Quan hai san Ham Ninh",
         formatted_address="Ham Ninh, Phu Quoc, Kien Giang",
-        location={"lat": 10.1794, "lng": 104.0491},
+        location={"lat": 10.1835208, "lng": 104.0496843},
         primary_type="seafood_restaurant",
         rating=4.6,
         user_rating_count=321,
@@ -39,7 +39,7 @@ def test_place_candidate_accepts_fairness_ready_fields():
     )
 
     assert candidate.place_id == "places/ham-ninh-seafood"
-    assert candidate.location == LatLng(lat=10.1794, lng=104.0491)
+    assert candidate.location == LatLng(lat=10.1835208, lng=104.0496843)
     assert candidate.local_factor == 0.9
     assert candidate.fairness_tags == ["local_owned", "accessibility_unknown"]
 
@@ -66,18 +66,19 @@ def test_place_tool_response_echoes_request_and_safe_status_envelope():
 def test_error_response_uses_sanitized_error_model_without_raw_payload():
     response = PlaceToolResponse(
         status=PlaceToolStatus.CREDENTIALS_BLOCKED,
-        source=PlaceToolSource.GOOGLE_PLACES_NEW,
+        source=PlaceToolSource.GOONG_PLACES,
         request=PlaceNearbyRequest(included_type="restaurant"),
         retrieved_at=datetime.now(UTC),
         error=PlaceToolError(
-            code="missing_google_places_api_key",
-            message="Google Places credentials are not configured.",
+            code="missing_goong_api_key",
+            message="Goong Places credentials are not configured.",
             retryable=False,
         ),
     )
 
     serialized = response.model_dump()
-    assert serialized["error"]["code"] == "missing_google_places_api_key"
+    assert serialized["source"] == "goong_places"
+    assert serialized["error"]["code"] == "missing_goong_api_key"
     assert "raw" not in serialized
 
 
