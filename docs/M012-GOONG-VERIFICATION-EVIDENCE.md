@@ -244,3 +244,43 @@ Sanitization notes:
 - Live Goong verifier: credential_blocked due to missing real `GOONG_API_KEY`.
 - Credential leak check: no credentials included in this document.
 - S05 cleanup boundary: active docs now use Goong-only provider wording; credentialed live proof still requires terminal `RESULT=passed`.
+
+## S09 Backend Live Credential Audit
+
+Status: credential_blocked.
+
+Credential audit:
+
+- Runtime `GOONG_API_KEY` status: missing.
+- Checked-in `.env.example` `GOONG_API_KEY` status: placeholder.
+- No raw credential values were printed or recorded.
+
+Backend live proof command:
+
+```bash
+python3 scripts/verify-goong-live.py
+```
+
+Outcome:
+
+- Exit code: 0
+- Terminal result: `RESULT=credential_blocked`
+- Sanitized status: `goong_api_key_status` was `missing`.
+- Candidate count: unavailable because credential blocking occurs before Places lookup.
+- Route destination/success counts: unavailable because credential blocking occurs before Routes lookup.
+- Credential audit evidence run: `.gsd/exec/53833b8f-a3c2-44af-bb46-fc12b30b8481.stdout`
+- Backend verifier evidence run: `.gsd/exec/17038ec3-711a-40a9-a0ec-3c0b94f12d81.stdout`
+
+Sanitized output excerpt:
+
+```text
+CONFIG={"goong_api_key_status": "missing", "location_bias": {"lat": 10.1835208, "lng": 104.0496843}, "max_places_result_count": 5, "max_route_destinations": 3, "query_language": "vi"}
+RESULT={"rerun": "export GOONG_API_KEY=<valid key>; python3 scripts/verify-goong-live.py", "status": "credential_blocked"}
+RESULT=credential_blocked
+```
+
+Interpretation:
+
+- This is blocked-live proof only; it does not satisfy credentialed Goong Places/Routes success.
+- The verifier behaved correctly for missing credentials by avoiding upstream calls and preserving sanitized diagnostics.
+- Future S09 remediation may claim backend live success only after a real `GOONG_API_KEY` is present and this verifier exits with terminal `RESULT=passed`.
