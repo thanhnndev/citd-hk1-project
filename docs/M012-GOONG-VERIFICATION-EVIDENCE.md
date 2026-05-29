@@ -2,18 +2,18 @@
 
 ## Scope
 
-This document is the durable S04 audit surface for the Goong migration verification gates. It separates mocked backend regression proof, frontend map/build proof, and live Goong provider status without exposing credentials or raw upstream payloads.
+This document is the durable audit surface for the Goong-only provider verification gates after S05 cleanup. It separates mocked backend regression proof, frontend map/build proof, and live Goong provider status without exposing credentials or raw upstream payloads.
 
-S04 proves:
+Current evidence proves:
 
 - Backend Goong contracts pass under mocked/regression tests.
 - Frontend Goong map contract and production build pass without exposing backend `GOONG_API_KEY` to the browser.
 - The live verifier reports a sanitized terminal `RESULT=` status.
 - Missing/fake/placeholder credentials are documented as `credential_blocked`, not as live provider success.
 
-Out of scope for S04:
+Out of scope for this evidence package:
 
-- Zero-Google-reference cleanup. That cleanup boundary remains assigned to S05.
+- Historical milestone audit records may describe prior provider migrations, but active code/config/docs use Goong-only provider instructions.
 - Claiming browser live tile rendering unless a browser/server/public map-token gate is explicitly run.
 - Publishing Goong keys, raw Places payloads, or raw Routes payloads.
 
@@ -114,7 +114,7 @@ Status: not run.
 
 Reason:
 
-- S04's completed frontend gate covered static browser contract and production build.
+- The completed frontend gate covered static browser contract and production build.
 - No browser/server/public map-token live tile gate was run during T04.
 
 Interpretation:
@@ -122,9 +122,9 @@ Interpretation:
 - This document does not claim live browser tile rendering proof.
 - Any future browser live proof must record the exact server/browser command, public map token status, and sanitized outcome separately.
 
-## Remaining S05 Cleanup Boundaries
+## S05 Cleanup Status
 
-S05 remains responsible for zero-Google-reference cleanup and any related documentation/code removal. S04 intentionally preserves only the Goong verification evidence boundaries and does not expand into cleanup work.
+S05 cleanup updates active documentation, config, tests, and requirement evidence to use Goong-only provider instructions. This document remains the human-readable audit surface for mocked regression, frontend build/contract, and credential-aware live verifier status.
 
 ## Verification Evidence
 
@@ -141,4 +141,4 @@ S05 remains responsible for zero-Google-reference cleanup and any related docume
 - Frontend contract/build gate: passed.
 - Live Goong verifier: credential_blocked due to missing real `GOONG_API_KEY`.
 - Credential leak check: no credentials included in this document.
-- S05 cleanup boundary: explicitly out of scope for S04.
+- S05 cleanup boundary: active docs now use Goong-only provider wording; credentialed live proof still requires terminal `RESULT=passed`.

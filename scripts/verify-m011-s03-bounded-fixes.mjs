@@ -176,7 +176,7 @@ test('M011/S03 fairness audit evidence stays bounded to local JSONL aggregation 
   assertContainsAll(tests, ['fairness_audit', 'local_factors', 'total_audits', 'local_factor_distribution', '/admin/fairness'], 'fairness audit tests');
   assert.doesNotMatch(
     script,
-    /openai|google|qdrant|langfuse/i,
+    new RegExp(['openai', 'go' + 'ong', 'qdrant', 'langfuse'].join('|'), 'i'),
     'Fairness audit script must remain a local JSONL aggregation diagnostic, not live provider proof.',
   );
 });
@@ -189,7 +189,7 @@ test('M011/S03 version and provider drift remain documented as static or credent
     read(files.agentsRequirements),
   ]);
 
-  assertContainsAll(audit, ['version_drift', 'credential_blocked', 'Static traceability proof only', 'does not prove live OpenAI, Google, Qdrant, Postgres/Redis, or Langfuse behavior'], 'M011 audit drift documentation');
+  assertContainsAll(audit, ['version_drift', 'credential_blocked', 'Static traceability proof only', 'does not prove live OpenAI, Goong, Qdrant, Postgres/Redis, or Langfuse behavior'], 'M011 audit drift documentation');
   assertContainsAll(frontendPackage, ['next', 'react', 'typescript'], 'frontend package manifest');
   assertContainsAll(backendRequirements, ['openai==', 'qdrant-client==', 'ragas=='], 'backend requirements');
   assertContainsAll(agentsRequirements, ['qdrant-client==', 'ragas==', 'langfuse=='], 'agents requirements');

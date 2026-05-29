@@ -72,7 +72,7 @@ Grounded answer with citations
 | LLM | OpenAI gpt-4o-mini, text-embedding-3-small |
 | Vector DB | Qdrant v1.13.6 (HNSW index) |
 | Database | PostgreSQL 17, Redis 8.0 |
-| Places | Google Places API (New) v1 |
+| Places/Routes | Goong REST API V2 Places + Distance Matrix |
 | Observability | Langfuse 4.6.1 |
 
 ---
@@ -104,8 +104,8 @@ citd-hk1-project/
 │   │   ├── retriever.py         # In-memory keyword search
 │   │   ├── qdrant_service.py    # Qdrant vector DB
 │   │   ├── embedding_service.py # OpenAI embeddings
-│   │   ├── places_service.py    # Google Places API (New)
-│   │   ├── routes_service.py    # Google Routes API
+│   │   ├── places_service.py    # Goong Places API V2
+│   │   ├── routes_service.py    # Goong Distance Matrix API
 │   │   ├── corpus_loader.py     # JSONL document ingestion
 │   │   └── proposition_chunker.py
 │   ├── guardrails/

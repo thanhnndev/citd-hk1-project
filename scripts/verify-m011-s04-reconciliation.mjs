@@ -99,13 +99,13 @@ test('M011/S04 matrix preserves credential-blocked provider caveats without over
     [
       'credential_blocked',
       'OpenAI',
-      'Google Places/Routes',
+      'Goong Places/Routes',
       'Qdrant',
       'Langfuse',
       'valid credentials',
       'running services',
       'Do not cite mocked/static tests as live',
-      'must not mark live Places/Routes verified without RESULT=passed',
+      'must not mark live Goong Places/Routes verified without RESULT=passed',
     ],
     'S04 credential-blocked caveats',
   );

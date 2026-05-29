@@ -106,7 +106,7 @@
 | **R017** | Maps Agent returns grounded place candidates | M005/S02 — 49 tests pass across Places models/service | `agents/services/place_recommendation_service.py` |
 | **R018** | No hallucinated places | M005/S02 — invariant tests filter place_ids against candidates | `agents/services/place_recommendation_service.py` |
 | **R019** | /map surface displays place results | M005/S03 — backend contract tests, frontend type-check | `frontend/src/components/map/place-proof-map.tsx` |
-| **R020** | Google Places failures handled fail-honestly | M005/S04 — live verifier credential_blocked, 53 backend tests | `docs/M005-PLACES-VERIFICATION-EVIDENCE.md` |
+| **R020** | Goong Places failures handled fail-honestly | M005/S04 — live verifier credential_blocked, 53 backend tests | `docs/M005-PLACES-VERIFICATION-EVIDENCE.md` |
 | **R021** | Places contracts preserve fairness ranking fields | M005/S03 — ChatResponse.places preserves all 9 fairness fields | `agents/services/place_recommendation_service.py` |
 | **R022** | Ensemble terminology accuracy (frontend) | M007/S02 — i18n corrected, zero ML model references | `frontend/src/dictionaries/` |
 | **R023** | Feature extractor computes 6 features real-time | M006/S02 + S05 — ScoreBreakdown exposes all 8 fields | `agents/ml/feature_extractor.py` |
@@ -118,7 +118,7 @@
 | ID | Requirement | Blocker | Unblocking Condition |
 |---|---|---|---|
 | **R007** | RAG cultural Q&A pipeline with Qdrant + RAGAS | No OPENAI_API_KEY — M009/S02 script exits 0 with `RESULT=credential_blocked` | Valid OPENAI_API_KEY + running Qdrant instance |
-| **R008** | Google Places and Routes integration | No Google Places API key — M005/S04 verifier exits 0 with `RESULT=credential_blocked` | Valid Google Places API key + Routes API key |
+| **R008** | Goong Places and Routes integration | No Goong Places API key — M005/S04 verifier exits 0 with `RESULT=credential_blocked` | Valid Goong Places API key + Routes API key |
 
 **Note:** Credential-blocked status is not a failure. Scripts exit 0 with structured RESULT=credential_blocked output. Live proof requires external credentials.
 
@@ -171,7 +171,7 @@
 | Script | Exit Code | Output | Blocked By |
 |---|---|---|---|
 | M009/S02 embedding idempotency verifier | 0 | `RESULT=credential_blocked` | No OPENAI_API_KEY |
-| M005/S04 Places verifier | 0 | `RESULT=credential_blocked` | No Google Places API key |
+| M005/S04 Places verifier | 0 | `RESULT=credential_blocked` | No Goong Places API key |
 
 These scripts exit 0 by design — credential-blocked is a structured outcome, not an error state.
 
@@ -205,7 +205,7 @@ These scripts exit 0 by design — credential-blocked is a structured outcome, n
 | `agents/ml/feature_extractor.py` | 6-feature extraction | T01 |
 | `agents/tools/embedding_service.py` | OpenAI embedding service | T01 |
 | `agents/tools/qdrant_service.py` | Qdrant vector DB client | T01 |
-| `agents/tools/places_service.py` | Google Places API client | T01 |
+| `agents/tools/places_service.py` | Goong Places API client | T01 |
 | `frontend/src/components/chat/chat-interface.tsx` | Chat UI | T02, T04 |
 | `frontend/src/components/map/place-proof-map.tsx` | Map display | T02 |
 | `frontend/src/components/algorithm/algorithm-showcase.tsx` | Algorithm visualization | T02 |

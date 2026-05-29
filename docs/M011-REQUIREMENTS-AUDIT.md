@@ -18,12 +18,12 @@ This task is documentation-only. It does not run credentialed provider calls, al
 | `pass` | Deterministic current code, tests, scripts, or durable evidence support the requirement area without material known gaps. |
 | `partial` | Some promises are implemented or evidenced, but gaps, stale proof, unverified non-functional claims, or operational omissions remain. |
 | `fail` | Current evidence clearly contradicts a promised capability or shows it is missing. |
-| `credential_blocked` | The remaining proof requires external credentials/services such as Google, OpenAI, Qdrant, or Langfuse and cannot be honestly executed locally. |
+| `credential_blocked` | The remaining proof requires external credentials/services such as Goong, OpenAI, Qdrant, or Langfuse and cannot be honestly executed locally. |
 | `out-of-scope` | The item is not actually promised as product behavior by `docs/REQUIREMENTS.md` or is explicitly excluded. |
 
 ## Required Caveat Labels
 
-- `credential_blocked`: live Google Places/Routes, OpenAI embedding/RAGAS, Qdrant, or Langfuse proof requires valid credentials and services.
+- `credential_blocked`: live Goong Places/Routes, OpenAI embedding/RAGAS, Qdrant, or Langfuse proof requires valid credentials and services.
 - `endpoint_naming_drift`: endpoint names differ across requirements, prior evidence, and current source/tests; current source is the authority for S04 reconciliation.
 - `version_drift`: `docs/REQUIREMENTS.md` version claims may differ from manifests or installed runtime versions.
 - `missing_operational_metrics`: deterministic tests exist, but durable production-style metrics or audit history are missing.
@@ -52,16 +52,16 @@ Overall verdict: the repository has substantial deterministic implementation evi
 | REQ-04 | Cau truc Repository | `pass` | High | Current tree includes `docs/`, `frontend/`, `backend/`, `agents/`, `data/`, `scripts/`, `compose.yaml`, `README.md` | `version_drift` for illustrative tree names and moved route groups. |
 | REQ-05 | Tech Stack & Phien ban chinh xac | `partial` | Medium | `frontend/package.json` shows Next 16.2.6, React 19.2.6, TypeScript 6.0.3; `compose.yaml`; backend/agent requirements | `version_drift`; declared package versions need S05 runtime verification. |
 | REQ-06 | Kien truc he thong | `partial` | Medium | `backend/app/main.py`, `backend/app/routers/chat.py`, `backend/app/routers/admin.py`, `agents/graph/agent_service.py`, `compose.yaml` | `credential_blocked`, `prior_evidence_may_drift`; external-service paths need live proof. |
-| REQ-07 | Google Places API (New) - Dac ta tich hop | `credential_blocked` | High for blocker, Medium for code | `agents/tools/places_service.py`, `agents/tools/routes_service.py`, `scripts/verify-google-places-live.py`, `docs/M005-PLACES-VERIFICATION-EVIDENCE.md` | `credential_blocked`; mocked contracts passed previously, live `RESULT=passed` needs valid Google credentials. |
+| REQ-07 | Goong Places API V2 - Dac ta tich hop | `credential_blocked` | High for blocker, Medium for code | `agents/tools/places_service.py`, `agents/tools/routes_service.py`, `scripts/verify-goong-live.py`, `docs/M005-PLACES-VERIFICATION-EVIDENCE.md` | `credential_blocked`; mocked contracts passed previously, live `RESULT=passed` needs valid Goong credentials. |
 | REQ-08 | Ensemble Methods - Ung dung ML Core | `partial` | Medium-High | `agents/ml/ensemble_reranker.py`, `agents/ml/feature_extractor.py`, M010/M006 evidence | Algorithm implementation is evidenced, but fairness impact needs `missing_operational_metrics` and fresh tests. |
 | REQ-09A | Responsible AI - Reliability & Safety | `partial` | Medium | `agents/guardrails/`, `agents/guardrails/grounded_answer.py`, `backend/app/routers/chat.py`, `.gsd/REQUIREMENTS.md` R010/R015 | Semantic cache/RAGAS CI remain gaps; LLM flows are `credential_blocked`. |
 | REQ-09B | Responsible AI - Fairness & Social Impact | `partial` | Medium | `agents/ml/ensemble_reranker.py`, `agents/ml/feature_extractor.py`, `scripts/monthly_fairness_audit.py`, admin fairness endpoint | `missing_operational_metrics`; operational fairness snapshots may be absent or insufficient. |
 | REQ-09C | Responsible AI - Robustness & Security | `partial` | Medium-High | `backend/app/middleware/auth.py`, `backend/app/routers/admin.py`, `docs/AUDIT-AUTH-RATE-LIMITER.md`, M010 T05 admin JWT evidence | `endpoint_naming_drift`, `prior_evidence_may_drift`; auth appears wired now, but route naming/history must be reconciled. |
 | REQ-09D | Responsible AI - Explainability & Transparency | `partial` | Medium | `agents/guardrails/grounded_answer.py`, `agents/graph/agent_service.py`, `backend/app/services/langfuse_service.py`, `frontend/src/components/reasoning/` | `credential_blocked` for live Langfuse traces; `missing_operational_metrics` for trace retention/query quality. |
 | REQ-10 | Dac ta Module Frontend (Next.js 16) | `partial` | Medium | `frontend/package.json`, `frontend/src/app/[locale]/chat/page.tsx`, `frontend/src/app/[locale]/map/page.tsx`, `frontend/src/app/[locale]/admin/page.tsx`, M010 frontend evidence | Admin/chat polish gaps from `.gsd/REQUIREMENTS.md` R026/R028 need current S05 verification. |
-| REQ-11 | Dac ta Module Agents (LangGraph) | `credential_blocked` | Medium | `agents/graph/agent_service.py`, `agents/tools/hybrid_retriever.py`, `agents/tools/embedding_service.py`, `agents/services/place_recommendation_service.py` | Core code exists, but OpenAI/Qdrant/Google live paths remain `credential_blocked`. |
+| REQ-11 | Dac ta Module Agents (LangGraph) | `credential_blocked` | Medium | `agents/graph/agent_service.py`, `agents/tools/hybrid_retriever.py`, `agents/tools/embedding_service.py`, `agents/services/place_recommendation_service.py` | Core code exists, but OpenAI/Qdrant/Goong live paths remain `credential_blocked`. |
 | REQ-12 | Dac ta Module Backend (FastAPI) | `out-of-scope` | High | `docs/REQUIREMENTS.md` Section 12 is a module specification rather than a single atomic behavior; audited through REQ-06, REQ-09C, and REQ-13 | Not excluded from product scope, but out-of-scope as a standalone verdict because subcapabilities are separately covered. |
-| REQ-13 | End-to-End Workflow | `credential_blocked` | Medium | `docs/M010-CLOSEOUT-EVIDENCE.md`, `scripts/verify-embedding-idempotency.py`, `scripts/verify-google-places-live.py`, `scripts/verify-session-durability.py` | End-to-end local UI proof exists historically, but full workflow live proof is `credential_blocked`. |
+| REQ-13 | End-to-End Workflow | `credential_blocked` | Medium | `docs/M010-CLOSEOUT-EVIDENCE.md`, `scripts/verify-embedding-idempotency.py`, `scripts/verify-goong-live.py`, `scripts/verify-session-durability.py` | End-to-end local UI proof exists historically, but full workflow live proof is `credential_blocked`. |
 | REQ-14 | Phu luc: Glossary | `pass` | Medium | `docs/REQUIREMENTS.md`, `README.md`, terminology in docs/code | Documentation-only area; no runtime proof required. |
 
 ## Detailed Evidence Notes
@@ -88,11 +88,11 @@ The expected top-level modules exist. Some paths in `docs/REQUIREMENTS.md` are i
 
 ### REQ-06 - System Architecture
 
-Core architecture files are present: FastAPI routers, agent service, hybrid retrieval, Qdrant tooling, and compose infrastructure. This supports the architecture diagram at a code-structure level. The paths that cross OpenAI, Qdrant, Google, and Langfuse cannot be fully proven without credentials and running services.
+Core architecture files are present: FastAPI routers, agent service, hybrid retrieval, Qdrant tooling, and compose infrastructure. This supports the architecture diagram at a code-structure level. The paths that cross OpenAI, Qdrant, Goong, and Langfuse cannot be fully proven without credentials and running services.
 
-### REQ-07 - Google Places API (New)
+### REQ-07 - Goong Places API V2
 
-`docs/M005-PLACES-VERIFICATION-EVIDENCE.md` records mocked backend tests and a live verifier that exits `RESULT=credential_blocked` when no Google key is available. The code includes Places and Routes services, and the verifier is designed not to leak secrets. The audit cannot mark this as pass until a valid key produces live normalized candidates and route matrix behavior.
+`docs/M005-PLACES-VERIFICATION-EVIDENCE.md` records mocked backend tests and a live verifier that exits `RESULT=credential_blocked` when no Goong key is available. The code includes Places and Routes services, and the verifier is designed not to leak secrets. The audit cannot mark this as pass until a valid key produces live normalized candidates and route matrix behavior.
 
 ### REQ-08 - Ensemble Methods
 
@@ -120,7 +120,7 @@ The frontend has localized app routes for landing, chat, map, architecture, and 
 
 ### REQ-11 - Agents Module
 
-LangGraph orchestration, retrieval, places/routes tools, grounded answers, and ensemble reranking are represented in source. The module still depends on live OpenAI/Qdrant/Google paths for complete proof, so the highest honest verdict for the full module is `credential_blocked` rather than pass.
+LangGraph orchestration, retrieval, places/routes tools, grounded answers, and ensemble reranking are represented in source. The module still depends on live OpenAI/Qdrant/Goong paths for complete proof, so the highest honest verdict for the full module is `credential_blocked` rather than pass.
 
 ### REQ-12 - Backend Module
 
@@ -138,7 +138,7 @@ The glossary section and terminology appear in `docs/REQUIREMENTS.md`. This is d
 
 | Surface | Local Evidence | Blocked Proof | Unblock Condition |
 |---|---|---|---|
-| Google Places/Routes | Mocked service tests and `scripts/verify-google-places-live.py` credential-blocked path | Live `RESULT=passed` from Places API and Routes matrix | Valid Google API key(s), enabled APIs, network access |
+| Goong Places/Routes | Mocked service tests and `scripts/verify-goong-live.py` credential-blocked path | Live `RESULT=passed` from Places API and Routes matrix | Valid Goong API key, enabled APIs, network access |
 | OpenAI embeddings/RAGAS | Embedding service code, hybrid retriever tests, credential-blocked verifier behavior | Live `/admin/embed`, Qdrant point counts, RAGAS metrics | Valid `OPENAI_API_KEY`, running Qdrant/backend |
 | Qdrant | Qdrant service code and prior local tests | Live vector collection/upsert/search proof | Running Qdrant with expected collection/vector schema |
 | Langfuse | `backend/app/services/langfuse_service.py`, admin traces status surface | Live trace ingestion/query proof | Valid Langfuse host/public/secret keys and reachable service |
@@ -160,7 +160,7 @@ Credential-blocked outcomes are honest audit states, not failures. They must not
 | Record frontend non-functional proof | Bounded verification | Run or add lightweight checks for landing responsive/accessibility/FCP claims; defer exact lab performance if environment is unsuitable. | REQ-02, REQ-10 |
 | Strengthen fairness audit evidence | Bounded fix or deferral | Ensure `scripts/monthly_fairness_audit.py` produces durable non-secret snapshots, or explicitly defer operational metrics to follow-up. | REQ-08, REQ-09B |
 | Clarify backend module verdict granularity | Documentation fix | In S04, avoid one broad backend status if subcapabilities differ; reconcile by concrete endpoints/tests. | REQ-12 |
-| Preserve credential-blocked provider gates | Explicit deferral | Keep Google/OpenAI/Qdrant/Langfuse live proof as credential-blocked unless credentials are provided. | REQ-07, REQ-11, REQ-13 |
+| Preserve credential-blocked provider gates | Explicit deferral | Keep Goong/OpenAI/Qdrant/Langfuse live proof as credential-blocked unless credentials are provided. | REQ-07, REQ-11, REQ-13 |
 | Update version contract | Bounded docs/status fix | Compare `docs/REQUIREMENTS.md` tech-stack versions to manifests and mark drift explicitly. | REQ-05 |
 | RAGAS/semantic cache scope decision | Explicit deferral | Treat RAGAS CI/CD and Redis semantic cache as major follow-up work unless already implemented by current code. | REQ-09A |
 
@@ -175,7 +175,7 @@ S03 keeps the audit bounded: small source/test/documentation gaps are fixed or g
 | Record frontend non-functional proof | Exact FCP/accessibility lab proof remains outside this bounded slice; S05 should run fresh frontend build/browser/performance checks. | deferred | `frontend/package.json`, `frontend/tests/s07-auth-e2e.test.mjs`, `docs/M010-CLOSEOUT-EVIDENCE.md` | `prior_evidence_may_drift`; no new FCP <= 1.5s claim is made here. |
 | Strengthen fairness audit evidence | Local fairness proof is bounded to JSONL aggregation, admin fairness tests, and script `PASS`/`FAIL`/`NO_DATA` output; production operational metrics remain deferred. | fixed+deferred | `scripts/monthly_fairness_audit.py`, `backend/tests/test_fairness_audit.py`, `backend/tests/test_admin_traces_endpoint.py`, `scripts/verify-m011-s03-bounded-fixes.mjs` | `NO_DATA` is an honest local result when no snapshots exist; durable monthly history is still `missing_operational_metrics`. |
 | Clarify backend module verdict granularity | Backend status remains split across concrete endpoints and requirement IDs instead of a single broad pass/fail bucket. | fixed | REQ-06, REQ-09C, REQ-12 notes in this report | S04 owns `.gsd/REQUIREMENTS.md` status reconciliation. |
-| Preserve credential-blocked provider gates | Google, OpenAI, Qdrant, Langfuse, and full live workflow proof remain `credential_blocked` until real credentials/services are available. | deferred | `scripts/verify-google-places-live.py`, `scripts/verify-embedding-idempotency.py`, `backend/requirements.txt`, `agents/requirements.txt` | Mocked or static checks must not be reported as live provider success. |
+| Preserve credential-blocked provider gates | Goong, OpenAI, Qdrant, Langfuse, and full live workflow proof remain `credential_blocked` until real credentials/services are available. | deferred | `scripts/verify-goong-live.py`, `scripts/verify-embedding-idempotency.py`, `backend/requirements.txt`, `agents/requirements.txt` | Mocked or static checks must not be reported as live provider success. |
 | Update version contract | Manifest evidence is recorded for frontend/backend/agent dependency drift; runtime/version reconciliation remains for S05. | fixed+deferred | `frontend/package.json`, `backend/requirements.txt`, `agents/requirements.txt`, `scripts/verify-m011-s03-bounded-fixes.mjs` | `version_drift`; manifests are static evidence, not installed runtime proof. |
 | RAGAS/semantic cache scope decision | RAGAS CI/CD and production semantic cache proof are explicitly deferred as major follow-up work. | deferred | REQ-09A notes in this report, `backend/requirements.txt`, `agents/requirements.txt` | No Redis semantic-cache production behavior or RAGAS CI/CD is implemented by this S03 task. |
 
@@ -185,7 +185,7 @@ This S02 task creates an audit inspection surface. Verification for this report 
 
 | Check | Expected Result | Notes |
 |---|---|---|
-| `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs` | Exit 0; 7/7 tests passed on 2026-05-22 | Static traceability proof only: confirms S01 inventory coverage and S02 report shape/caveat/verdict preservation; does not prove live OpenAI, Google, Qdrant, Postgres/Redis, or Langfuse behavior. |
+| `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs` | Exit 0; 7/7 tests passed on 2026-05-22 | Static traceability proof only: confirms S01 inventory coverage and S02 report shape/caveat/verdict preservation; does not prove live OpenAI, Goong, Qdrant, Postgres/Redis, or Langfuse behavior. |
 | `test -s docs/M011-REQUIREMENTS-AUDIT.md` | Covered by node:test report existence assertion | Confirms durable report exists and is non-empty. |
 | Coverage review | Covered by node:test canonical ID assertions | REQ-01 through REQ-08, REQ-09A through REQ-09D, REQ-10 through REQ-14 included. |
 | Caveat preservation review | Covered by node:test caveat assertions | `credential_blocked`, `endpoint_naming_drift`, `version_drift`, `missing_operational_metrics`, `prior_evidence_may_drift`. |
@@ -213,7 +213,7 @@ The `.gsd/REQUIREMENTS.md` update boundary remains DB-backed/official-tool owned
 
 Blocked or deferred requirement-update operations:
 
-- Live OpenAI, Google, Qdrant, Langfuse, RAGAS, semantic cache, production fairness history, and frontend performance/accessibility proof were not run or claimed in S04.
+- Live OpenAI, Goong, Qdrant, Langfuse, RAGAS, semantic cache, production fairness history, and frontend performance/accessibility proof were not run or claimed in S04.
 - Credential-dependent checks require valid credentials, running services, and network access before any `credential_blocked` row can become a live pass.
 - The exact combined static gate for S05 reuse is `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs`.
 
@@ -231,13 +231,13 @@ S05 records the final M011 verification matrix from local execution on 2026-05-2
 |---|---|---|---|---|
 | static | `node --test scripts/verify-m011-s01-inventory.mjs scripts/verify-m011-s02-audit.mjs scripts/verify-m011-s03-bounded-fixes.mjs scripts/verify-m011-s04-reconciliation.mjs scripts/verify-m011-s05-closeout.mjs` | `RESULT=passed` | `feece3b1-02c6-49b5-a823-8ea025b269fa`; 2026-05-27 | T03 rerun passed 26/26 node:test assertions. Static proof only; preserves `credential_blocked`, `deferred_major_scope`, `missing_operational_metrics`, `frontend_nonfunctional_pending`, and `endpoint_naming_drift`. |
 | backend | `pytest -q` | `RESULT=failed` | `239d9ff7-df17-40fc-9446-ac635bdf936d`; 2026-05-27 | Broad pytest failed during collection: `agents/graph/test_agent_service.py` imports `app.models.rag` but repo-root collection has no `app` module. This is recorded as a real broad-suite failure, not hidden by narrower tests. |
-| backend | `pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py` | `RESULT=passed` | `a253f885-7e83-4691-8a8f-907afd856c36`; 2026-05-27 | Targeted S03 subset passed: 48 tests passed with 13 warnings. This supports admin route/auth/fairness evidence only and does not prove live OpenAI/Qdrant/Google/Langfuse behavior. |
+| backend | `pytest -q backend/tests/test_admin_eval_endpoint.py backend/tests/test_admin_stats_endpoint.py backend/tests/test_admin_traces_endpoint.py backend/tests/test_admin_embed_auth.py backend/tests/test_fairness_audit.py` | `RESULT=passed` | `a253f885-7e83-4691-8a8f-907afd856c36`; 2026-05-27 | Targeted S03 subset passed: 48 tests passed with 13 warnings. This supports admin route/auth/fairness evidence only and does not prove live OpenAI/Qdrant/Goong/Langfuse behavior. |
 | frontend | `bun --cwd=frontend run type-check` | `RESULT=passed` | `227370bf-5b28-4278-ada0-37c8612e6402`; 2026-05-27 | TypeScript check completed successfully. This does not measure FCP <= 1.5s or WCAG 2.2 AA. |
 | frontend | `bun --cwd=frontend run lint` | `RESULT=passed` | `64feb981-d035-4d88-bb11-12db2ea86e3f`; 2026-05-27 | ESLint completed successfully. Frontend performance/accessibility remains `frontend_nonfunctional_pending`. |
 | frontend | `bun --cwd=frontend run build` | `RESULT=passed` | `dd4a523e-f8c0-432f-ae3e-323969f1ae9b`; 2026-05-27 | Next.js production build completed successfully. No browser, lab performance, or accessibility pass is claimed from this build alone. |
 | fairness | `python3 scripts/monthly_fairness_audit.py --days 30` | `RESULT=partial` | `60f74758-81a1-4dff-a28a-0e81d66fb694`; 2026-05-27 | Local monthly audit reported PASS over 33 snapshots, 33 places, 100.0% local business share, and 0/33 violations. This is local snapshot evidence; production fairness history remains `missing_operational_metrics`. |
-| provider | `python3 scripts/verify-google-places-live.py` | `RESULT=failed` | `83060ee1-47a2-4c50-ac86-136c39b80cb8`; 2026-05-27 | Initial invocation failed before provider logic with `ModuleNotFoundError: No module named 'agents'`; rerun below records intended credential blocker with repo `PYTHONPATH`. |
-| provider | `PYTHONPATH=. python3 scripts/verify-google-places-live.py` | `RESULT=credential_blocked` | `4b67c915-42a4-466e-8562-7c60d94d7df5`; 2026-05-27 | Google Places and Google Routes live proof remains `credential_blocked` because `GOOGLE_PLACES_API_KEY` is missing. Unblock with valid Google credentials, enabled APIs, and network access; rerun without exposing secrets. |
+| provider | `python3 scripts/verify-goong-live.py` | `RESULT=failed` | `83060ee1-47a2-4c50-ac86-136c39b80cb8`; 2026-05-27 | Initial invocation failed before provider logic with `ModuleNotFoundError: No module named 'agents'`; rerun below records intended credential blocker with repo `PYTHONPATH`. |
+| provider | `PYTHONPATH=. python3 scripts/verify-goong-live.py` | `RESULT=credential_blocked` | `4b67c915-42a4-466e-8562-7c60d94d7df5`; 2026-05-27 | Goong Places and Goong Routes live proof remains `credential_blocked` because `GOONG_API_KEY` is missing. Unblock with valid Goong credentials, enabled APIs, and network access; rerun without exposing secrets. |
 | provider | `python3 scripts/verify-embedding-idempotency.py` | `RESULT=credential_blocked` | `93ac5d5a-0ad1-44c8-a730-91fc95ce5e19`; 2026-05-27 | OpenAI/Qdrant live embedding proof remains `credential_blocked`; output requested a valid `OPENAI_API_KEY` plus running Qdrant/backend before idempotency can be proven live. |
 | runtime | `python3 scripts/verify-session-durability.py` | `RESULT=failed` | `8843b539-4b2f-4c96-8ffb-1d4c308d9538`; 2026-05-27 | Initial invocation failed before durability logic with `ModuleNotFoundError: No module named 'agents'`; rerun below records the intended local runtime result with repo `PYTHONPATH`. |
 | runtime | `PYTHONPATH=. python3 scripts/verify-session-durability.py` | `RESULT=partial` | `3a91a97d-983c-4e57-9808-940e5fc2529d`; 2026-05-27 | Diagnostic reported status `rescope_required`: session history is durable only with `CHECKPOINT_MODE=postgres`; current memory mode is process-local. Treat as partial/rescope evidence, not durable pass. |
@@ -248,7 +248,7 @@ S05 records the final M011 verification matrix from local execution on 2026-05-2
 ### S05 Caveat Preservation
 
 - Live OpenAI/Qdrant proof remains `credential_blocked` until a valid `OPENAI_API_KEY`, running Qdrant collection, backend service, and documented `RESULT=passed` or `RESULT=durable_verified` evidence exist.
-- Live Google Places/Routes proof remains `credential_blocked` until valid Google credentials, enabled APIs, network access, and a documented live `RESULT=passed` evidence line exist.
+- Live Goong Places/Routes proof remains `credential_blocked` until valid Goong credentials, enabled APIs, network access, and a documented live `RESULT=passed` evidence line exist.
 - Live Langfuse trace ingestion/query proof remains `credential_blocked` until valid Langfuse host/public/secret keys and reachable service evidence exist.
 - Frontend performance/accessibility is `frontend_nonfunctional_pending`; type-check, lint, and build passed, but no FCP <= 1.5s or WCAG pass is claimed without a fresh browser/lab diagnostic.
 - Production fairness history and `missing_operational_metrics` remain deferred until durable production-style snapshots exist beyond local fixture aggregation.
@@ -264,7 +264,7 @@ This audit primarily uses canonical `REQ-*` rows from `docs/REQUIREMENTS.md`, wh
 | R012 | Absent from active implementation scope; classified as an anti-feature/out-of-scope contract, not validated product behavior. | `.gsd/REQUIREMENTS.md` Out of Scope entry: no booking/payment system, no CRM, no fine-tuning LLM from scratch, no native mobile app; `docs/REQUIREMENTS.md` section 2.3. | Do not read R012 as a delivered feature or a validation pass. Its correct audit state is no current active GSD contract / out-of-scope / not validated. |
 | R027 | Covered by the auth/admin lifecycle evidence boundary: register -> verify email -> login -> admin dashboard. | `.gsd/REQUIREMENTS.md` R027; `scripts/verify-s07-auth-e2e.sh` exit-0 evidence from M010/S07 T03. | This is mocked browser/API/SMTP E2E evidence with 10 API calls mocked; it is not live production email, provider, or deployment proof. |
 
-Partial-ID mappings must preserve this vocabulary: `credential_blocked`, `environment_blocked`, `deferred_major_scope`, `frontend_nonfunctional_pending`, `missing_operational_metrics`, and `endpoint_naming_drift`. The R027 crosswalk does not upgrade live OpenAI/Qdrant, Google Places/Routes, Langfuse, RAGAS CI/CD, semantic cache, session durability, frontend nonfunctional, or production operational-metrics surfaces beyond the evidence already recorded above.
+Partial-ID mappings must preserve this vocabulary: `credential_blocked`, `environment_blocked`, `deferred_major_scope`, `frontend_nonfunctional_pending`, `missing_operational_metrics`, and `endpoint_naming_drift`. The R027 crosswalk does not upgrade live OpenAI/Qdrant, Goong Places/Routes, Langfuse, RAGAS CI/CD, semantic cache, session durability, frontend nonfunctional, or production operational-metrics surfaces beyond the evidence already recorded above.
 
 
 ### S06 Aggregate Validation Evidence
