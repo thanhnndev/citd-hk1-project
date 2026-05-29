@@ -150,9 +150,20 @@ async def test_computeRouteMatrix_returns_results_on_success() -> None:
 
     results = await service.computeRouteMatrix(origin, [dest1, dest2])
 
-    assert len(results) == 2
-    assert results[0]["distanceMeters"] == 5000
-    assert results[1]["distanceMeters"] == 8000
+    assert results == [
+        {
+            "destinationIndex": 0,
+            "status": "OK",
+            "distanceMeters": 5000,
+            "durationSeconds": 300,
+        },
+        {
+            "destinationIndex": 1,
+            "status": "OK",
+            "distanceMeters": 8000,
+            "durationSeconds": 480,
+        },
+    ]
     assert len(client.calls) == 1
 
     params = client.calls[0]["params"]
@@ -351,6 +362,38 @@ async def test_malformed_json_records_failure() -> None:
 
     assert results == []
 
+
+
+@pytest.mark.asyncio
+async def test_malformed_rows_records_failure() -> None:
+    """Missing or non-list rows payload is malformed and trips after threshold."""
+    service = GoongRoutesService(
+        settings=_settings(),
+        client=FakeRoutesClient(FakeResponse(status_code=200, payload={"status": "OK"})),
+    )
+
+    for _ in range(FAILURE_THRESHOLD):
+        results = await service.computeRouteMatrix(
+            LatLng(lat=10.0, lng=106.0),
+            [LatLng(lat=10.1, lng=106.1)],
+        )
+        assert results == []
+
+    assert service.is_open is True
+
+@pytest.mark.asyncio
+async def test_empty_elements_returns_empty_without_failure() -> None:
+    """An empty Goong elements array normalizes to no route results."""
+    client = FakeRoutesClient(FakeResponse(status_code=200, payload={"rows": [{"elements": []}]}))
+    service = GoongRoutesService(settings=_settings(), client=client)
+
+    results = await service.computeRouteMatrix(
+        LatLng(lat=10.0, lng=106.0),
+        [LatLng(lat=10.1, lng=106.1)],
+    )
+
+    assert results == []
+    assert service.is_open is False
 
 # ── enrich_candidates ──────────────────────────────────────────────────
 
