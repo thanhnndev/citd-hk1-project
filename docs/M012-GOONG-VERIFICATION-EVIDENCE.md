@@ -351,3 +351,48 @@ Interpretation:
 - The static scope guard confirms required reconciliation headings, credential seams, requirement ids, evidence links, and roadmap boundary map are present.
 - The zero-reference guard confirms active files do not reintroduce stale legacy provider references.
 - These static passes close the wording/scope validation task only; they do not convert `credential_blocked` backend or browser evidence into credentialed live Goong success.
+
+## S09 T04 Credential Blocker Resolution Attempt
+
+Status: credential_blocked; no stakeholder-approved scope narrowing artifact was available.
+
+Runtime result:
+
+- Backend `GOONG_API_KEY` status remained `missing`, so `scripts/verify-goong-live.py` reported terminal `RESULT=credential_blocked`.
+- Browser `NEXT_PUBLIC_GOONG_MAPTILES_KEY` status remained missing or placeholder, so `frontend/tests/s06-goong-map-live.test.mjs` reported terminal `RESULT=credential_blocked` before launching a credentialed browser/server flow.
+- No credentialed `RESULT=passed` backend or browser proof was produced in this runtime.
+- No human/stakeholder approval artifact was present, and autonomous execution cannot infer approval to narrow M012/S09 live acceptance.
+
+Command:
+
+```bash
+python3 scripts/verify-goong-live.py && cd frontend && node --test tests/s06-goong-map-live.test.mjs && cd .. && python3 scripts/verify-m012-scope-reconciliation.py && python3 scripts/verify-s05-zero-<legacy-provider>-references.py
+```
+
+Outcome:
+
+- Combined exit code: 0
+- Backend live verifier terminal result: `RESULT=credential_blocked`
+- Browser live verifier terminal result: `RESULT=credential_blocked {"reason":"missing_or_placeholder_NEXT_PUBLIC_GOONG_MAPTILES_KEY"}`
+- Scope reconciliation terminal result: `RESULT=passed`
+- Zero-reference terminal result: `RESULT=passed`
+- Evidence run: `.gsd/exec/d03c16f0-e1f8-499c-bccb-33b315e3d0b2.stdout`
+
+Sanitized output excerpt:
+
+```text
+CONFIG={"goong_api_key_status": "missing", "location_bias": {"lat": 10.1835208, "lng": 104.0496843}, "max_places_result_count": 5, "max_route_destinations": 3, "query_language": "vi"}
+RESULT={"rerun": "export GOONG_API_KEY=<valid key>; python3 scripts/verify-goong-live.py", "status": "credential_blocked"}
+RESULT=credential_blocked
+RESULT=credential_blocked {"reason":"missing_or_placeholder_NEXT_PUBLIC_GOONG_MAPTILES_KEY"}
+RESULT=passed
+M012 scope reconciliation verifier passed: scope headings, credential seams, requirement ids, evidence links, and roadmap boundary map are present.
+RESULT=passed
+S05 zero-reference gate passed: no stale provider references in active files.
+```
+
+Interpretation:
+
+- T04 restored the roadmap Boundary Map projection required by the static scope verifier.
+- Credentialed backend/browser live acceptance remains pending until real `GOONG_API_KEY` and `NEXT_PUBLIC_GOONG_MAPTILES_KEY` are supplied and the relevant verifiers emit terminal `RESULT=passed`.
+- R007, R010, R011, R026, and R028 remain active out-of-scope gaps; this evidence does not mark them complete or treat them as S09 failures.
