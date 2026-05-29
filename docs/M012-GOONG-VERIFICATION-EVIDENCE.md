@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document is the durable audit surface for the Goong-only provider verification gates after S05 cleanup. It separates mocked backend regression proof, frontend map/build proof, and live Goong provider status without exposing credentials or raw upstream payloads.
+This document is the durable audit surface for the Goong-only provider verification gates after S05 cleanup. It separates mocked backend regression proof, frontend map/build proof, and live Goong provider status without exposing credentials or raw upstream payloads. The S07 scope boundary is `docs/M012-GOONG-SCOPE-RECONCILIATION.md`; read it alongside this evidence before changing requirement or credentialed-live claims.
 
 Current evidence proves:
 
