@@ -21,16 +21,20 @@ import httpx
 from app.core.config import Settings, get_settings
 from app.models.places import (
     DEFAULT_SEARCH_RADIUS_METERS,
+    GOOGLE_PLACES_FIELD_MASK,
     HAM_NINH_CENTER,
     PlaceCandidate,
     PlaceDetailsRequest,
     PlaceNearbyRequest,
+    PlaceRecommendationStatus,
     PlaceSearchRequest,
     PlaceToolError,
     PlaceToolResponse,
     PlaceToolSource,
     PlaceToolStatus,
+    ProviderStatus,
     RouteContext,
+    SearchPlacesToolResult,
 )
 from app.models.request import LatLng
 
@@ -43,15 +47,7 @@ DETAILS_PATH = "/v1/places"
 
 # Field mask covering all fields consumed by normalize_place().
 # Google Places API (New) requires explicit field masks for billing.
-_DEFAULT_FIELD_MASK = (
-    "places.id,places.displayName,places.types,places.primaryType,"
-    "places.formattedAddress,places.shortFormattedAddress,places.location,"
-    "places.rating,places.userRatingCount,places.priceLevel,"
-    "places.currentOpeningHours,places.regularOpeningHours,"
-    "places.businessStatus,places.accessibilityOptions,"
-    "places.nationalPhoneNumber,places.internationalPhoneNumber,"
-    "places.googleMapsUri,places.websiteUri"
-)
+_DEFAULT_FIELD_MASK = GOOGLE_PLACES_FIELD_MASK
 
 _GOOGLE_AUTH_CODES = {"REQUEST_DENIED", "PERMISSION_DENIED"}
 _GOOGLE_RATE_LIMIT_CODES = {"RESOURCE_EXHAUSTED"}
@@ -109,7 +105,7 @@ class GooglePlacesService:
 
     # -- Text Search (POST /v1/places:searchText) -------------------
 
-    async def text_search(self, request: PlaceSearchRequest) -> PlaceToolResponse:
+    async def text_search(self, request: PlaceSearchRequest) -> SearchPlacesToolResult:
         body: dict[str, Any] = {
             "textQuery": request.query,
             "maxResultCount": request.max_result_count,
@@ -139,7 +135,7 @@ class GooglePlacesService:
 
     # -- Nearby Search (POST /v1/places:searchNearby) ---------------
 
-    async def nearby_search(self, request: PlaceNearbyRequest) -> PlaceToolResponse:
+    async def nearby_search(self, request: PlaceNearbyRequest) -> SearchPlacesToolResult:
         body: dict[str, Any] = {
             "maxResultCount": request.max_result_count,
             "locationRestriction": {
@@ -171,7 +167,7 @@ class GooglePlacesService:
 
     # -- Place Details (GET /v1/places/{place_id}) ------------------
 
-    async def details(self, request: PlaceDetailsRequest) -> PlaceToolResponse:
+    async def details(self, request: PlaceDetailsRequest) -> SearchPlacesToolResult:
         retrieved_at = datetime.now(UTC)
         metadata = {"endpoint": "google_detail"}
         api_key = self._api_key()
@@ -202,7 +198,7 @@ class GooglePlacesService:
         request: PlaceSearchRequest | PlaceNearbyRequest,
         origin: LatLng,
         metadata: dict[str, Any],
-    ) -> PlaceToolResponse:
+    ) -> SearchPlacesToolResult:
         retrieved_at = datetime.now(UTC)
         api_key = self._api_key()
         if not api_key:
@@ -212,7 +208,7 @@ class GooglePlacesService:
         headers = self._auth_headers(language_code)
 
         response_payload = await self._request_post(operation, path, body, headers, request, retrieved_at, metadata)
-        if isinstance(response_payload, PlaceToolResponse):
+        if isinstance(response_payload, SearchPlacesToolResult):
             return response_payload
 
         raw_results = _extract_places_list(response_payload)
@@ -242,9 +238,9 @@ class GooglePlacesService:
         request: PlaceDetailsRequest,
         retrieved_at: datetime,
         metadata: dict[str, Any],
-    ) -> PlaceToolResponse:
+    ) -> SearchPlacesToolResult:
         response_payload = await self._request_get(operation, path, headers, request, retrieved_at, metadata)
-        if isinstance(response_payload, PlaceToolResponse):
+        if isinstance(response_payload, SearchPlacesToolResult):
             return response_payload
 
         # Google Details returns the place object directly (not wrapped in "result")
@@ -268,7 +264,7 @@ class GooglePlacesService:
         request: Any,
         retrieved_at: datetime,
         metadata: dict[str, Any],
-    ) -> dict[str, Any] | PlaceToolResponse:
+    ) -> dict[str, Any] | SearchPlacesToolResult:
         try:
             response = await self._client.post(path, json=body, headers=headers)
         except httpx.TimeoutException:
@@ -288,7 +284,7 @@ class GooglePlacesService:
         request: Any,
         retrieved_at: datetime,
         metadata: dict[str, Any],
-    ) -> dict[str, Any] | PlaceToolResponse:
+    ) -> dict[str, Any] | SearchPlacesToolResult:
         try:
             response = await self._client.get(path, headers=headers)
         except httpx.TimeoutException:
@@ -307,7 +303,7 @@ class GooglePlacesService:
         request: Any,
         retrieved_at: datetime,
         metadata: dict[str, Any],
-    ) -> dict[str, Any] | PlaceToolResponse:
+    ) -> dict[str, Any] | SearchPlacesToolResult:
         status_code = getattr(response, "status_code", 200)
 
         if status_code in (401, 403):
@@ -344,7 +340,7 @@ class GooglePlacesService:
 
     # -- Response helpers -------------------------------------------
 
-    def _credential_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any]) -> PlaceToolResponse:
+    def _credential_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any]) -> SearchPlacesToolResult:
         return self._response(
             status=PlaceToolStatus.CREDENTIALS_BLOCKED,
             request=request,
@@ -353,7 +349,7 @@ class GooglePlacesService:
             error=PlaceToolError(code="missing_google_api_key", message="Google Places credentials are not configured.", retryable=False),
         )
 
-    def _safe_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any], code: str, message: str, retryable: bool) -> PlaceToolResponse:
+    def _safe_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any], code: str, message: str, retryable: bool) -> SearchPlacesToolResult:
         return self._response(
             status=PlaceToolStatus.UPSTREAM_ERROR,
             request=request,
@@ -371,15 +367,37 @@ class GooglePlacesService:
         metadata: dict[str, Any],
         candidates: list[PlaceCandidate] | None = None,
         error: PlaceToolError | None = None,
-    ) -> PlaceToolResponse:
-        return PlaceToolResponse(
+    ) -> SearchPlacesToolResult:
+        reasoning_log: list[str] = []
+        warnings: list[str] = []
+        if error:
+            reasoning_log.append(f"error: {error.code} — {error.message}")
+        if status == PlaceToolStatus.EMPTY:
+            reasoning_log.append("provider returned zero usable places")
+        elif status == PlaceToolStatus.CREDENTIALS_BLOCKED:
+            reasoning_log.append("credentials not configured — no outbound request made")
+        elif status == PlaceToolStatus.OK and candidates:
+            reasoning_log.append(f"normalized {len(candidates)} candidate(s) from provider response")
+
+        return SearchPlacesToolResult(
             status=status,
-            source=PlaceToolSource.GOONG_PLACES,  # kept for backward compat; source is provider-agnostic
-            request=request,
-            retrieved_at=retrieved_at,
+            source=PlaceToolSource.GOOGLE_PLACES,
+            provider_status=ProviderStatus(),
             candidates=candidates or [],
-            error=error,
-            metadata=metadata,
+            warnings=warnings,
+            reasoning_log=reasoning_log,
+            explanation=None,
+            place_recommendation_status=PlaceRecommendationStatus(
+                provider_places_returned=len(candidates) if candidates else 0,
+                candidates_after_normalization=len(candidates) if candidates else 0,
+                filters_applied=[f"max_result_count={getattr(request, 'max_result_count', 'N/A')}"],
+                reason="ok" if status == PlaceToolStatus.OK else str(status),
+            ),
+            audit={
+                "endpoint": metadata.get("endpoint", "unknown"),
+                "field_mask": GOOGLE_PLACES_FIELD_MASK,
+            },
+            retrieved_at=retrieved_at,
         )
 
 

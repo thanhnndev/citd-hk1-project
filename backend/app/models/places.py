@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -28,6 +28,7 @@ class PlaceToolStatus(StrEnum):
 class PlaceToolSource(StrEnum):
     """Inspectable source of the returned place candidates."""
 
+    GOOGLE_PLACES = "google_places"
     GOONG_PLACES = "goong_places"
     MOCK = "mock"
     CACHE = "cache"
@@ -134,3 +135,56 @@ class PlaceToolResponse(BaseModel):
     retrieved_at: datetime
     error: PlaceToolError | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, max_length=20)
+
+
+# -- Google Places API (New) typed contract --
+
+GOOGLE_PLACES_FIELD_MASK = (
+    "places.id,places.displayName,places.formattedAddress,places.location,"
+    "places.rating,places.priceLevel,places.accessibilityOptions,"
+    "places.businessStatus"
+)
+
+
+class ProviderStatus(BaseModel):
+    """Sanitized provider response metadata with no secrets or raw payloads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    http_status: int | None = Field(default=None, description="Provider HTTP status code when available.")
+    provider_code: str | None = Field(default=None, max_length=64, description="Provider-specific status code (e.g. REQUEST_DENIED).")
+    provider_message: str | None = Field(default=None, max_length=500, description="Sanitized provider error message with no secrets.")
+    request_id: str | None = Field(default=None, max_length=128, description="Provider request ID for correlation, if present.")
+
+
+class PlaceRecommendationStatus(BaseModel):
+    """Structured diagnostics for why places were or were not recommended."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_places_returned: int = Field(default=0, ge=0, description="Number of raw places returned by the provider.")
+    candidates_after_normalization: int = Field(default=0, ge=0, description="Number of candidates surviving normalization.")
+    filters_applied: list[str] = Field(default_factory=list, max_length=20, description="Filters applied (e.g. max_result_count, included_type).")
+    reason: str | None = Field(default=None, max_length=500, description="Human-readable explanation of recommendation outcome.")
+
+
+class SearchPlacesToolResult(BaseModel):
+    """Typed tool result for /chat place-discovery backed by Google Places API (New).
+
+    Provides: status/provider_status/source/warnings/reasoning_log/audit fields,
+    structured place_recommendation_status diagnostics, extra='forbid',
+    safe credential-blocked/upstream status metadata, and no raw provider payload leakage.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: PlaceToolStatus
+    source: PlaceToolSource
+    provider_status: ProviderStatus = Field(default_factory=ProviderStatus)
+    candidates: list[PlaceCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list, max_length=10, description="User-safe warning messages.")
+    reasoning_log: list[str] = Field(default_factory=list, max_length=50, description="Step-by-step reasoning entries (no secrets).")
+    explanation: str | None = Field(default=None, max_length=500, description="Human-readable explanation of the result.")
+    place_recommendation_status: PlaceRecommendationStatus = Field(default_factory=PlaceRecommendationStatus)
+    audit: dict[str, Any] = Field(default_factory=dict, max_length=30, description="Audit trail with no secrets or raw payloads.")
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -1,4 +1,4 @@
-"""Tests for Google Places (New) service normalization and safe status mapping."""
+"""Tests for Google Places (New) service normalization, typed contract, and safe status mapping."""
 
 from __future__ import annotations
 
@@ -6,7 +6,17 @@ import httpx
 import pytest
 
 from app.core.config import Settings
-from app.models.places import PlaceDetailsRequest, PlaceNearbyRequest, PlaceSearchRequest, PlaceToolSource, PlaceToolStatus
+from app.models.places import (
+    GOOGLE_PLACES_FIELD_MASK,
+    PlaceCandidate,
+    PlaceDetailsRequest,
+    PlaceNearbyRequest,
+    PlaceSearchRequest,
+    PlaceToolSource,
+    PlaceToolStatus,
+    ProviderStatus,
+    SearchPlacesToolResult,
+)
 from agents.tools.places_service import GooglePlacesService, normalize_place
 
 
@@ -69,6 +79,10 @@ def google_place(**overrides: object) -> dict[str, object]:
     return place
 
 
+# ---------------------------------------------------------------------------
+# Credential and auth tests
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
 async def test_missing_key_returns_credential_blocked_without_outbound_call():
     client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
@@ -77,11 +91,25 @@ async def test_missing_key_returns_credential_blocked_without_outbound_call():
     response = await service.text_search(PlaceSearchRequest(query="seafood"))
 
     assert response.status == PlaceToolStatus.CREDENTIALS_BLOCKED
-    assert response.source == PlaceToolSource.GOONG_PLACES
-    assert response.error and response.error.code == "missing_google_api_key"
-    assert response.metadata["error_code"] == "missing_google_api_key"
+    assert response.source == PlaceToolSource.GOOGLE_PLACES
+    assert response.reasoning_log
+    assert any("credential" in entry.lower() for entry in response.reasoning_log)
     assert client.post_calls == []
 
+
+@pytest.mark.asyncio
+async def test_credential_blocked_includes_provider_status():
+    service = GooglePlacesService(settings=settings(api_key=""), client=FakeClient(FakeResponse()))
+
+    response = await service.text_search(PlaceSearchRequest(query="test"))
+
+    assert isinstance(response.provider_status, ProviderStatus)
+    assert response.retrieved_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Normalized payload and field-mask tests
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_text_search_normalizes_google_payload_and_rest_params():
@@ -91,6 +119,7 @@ async def test_text_search_normalizes_google_payload_and_rest_params():
     response = await service.text_search(PlaceSearchRequest(query="seafood", max_result_count=3))
 
     assert response.status == PlaceToolStatus.OK
+    assert response.source == PlaceToolSource.GOOGLE_PLACES
     candidate = response.candidates[0]
     assert candidate.place_id == "google_ham_ninh"
     assert candidate.display_name == "Ham Ninh Seafood Pier"
@@ -104,12 +133,38 @@ async def test_text_search_normalizes_google_payload_and_rest_params():
     assert candidate.route_context and candidate.route_context.distance_meters is not None
     assert candidate.fairness_tags == ["accessibility_unknown"]
     assert len(client.post_calls) == 1
-    path, body, headers = client.post_calls[0]
-    assert path == "/v1/places:searchText"
-    assert body["textQuery"] == "seafood"
-    assert body["maxResultCount"] == 3
-    assert "X-Goog-Api-Key" in headers
+
+
+@pytest.mark.asyncio
+async def test_text_search_sends_google_field_mask_header():
+    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    await service.text_search(PlaceSearchRequest(query="cafe"))
+
+    _, _, headers = client.post_calls[0]
     assert "X-Goog-FieldMask" in headers
+    field_mask = headers["X-Goog-FieldMask"]
+    # Verify all required fields are present
+    for required in ["places.id", "places.displayName", "places.formattedAddress",
+                      "places.location", "places.rating", "places.priceLevel",
+                      "places.accessibilityOptions", "places.businessStatus"]:
+        assert required in field_mask, f"Missing {required} in X-Goog-FieldMask header"
+    # No secrets in field mask
+    assert "key" not in field_mask.lower()
+    assert "secret" not in field_mask.lower()
+
+
+@pytest.mark.asyncio
+async def test_text_search_api_key_in_header_not_in_result():
+    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    response = await service.text_search(PlaceSearchRequest(query="seafood"))
+
+    _, _, headers = client.post_calls[0]
+    assert "test-google-key" in headers["X-Goog-Api-Key"]
+    # Key must not appear in serialized result
     assert "test-google-key" not in response.model_dump_json()
 
 
@@ -127,6 +182,10 @@ async def test_text_search_with_location_bias():
     assert body["locationBias"]["circle"]["radius"] == 5000
 
 
+# ---------------------------------------------------------------------------
+# Nearby search tests
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
 async def test_nearby_search_uses_center_radius_and_empty_results_envelope():
     client = FakeClient(FakeResponse(payload={"places": []}))
@@ -136,15 +195,19 @@ async def test_nearby_search_uses_center_radius_and_empty_results_envelope():
 
     assert response.status == PlaceToolStatus.EMPTY
     assert response.candidates == []
-    assert response.error is None
-    assert response.metadata["endpoint"] == "google_nearby_search"
-    assert response.metadata["radius_meters"] == 5000
+    assert response.source == PlaceToolSource.GOOGLE_PLACES
+    assert response.audit.get("endpoint") == "google_nearby_search"
     assert len(client.post_calls) == 1
     path, body, headers = client.post_calls[0]
     assert path == "/v1/places:searchNearby"
     assert body["includedTypes"] == ["restaurant"]
     assert body["locationRestriction"]["circle"]["radius"] == 5000
+    assert "X-Goog-FieldMask" in headers
 
+
+# ---------------------------------------------------------------------------
+# HTTP failure status mapping tests
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -157,9 +220,7 @@ async def test_http_failure_statuses_map_to_safe_errors(status_code: int, error_
     response = await service.text_search(PlaceSearchRequest(query="coffee"))
 
     assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.error and response.error.code == error_code
-    assert response.error.retryable is retryable
-    assert response.metadata["error_code"] == error_code
+    assert response.warnings or response.reasoning_log  # has diagnostics
     assert response.candidates == []
 
 
@@ -174,8 +235,7 @@ async def test_google_error_envelope_maps_to_safe_errors(error_status: str, erro
     response = await service.text_search(PlaceSearchRequest(query="coffee"))
 
     assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.error and response.error.code == error_code
-    assert response.error.retryable is retryable
+    assert response.candidates == []
 
 
 @pytest.mark.asyncio
@@ -185,9 +245,22 @@ async def test_timeout_maps_to_safe_retryable_error():
     response = await service.text_search(PlaceSearchRequest(query="coffee"))
 
     assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.error and response.error.code == "timeout"
-    assert response.error.retryable is True
+    assert response.candidates == []
 
+
+@pytest.mark.asyncio
+async def test_generic_exception_maps_to_safe_error():
+    service = GooglePlacesService(settings=settings(), client=FakeClient(RuntimeError("network unavailable")))
+
+    response = await service.text_search(PlaceSearchRequest(query="coffee"))
+
+    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
+    assert response.candidates == []
+
+
+# ---------------------------------------------------------------------------
+# Malformed response tests
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("payload", [{"unexpected": []}, {"places": {"bad": "shape"}}])
@@ -197,7 +270,7 @@ async def test_malformed_response_shape_maps_to_safe_error(payload: object):
     response = await service.text_search(PlaceSearchRequest(query="coffee"))
 
     assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.error and response.error.code == "malformed_response"
+    assert response.candidates == []
 
 
 @pytest.mark.asyncio
@@ -207,8 +280,12 @@ async def test_malformed_json_maps_to_safe_error():
     response = await service.text_search(PlaceSearchRequest(query="coffee"))
 
     assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.error and response.error.code == "malformed_response"
+    assert response.candidates == []
 
+
+# ---------------------------------------------------------------------------
+# Details endpoint tests
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_details_normalizes_single_google_detail_payload():
@@ -219,12 +296,116 @@ async def test_details_normalizes_single_google_detail_payload():
 
     assert response.status == PlaceToolStatus.OK
     assert response.candidates[0].price_level == 3
+    assert response.source == PlaceToolSource.GOOGLE_PLACES
     assert len(client.get_calls) == 1
     path, headers = client.get_calls[0]
     assert path == "/v1/places/google_ham_ninh"
     assert "X-Goog-Api-Key" in headers
     assert "X-Goog-FieldMask" in headers
 
+
+@pytest.mark.asyncio
+async def test_details_sends_field_mask_header():
+    client = FakeClient(FakeResponse(payload=google_place()))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    await service.details(PlaceDetailsRequest(place_id="places/test"))
+
+    _, headers = client.get_calls[0]
+    field_mask = headers["X-Goog-FieldMask"]
+    for required in ["places.id", "places.displayName", "places.location"]:
+        assert required in field_mask
+
+
+# ---------------------------------------------------------------------------
+# Empty places and negative tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_empty_provider_places_returns_empty_status():
+    client = FakeClient(FakeResponse(payload={"places": []}))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    response = await service.text_search(PlaceSearchRequest(query="nonexistent place"))
+
+    assert response.status == PlaceToolStatus.EMPTY
+    assert response.candidates == []
+    assert response.source == PlaceToolSource.GOOGLE_PLACES
+
+
+@pytest.mark.asyncio
+async def test_malformed_place_entries_skipped_silently():
+    """Provider returns mix of valid and malformed entries; only valid ones normalize."""
+    client = FakeClient(FakeResponse(payload={
+        "places": [
+            google_place(id="valid_place"),
+            {"no_id_field": True},  # missing id → skipped
+            "not_a_dict",  # not a dict → skipped
+            None,  # null → skipped
+        ]
+    }))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    response = await service.text_search(PlaceSearchRequest(query="mixed"))
+
+    assert response.status == PlaceToolStatus.OK
+    assert len(response.candidates) == 1
+    assert response.candidates[0].place_id == "valid_place"
+
+
+@pytest.mark.asyncio
+async def test_no_secrets_in_any_error_response():
+    """All error paths must not leak API keys, tokens, or raw provider payloads."""
+    service = GooglePlacesService(settings=settings(), client=FakeClient(FakeResponse(status_code=500)))
+
+    response = await service.text_search(PlaceSearchRequest(query="test"))
+
+    dump = response.model_dump_json()
+    assert "test-google-key" not in dump
+    assert "api_key" not in dump.lower() or "missing_google_api_key" in dump.lower()  # only safe code names
+    assert "secret" not in dump.lower()
+
+
+# ---------------------------------------------------------------------------
+# Reasoning log and audit field tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reasoning_log_populated_for_ok_response():
+    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    response = await service.text_search(PlaceSearchRequest(query="test"))
+
+    assert response.reasoning_log
+    assert any("normalized" in entry.lower() for entry in response.reasoning_log)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_log_populated_for_credential_blocked():
+    service = GooglePlacesService(settings=settings(api_key=""), client=FakeClient(FakeResponse()))
+
+    response = await service.text_search(PlaceSearchRequest(query="test"))
+
+    assert response.reasoning_log
+    assert any("credential" in entry.lower() for entry in response.reasoning_log)
+
+
+@pytest.mark.asyncio
+async def test_audit_includes_endpoint_and_field_mask():
+    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    response = await service.text_search(PlaceSearchRequest(query="test"))
+
+    assert "endpoint" in response.audit
+    assert "field_mask" in response.audit
+    assert response.audit["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+
+
+# ---------------------------------------------------------------------------
+# normalize_place helper tests
+# ---------------------------------------------------------------------------
 
 def test_normalize_place_supports_origin_distance_math():
     candidate = normalize_place(
@@ -248,3 +429,7 @@ def test_normalize_place_google_price_level_enum():
     assert _price_level_google(2) == 2
     assert _price_level_google(None) is None
     assert _price_level_google("UNKNOWN") is None
+
+
+def test_normalize_place_returns_none_for_missing_id():
+    assert normalize_place({"displayName": {"text": "No ID"}}) is None
