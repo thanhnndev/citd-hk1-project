@@ -183,7 +183,7 @@ async def test_default_recommendation_service_uses_goong_places(monkeypatch) -> 
                 retrieved_at=datetime.now(UTC),
             )
 
-    monkeypatch.setattr(prs_module, "GoongPlacesService", FakeGoongPlacesService)
+    monkeypatch.setattr(prs_module, "GooglePlacesService", FakeGoongPlacesService)
 
     service = prs_module.PlaceRecommendationService()
     response = await service.recommend(query="seafood", language="en", session_id="s-goong")

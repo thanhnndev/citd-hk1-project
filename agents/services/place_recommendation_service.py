@@ -23,7 +23,7 @@ from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from agents.ml.ensemble_reranker import EnsembleReranker
 from agents.ml.feature_extractor import FeatureExtractor
-from agents.tools.places_service import GoongPlacesService
+from agents.tools.places_service import GooglePlacesService
 from agents.tools.routes_service import GoongRoutesService
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class PlaceRecommendationService:
         max_result_count: int = DEFAULT_MAX_RESULTS,
         routes_service: RoutesServiceProtocol | None = None,
     ) -> None:
-        self._places_tool = places_tool or GoongPlacesService()
+        self._places_tool = places_tool or GooglePlacesService()
         self._max_result_count = max(1, min(max_result_count, 20))
         self._routes_service = routes_service if routes_service is not None else GoongRoutesService()
 

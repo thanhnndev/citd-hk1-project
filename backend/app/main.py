@@ -39,7 +39,7 @@ from agents.tools.embedding_service import EmbeddingService
 from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from agents.services.llm_answer_service import LLMAnswerService
 from agents.services.place_recommendation_service import PlaceRecommendationService
-from agents.tools.places_service import GoongPlacesService
+from agents.tools.places_service import GooglePlacesService
 from agents.tools.routes_service import GoongRoutesService
 from agents.tools.qdrant_service import QdrantService
 from agents.tools.retriever import Retriever
@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.agent_service = None
 
     try:
-        places_service = GoongPlacesService(settings=settings)
+        places_service = GooglePlacesService(settings=settings)
         routes_service = GoongRoutesService(settings=settings)
         app.state.places_service = places_service
         app.state.place_recommendation_service = PlaceRecommendationService(

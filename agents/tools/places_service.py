@@ -1,10 +1,17 @@
-"""Goong Places API client seam and safe normalization service."""
+"""Google Places API (New) client seam and safe normalization service.
+
+Uses Google Places API (New) endpoints:
+- Text Search: POST /v1/places:searchText
+- Nearby Search: POST /v1/places:searchNearby
+- Place Details: GET /v1/places/{place_id}
+
+All endpoints require X-Goog-Api-Key and X-Goog-FieldMask headers.
+"""
 
 from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -12,6 +19,8 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.models.places import (
+    DEFAULT_SEARCH_RADIUS_METERS,
+    HAM_NINH_CENTER,
     PlaceCandidate,
     PlaceDetailsRequest,
     PlaceNearbyRequest,
@@ -26,37 +35,53 @@ from app.models.request import LatLng
 
 logger = logging.getLogger(__name__)
 
-PLACES_BASE_URL = "https://rsapi.goong.io"
-AUTOCOMPLETE_PATH = "/v2/place/autocomplete"
-TEXT_SEARCH_PATH = "/v2/place/autocomplete"
-DETAILS_PATH = "/v2/place/detail"
+PLACES_BASE_URL = "https://places.googleapis.com"
+TEXT_SEARCH_PATH = "/v1/places:searchText"
+NEARBY_SEARCH_PATH = "/v1/places:searchNearby"
+DETAILS_PATH = "/v1/places"
 
-_GOONG_STATUS_OK = {"OK", "ZERO_RESULTS"}
-_UPSTREAM_AUTH_CODES = {"REQUEST_DENIED", "INVALID_REQUEST"}
-_UPSTREAM_RATE_LIMIT_CODES = {"OVER_QUERY_LIMIT"}
+# Field mask covering all fields consumed by normalize_place().
+# Google Places API (New) requires explicit field masks for billing.
+_DEFAULT_FIELD_MASK = (
+    "places.id,places.displayName,places.types,places.primaryType,"
+    "places.formattedAddress,places.shortFormattedAddress,places.location,"
+    "places.rating,places.userRatingCount,places.priceLevel,"
+    "places.currentOpeningHours,places.regularOpeningHours,"
+    "places.businessStatus,places.accessibilityOptions,"
+    "places.nationalPhoneNumber,places.internationalPhoneNumber,"
+    "places.googleMapsUri,places.websiteUri"
+)
+
+_GOOGLE_AUTH_CODES = {"REQUEST_DENIED", "PERMISSION_DENIED"}
+_GOOGLE_RATE_LIMIT_CODES = {"RESOURCE_EXHAUSTED"}
 
 
 class PlacesHttpClient(Protocol):
     """Minimal async HTTP seam so tests and agents can substitute a mock client."""
 
-    async def get(self, path: str, *, params: Mapping[str, Any]) -> Any: ...
+    async def post(self, path: str, *, json: dict[str, Any], headers: dict[str, str]) -> Any: ...
+
+    async def get(self, path: str, *, headers: dict[str, str]) -> Any: ...
 
 
 class HttpxPlacesClient:
-    """Thin httpx-backed client for Goong Places REST endpoints."""
+    """Thin httpx-backed client for Google Places REST endpoints."""
 
     def __init__(self, *, base_url: str = PLACES_BASE_URL, timeout: float = 8.0) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
 
-    async def get(self, path: str, *, params: Mapping[str, Any]) -> httpx.Response:
-        return await self._client.get(path, params=params)
+    async def post(self, path: str, *, json: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        return await self._client.post(path, json=json, headers=headers)
+
+    async def get(self, path: str, *, headers: dict[str, str]) -> httpx.Response:
+        return await self._client.get(path, headers=headers)
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
 
-class GoongPlacesService:
-    """Server-side Goong Places service returning normalized candidates and safe envelopes."""
+class GooglePlacesService:
+    """Server-side Google Places (New) service returning normalized candidates and safe envelopes."""
 
     def __init__(
         self,
@@ -67,93 +92,137 @@ class GoongPlacesService:
         self._settings = settings or get_settings()
         self._client = client or HttpxPlacesClient()
 
+    def _api_key(self) -> str | None:
+        key = self._settings.GOONG_API_KEY.strip()
+        return key if key else None
+
+    def _auth_headers(self, language_code: str = "en") -> dict[str, str]:
+        headers = {
+            "X-Goog-Api-Key": self._api_key() or "",
+            "X-Goog-FieldMask": _DEFAULT_FIELD_MASK,
+            "Content-Type": "application/json",
+        }
+        if language_code:
+            headers["X-Goog-Language"] = language_code
+        return headers
+
+    # -- Text Search (POST /v1/places:searchText) -------------------
+
     async def text_search(self, request: PlaceSearchRequest) -> PlaceToolResponse:
-        params = self._base_params(request.language_code)
-        params.update(
-            {
-                "input": request.query,
-                "location": _location_param(request.location_bias),
-                "origin": _location_param(request.location_bias),
-                "radius": request.radius_meters,
-                "limit": request.max_result_count,
+        body: dict[str, Any] = {
+            "textQuery": request.query,
+            "maxResultCount": request.max_result_count,
+        }
+        # Optional location bias
+        if request.location_bias:
+            body["locationBias"] = {
+                "circle": {
+                    "center": {
+                        "latitude": request.location_bias.lat,
+                        "longitude": request.location_bias.lng,
+                    },
+                    "radius": request.radius_meters,
+                }
             }
-        )
+        if request.included_type:
+            body["includedType"] = request.included_type
+
         return await self._execute_search(
             operation="text_search",
-            path=AUTOCOMPLETE_PATH,
+            path=TEXT_SEARCH_PATH,
+            body=body,
             request=request,
-            params=params,
             origin=request.location_bias,
-            metadata={"endpoint": "goong_autocomplete_text_search", "radius_meters": request.radius_meters},
+            metadata={"endpoint": "google_text_search", "radius_meters": request.radius_meters},
         )
 
+    # -- Nearby Search (POST /v1/places:searchNearby) ---------------
+
     async def nearby_search(self, request: PlaceNearbyRequest) -> PlaceToolResponse:
-        params = self._base_params(request.language_code)
-        params.update(
-            {
-                "input": request.included_type,
-                "location": _location_param(request.center),
-                "radius": request.radius_meters,
-                "limit": request.max_result_count,
-                "types": request.included_type,
-            }
-        )
+        body: dict[str, Any] = {
+            "maxResultCount": request.max_result_count,
+            "locationRestriction": {
+                "circle": {
+                    "center": {
+                        "latitude": request.center.lat,
+                        "longitude": request.center.lng,
+                    },
+                    "radius": request.radius_meters,
+                }
+            },
+        }
+        if request.included_type:
+            body["includedTypes"] = [request.included_type]
+
         return await self._execute_search(
             operation="nearby_search",
-            path=AUTOCOMPLETE_PATH,
+            path=NEARBY_SEARCH_PATH,
+            body=body,
             request=request,
-            params=params,
             origin=request.center,
             metadata={
-                "endpoint": "goong_autocomplete_nearby_approximation",
-                "center": _location_param(request.center),
+                "endpoint": "google_nearby_search",
+                "center": f"{request.center.lat},{request.center.lng}",
                 "radius_meters": request.radius_meters,
                 "included_type": request.included_type,
             },
         )
 
-    async def details(self, request: PlaceDetailsRequest) -> PlaceToolResponse:
-        params = self._base_params(request.language_code)
-        params["place_id"] = request.place_id.removeprefix("places/")
-        return await self._execute_details(operation="details", request=request, params=params)
+    # -- Place Details (GET /v1/places/{place_id}) ------------------
 
-    def _base_params(self, language_code: str) -> dict[str, Any]:
-        return {"api_key": self._settings.GOONG_API_KEY.strip(), "language": language_code}
+    async def details(self, request: PlaceDetailsRequest) -> PlaceToolResponse:
+        retrieved_at = datetime.now(UTC)
+        metadata = {"endpoint": "google_detail"}
+        api_key = self._api_key()
+        if not api_key:
+            return self._credential_error(request, retrieved_at, metadata)
+
+        place_id = request.place_id.removeprefix("places/")
+        path = f"{DETAILS_PATH}/{place_id}"
+        headers = self._auth_headers(request.language_code)
+
+        return await self._execute_details(
+            operation="details",
+            path=path,
+            headers=headers,
+            request=request,
+            retrieved_at=retrieved_at,
+            metadata=metadata,
+        )
+
+    # -- Internal: search execution ---------------------------------
 
     async def _execute_search(
         self,
         *,
         operation: str,
         path: str,
+        body: dict[str, Any],
         request: PlaceSearchRequest | PlaceNearbyRequest,
-        params: Mapping[str, Any],
         origin: LatLng,
         metadata: dict[str, Any],
     ) -> PlaceToolResponse:
         retrieved_at = datetime.now(UTC)
-        if not params.get("api_key"):
+        api_key = self._api_key()
+        if not api_key:
             return self._credential_error(request, retrieved_at, metadata)
 
-        response_payload = await self._request_payload(operation, path, params, request, retrieved_at, metadata)
+        language_code = getattr(request, "language_code", "en")
+        headers = self._auth_headers(language_code)
+
+        response_payload = await self._request_post(operation, path, body, headers, request, retrieved_at, metadata)
         if isinstance(response_payload, PlaceToolResponse):
             return response_payload
 
-        status_response = self._status_response(response_payload, request, retrieved_at, metadata)
-        if status_response:
-            return status_response
-
-        raw_results = _extract_result_list(response_payload)
+        raw_results = _extract_places_list(response_payload)
         if raw_results is None:
-            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned an unexpected response shape.", True)
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Google Places returned an unexpected response shape.", True)
 
         candidates: list[PlaceCandidate] = []
         for raw_place in raw_results[: request.max_result_count]:
-            if not isinstance(raw_place, Mapping):
+            if not isinstance(raw_place, dict):
                 continue
             candidate = normalize_place(raw_place, origin=origin)
-            if candidate and candidate.location is None and candidate.place_id:
-                detail = await self._detail_candidate(candidate.place_id, request.language_code, origin=origin)
-                candidate = detail or candidate
             if candidate:
                 candidates.append(candidate)
 
@@ -161,101 +230,126 @@ class GoongPlacesService:
             return self._response(status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at, metadata={**metadata, "error_code": "no_results"})
         return self._response(status=PlaceToolStatus.OK, request=request, retrieved_at=retrieved_at, metadata=metadata, candidates=candidates)
 
-    async def _execute_details(self, *, operation: str, request: PlaceDetailsRequest, params: Mapping[str, Any]) -> PlaceToolResponse:
-        retrieved_at = datetime.now(UTC)
-        metadata = {"endpoint": "goong_detail"}
-        if not params.get("api_key"):
-            return self._credential_error(request, retrieved_at, metadata)
+    # -- Internal: details execution --------------------------------
 
-        response_payload = await self._request_payload(operation, DETAILS_PATH, params, request, retrieved_at, metadata)
+    async def _execute_details(
+        self,
+        *,
+        operation: str,
+        path: str,
+        headers: dict[str, str],
+        request: PlaceDetailsRequest,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+    ) -> PlaceToolResponse:
+        response_payload = await self._request_get(operation, path, headers, request, retrieved_at, metadata)
         if isinstance(response_payload, PlaceToolResponse):
             return response_payload
 
-        status_response = self._status_response(response_payload, request, retrieved_at, metadata)
-        if status_response:
-            return status_response
-
-        raw_place = _extract_detail_object(response_payload)
+        # Google Details returns the place object directly (not wrapped in "result")
+        raw_place = response_payload if isinstance(response_payload, dict) and "id" in response_payload else None
         if raw_place is None:
-            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned an unexpected response shape.", True)
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Google Places returned an unexpected response shape.", True)
+
         candidate = normalize_place(raw_place)
         if not candidate:
             return self._response(status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at, metadata={**metadata, "error_code": "no_results"})
         return self._response(status=PlaceToolStatus.OK, request=request, retrieved_at=retrieved_at, metadata=metadata, candidates=[candidate])
 
-    async def _detail_candidate(self, place_id: str, language_code: str, *, origin: LatLng) -> PlaceCandidate | None:
-        params = self._base_params(language_code)
-        if not params["api_key"]:
-            return None
-        params["place_id"] = place_id
-        try:
-            response = await self._client.get(DETAILS_PATH, params=params)
-            if getattr(response, "status_code", 200) >= 400:
-                return None
-            payload = response.json()
-        except Exception:  # noqa: BLE001 - best-effort hydration must not fail the search envelope.
-            logger.warning("goong_places_detail_hydration_failed", extra={"place_id_present": bool(place_id)})
-            return None
-        if not isinstance(payload, Mapping) or payload.get("status") not in _GOONG_STATUS_OK:
-            return None
-        raw_place = _extract_detail_object(payload)
-        return normalize_place(raw_place, origin=origin) if raw_place else None
+    # -- HTTP request wrappers --------------------------------------
 
-    async def _request_payload(
+    async def _request_post(
         self,
         operation: str,
         path: str,
-        params: Mapping[str, Any],
+        body: dict[str, Any],
+        headers: dict[str, str],
         request: Any,
         retrieved_at: datetime,
         metadata: dict[str, Any],
-    ) -> Mapping[str, Any] | PlaceToolResponse:
+    ) -> dict[str, Any] | PlaceToolResponse:
         try:
-            response = await self._client.get(path, params=params)
+            response = await self._client.post(path, json=body, headers=headers)
         except httpx.TimeoutException:
-            logger.warning("goong_places_timeout", extra={"operation": operation})
-            return self._safe_error(request, retrieved_at, metadata, "timeout", "Goong Places request timed out.", True)
-        except Exception as exc:  # noqa: BLE001 - service boundary must sanitize all provider/client failures.
-            logger.warning("goong_places_client_error", extra={"operation": operation, "error_type": type(exc).__name__})
-            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places request failed.", True)
+            logger.warning("google_places_timeout", extra={"operation": operation})
+            return self._safe_error(request, retrieved_at, metadata, "timeout", "Google Places request timed out.", True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("google_places_client_error", extra={"operation": operation, "error_type": type(exc).__name__})
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Google Places request failed.", True)
 
+        return self._handle_response(response, operation, request, retrieved_at, metadata)
+
+    async def _request_get(
+        self,
+        operation: str,
+        path: str,
+        headers: dict[str, str],
+        request: Any,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | PlaceToolResponse:
+        try:
+            response = await self._client.get(path, headers=headers)
+        except httpx.TimeoutException:
+            logger.warning("google_places_timeout", extra={"operation": operation})
+            return self._safe_error(request, retrieved_at, metadata, "timeout", "Google Places request timed out.", True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("google_places_client_error", extra={"operation": operation, "error_type": type(exc).__name__})
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Google Places request failed.", True)
+
+        return self._handle_response(response, operation, request, retrieved_at, metadata)
+
+    def _handle_response(
+        self,
+        response: Any,
+        operation: str,
+        request: Any,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | PlaceToolResponse:
         status_code = getattr(response, "status_code", 200)
+
         if status_code in (401, 403):
-            return self._safe_error(request, retrieved_at, metadata, "auth_error", "Goong Places rejected the configured credentials.", False)
+            return self._safe_error(request, retrieved_at, metadata, "auth_error", "Google Places rejected the configured credentials.", False)
         if status_code == 429:
-            return self._safe_error(request, retrieved_at, metadata, "quota_exceeded", "Goong Places quota was exceeded or rate limited.", True)
+            return self._safe_error(request, retrieved_at, metadata, "quota_exceeded", "Google Places quota was exceeded or rate limited.", True)
         if status_code >= 500:
-            logger.warning("goong_places_upstream_5xx", extra={"operation": operation, "status_code": status_code})
-            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places returned an upstream error.", True)
+            logger.warning("google_places_upstream_5xx", extra={"operation": operation, "status_code": status_code})
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Google Places returned an upstream error.", True)
         if status_code >= 400:
-            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places request was not accepted.", False)
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Google Places request was not accepted.", False)
 
         try:
             payload = response.json()
         except Exception:  # noqa: BLE001
-            logger.warning("goong_places_malformed_json", extra={"operation": operation})
-            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned malformed data.", True)
-        if not isinstance(payload, Mapping):
-            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned an unexpected response shape.", True)
+            logger.warning("google_places_malformed_json", extra={"operation": operation})
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Google Places returned malformed data.", True)
+
+        if not isinstance(payload, dict):
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Google Places returned an unexpected response shape.", True)
+
+        # Check for Google error envelope
+        error = payload.get("error")
+        if isinstance(error, dict):
+            error_status = error.get("status", "")
+            error_message = error.get("message", "")
+            if error_status in _GOOGLE_AUTH_CODES:
+                return self._safe_error(request, retrieved_at, metadata, "auth_error", f"Google Places rejected the request: {error_message}", False)
+            if error_status in _GOOGLE_RATE_LIMIT_CODES:
+                return self._safe_error(request, retrieved_at, metadata, "quota_exceeded", f"Google Places quota exceeded: {error_message}", True)
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", f"Google Places error: {error_message}", True)
+
         return payload
 
-    def _status_response(self, payload: Mapping[str, Any], request: Any, retrieved_at: datetime, metadata: dict[str, Any]) -> PlaceToolResponse | None:
-        status = _string(payload.get("status"))
-        if not status or status in _GOONG_STATUS_OK:
-            return None
-        if status in _UPSTREAM_AUTH_CODES:
-            return self._safe_error(request, retrieved_at, metadata, "auth_error", "Goong Places rejected the request or credentials.", False)
-        if status in _UPSTREAM_RATE_LIMIT_CODES:
-            return self._safe_error(request, retrieved_at, metadata, "quota_exceeded", "Goong Places quota was exceeded or rate limited.", True)
-        return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places returned an upstream error.", True)
+    # -- Response helpers -------------------------------------------
 
     def _credential_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any]) -> PlaceToolResponse:
         return self._response(
             status=PlaceToolStatus.CREDENTIALS_BLOCKED,
             request=request,
             retrieved_at=retrieved_at,
-            metadata={**metadata, "error_code": "missing_goong_api_key"},
-            error=PlaceToolError(code="missing_goong_api_key", message="Goong Places credentials are not configured.", retryable=False),
+            metadata={**metadata, "error_code": "missing_google_api_key"},
+            error=PlaceToolError(code="missing_google_api_key", message="Google Places credentials are not configured.", retryable=False),
         )
 
     def _safe_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any], code: str, message: str, retryable: bool) -> PlaceToolResponse:
@@ -279,7 +373,7 @@ class GoongPlacesService:
     ) -> PlaceToolResponse:
         return PlaceToolResponse(
             status=status,
-            source=PlaceToolSource.GOONG_PLACES,
+            source=PlaceToolSource.GOONG_PLACES,  # kept for backward compat; source is provider-agnostic
             request=request,
             retrieved_at=retrieved_at,
             candidates=candidates or [],
@@ -288,108 +382,110 @@ class GoongPlacesService:
         )
 
 
-def normalize_place(place: Mapping[str, Any], *, origin: LatLng | None = None) -> PlaceCandidate | None:
-    """Normalize one Goong place object without leaking raw provider payloads."""
+def normalize_place(place: dict[str, Any], *, origin: LatLng | None = None) -> PlaceCandidate | None:
+    """Normalize one Google Places (New) place object without leaking raw provider payloads.
 
-    place_id = _string(place.get("place_id")) or _string(place.get("id")) or _resource_id(place.get("name"))
-    display_name = _display_name(place.get("displayName")) or _string(place.get("name")) or _string(place.get("description")) or place_id
-    if not place_id or not display_name:
+    Google Places (New) response fields:
+    - places[].id, displayName.text, types[], primaryType
+    - formattedAddress, shortFormattedAddress, location{lat,lng}
+    - rating, userRatingCount, priceLevel (enum string)
+    - currentOpeningHours.openNow, businessStatus
+    - accessibilityOptions{}, nationalPhoneNumber, internationalPhoneNumber
+    - googleMapsUri, websiteUri
+    """
+
+    place_id = _string(place.get("id"))
+    if not place_id:
         return None
 
-    location = _location(place.get("location")) or _geometry_location(place.get("geometry"))
-    distance_meters = _int(place.get("distance_meters")) or _int(place.get("distanceMeters"))
-    if distance_meters is None and origin and location:
+    display_name = _display_name(place.get("displayName")) or place_id
+
+    location = _location(place.get("location"))
+    distance_meters: int | None = None
+    if origin and location:
         distance_meters = _haversine_meters(origin, location)
 
     types = [item for item in place.get("types", []) if isinstance(item, str)] if isinstance(place.get("types"), list) else []
-    accessibility = place.get("accessibilityOptions") if isinstance(place.get("accessibilityOptions"), Mapping) else {}
+    accessibility = place.get("accessibilityOptions") if isinstance(place.get("accessibilityOptions"), dict) else {}
     accessibility_tags = [key for key, value in accessibility.items() if value is True]
 
     return PlaceCandidate(
         place_id=place_id,
-        resource_name=_string(place.get("reference")) or _resource_id(place.get("name")),
+        resource_name=f"places/{place_id}",
         display_name=display_name,
         types=types,
         primary_type=_string(place.get("primaryType")) or (types[0] if types else None),
-        formatted_address=_string(place.get("formatted_address")) or _string(place.get("formattedAddress")) or _string(place.get("description")),
-        short_formatted_address=_string(place.get("short_formatted_address")) or _string(place.get("compound", {}).get("district") if isinstance(place.get("compound"), Mapping) else None),
+        formatted_address=_string(place.get("formattedAddress")),
+        short_formatted_address=_string(place.get("shortFormattedAddress")),
         location=location,
         rating=_float(place.get("rating")),
-        user_rating_count=_int(place.get("user_ratings_total")) or _int(place.get("userRatingCount")),
-        price_level=_price_level(place.get("price_level")) or _price_level(place.get("priceLevel")),
-        open_now=_open_now(place),
-        business_status=_string(place.get("business_status")) or _string(place.get("businessStatus")),
+        user_rating_count=_int(place.get("userRatingCount")),
+        price_level=_price_level_google(place.get("priceLevel")),
+        open_now=_open_now_google(place),
+        business_status=_string(place.get("businessStatus")),
         accessibility_options=dict(accessibility),
-        national_phone_number=_string(place.get("formatted_phone_number")) or _string(place.get("nationalPhoneNumber")),
-        international_phone_number=_string(place.get("international_phone_number")) or _string(place.get("internationalPhoneNumber")),
-        map_uri=_string(place.get("url")),
-        website_uri=_string(place.get("website")) or _string(place.get("websiteUri")),
+        national_phone_number=_string(place.get("nationalPhoneNumber")),
+        international_phone_number=_string(place.get("internationalPhoneNumber")),
+        map_uri=_string(place.get("googleMapsUri")),
+        website_uri=_string(place.get("websiteUri")),
         fairness_tags=accessibility_tags or ["accessibility_unknown"],
         route_context=RouteContext(origin=origin, distance_meters=distance_meters) if distance_meters is not None else None,
     )
 
 
-def _extract_result_list(payload: Mapping[str, Any]) -> list[Any] | None:
-    for key in ("results", "predictions", "places"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return value
+def _extract_places_list(payload: dict[str, Any]) -> list[Any] | None:
+    """Extract the places array from Google Places API (New) response."""
+    places = payload.get("places")
+    if isinstance(places, list):
+        return places
     return None
 
 
-def _extract_detail_object(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    for key in ("result", "place"):
-        value = payload.get(key)
-        if isinstance(value, Mapping):
-            return value
-    return payload if "place_id" in payload or "geometry" in payload else None
-
-
 def _display_name(value: Any) -> str | None:
-    if isinstance(value, Mapping):
+    """Extract display name text from LocalizedText object or plain string."""
+    if isinstance(value, dict):
         return _string(value.get("text"))
     return _string(value)
 
 
-def _resource_id(value: Any) -> str | None:
-    text = _string(value)
-    if text and text.startswith("places/"):
-        return text.removeprefix("places/")
-    return text
-
-
 def _location(value: Any) -> LatLng | None:
-    if not isinstance(value, Mapping):
+    """Extract lat/lng from Google location object."""
+    if not isinstance(value, dict):
         return None
-    lat = value.get("lat", value.get("latitude"))
-    lng = value.get("lng", value.get("longitude"))
+    lat = value.get("lat")
+    lng = value.get("lng")
     if lat is None or lng is None:
         return None
     return LatLng(lat=float(lat), lng=float(lng))
 
 
-def _geometry_location(value: Any) -> LatLng | None:
-    if not isinstance(value, Mapping):
-        return None
-    return _location(value.get("location"))
-
-
-def _open_now(place: Mapping[str, Any]) -> bool | None:
-    opening_hours = place.get("opening_hours") or place.get("currentOpeningHours")
-    if isinstance(opening_hours, Mapping):
-        if isinstance(opening_hours.get("open_now"), bool):
-            return opening_hours["open_now"]
-        if isinstance(opening_hours.get("openNow"), bool):
-            return opening_hours["openNow"]
+def _open_now_google(place: dict[str, Any]) -> bool | None:
+    """Extract openNow from currentOpeningHours (Google Places New format)."""
+    opening_hours = place.get("currentOpeningHours") or place.get("regularOpeningHours")
+    if isinstance(opening_hours, dict):
+        open_now = opening_hours.get("openNow")
+        if isinstance(open_now, bool):
+            return open_now
     return None
 
 
-def _price_level(value: Any) -> int | None:
+def _price_level_google(value: Any) -> int | None:
+    """Convert Google priceLevel enum string to int [0-4].
+
+    Google values: "PRICE_LEVEL_FREE", "PRICE_LEVEL_INEXPENSIVE",
+    "PRICE_LEVEL_MODERATE", "PRICE_LEVEL_EXPENSIVE", "PRICE_LEVEL_VERY_EXPENSIVE"
+    """
     if isinstance(value, int):
         return value if 0 <= value <= 4 else None
-    if isinstance(value, str) and value.isdigit():
-        parsed = int(value)
-        return parsed if 0 <= parsed <= 4 else None
+    if isinstance(value, str):
+        mapping = {
+            "PRICE_LEVEL_FREE": 0,
+            "PRICE_LEVEL_INEXPENSIVE": 1,
+            "PRICE_LEVEL_MODERATE": 2,
+            "PRICE_LEVEL_EXPENSIVE": 3,
+            "PRICE_LEVEL_VERY_EXPENSIVE": 4,
+        }
+        return mapping.get(value.upper())
     return None
 
 
@@ -415,11 +511,8 @@ def _float(value: Any) -> float | None:
         return None
 
 
-def _location_param(location: LatLng) -> str:
-    return f"{location.lat},{location.lng}"
-
-
 def _haversine_meters(origin: LatLng, destination: LatLng) -> int:
+    """Calculate great-circle distance in metres between two lat/lng points."""
     radius_m = 6_371_000
     lat1 = math.radians(origin.lat)
     lat2 = math.radians(destination.lat)
@@ -427,5 +520,3 @@ def _haversine_meters(origin: LatLng, destination: LatLng) -> int:
     delta_lng = math.radians(destination.lng - origin.lng)
     a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
     return round(radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
-
-

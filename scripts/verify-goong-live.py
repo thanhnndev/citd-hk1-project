@@ -22,7 +22,7 @@ for path in (REPO_ROOT, BACKEND_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from agents.tools.places_service import GoongPlacesService  # noqa: E402
+from agents.tools.places_service import GooglePlacesService  # noqa: E402
 from agents.tools.routes_service import GoongRoutesService  # noqa: E402
 from app.core.config import Settings  # noqa: E402
 from app.models.places import HAM_NINH_CENTER, PlaceCandidate, PlaceSearchRequest, PlaceToolStatus  # noqa: E402
@@ -54,9 +54,9 @@ def print_json(label: str, value: object) -> None:
     print(f"{label}={json.dumps(value, sort_keys=True, ensure_ascii=True)}")
 
 
-def settings_for_goong() -> Settings:
+def settings_for_google() -> Settings:
     return Settings(
-        OPENAI_API_KEY=os.environ.get("OPENAI_API_KEY", "unused-for-goong-live-verifier"),
+        OPENAI_API_KEY=os.environ.get("OPENAI_API_KEY", "unused-for-places-live-verifier"),
         GOONG_API_KEY=os.environ.get("GOONG_API_KEY", ""),
     )
 
@@ -116,7 +116,7 @@ async def verify_live_goong() -> int:
     print_json(
         "CONFIG",
         {
-            "goong_api_key_status": status,
+            "google_places_api_key_status": status,
             "query_language": "vi",
             "location_bias": {"lat": HAM_NINH_CENTER.lat, "lng": HAM_NINH_CENTER.lng},
             "max_places_result_count": 5,
@@ -135,8 +135,8 @@ async def verify_live_goong() -> int:
         print("RESULT=credential_blocked")
         return 0
 
-    settings = settings_for_goong()
-    places_service = GoongPlacesService(settings=settings)
+    settings = settings_for_google()
+    places_service = GooglePlacesService(settings=settings)
     routes_service = GoongRoutesService(settings=settings)
     try:
         request = PlaceSearchRequest(
