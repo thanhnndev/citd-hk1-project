@@ -357,8 +357,7 @@ async def test_context_free_greeting_does_not_reuse_previous_query(ham_ninh_chun
 
     assert response.intent == "conversational"
     assert response.citations == []
-    assert retriever.queries[-1] == "chào bạn"
-    assert "tìm khách sạn" not in retriever.queries[-1]
+    assert retriever.queries == []
 
 
 @pytest.mark.asyncio
@@ -383,8 +382,43 @@ async def test_stream_context_free_greeting_skips_retrieval_payload(ham_ninh_chu
     assert events[-2:] == ["[CITATIONS] []", "[DONE]"]
     assert any("Chào bạn" in event for event in events)
     assert not any("Lang chai Ham Ninh" in event for event in events)
-    assert llm.queries == ["tìm khách sạn"]
-    assert retriever.queries[-1] == "chào bạn"
+    assert llm.queries == []
+    assert retriever.queries == []
+
+
+@pytest.mark.asyncio
+async def test_agentic_follow_up_capability_question_does_not_retrieve(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        llm_service=FakeLLM(),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    first = await service.answer(session_id="sess-follow", message="bạn giúp được gì?", language="vi")
+    await service._save_turn("sess-follow", "bạn giúp được gì?", first.message)
+    response = await service.answer(session_id="sess-follow", message="4 nhóm gì?", language="vi")
+
+    assert response.intent == "conversational"
+    assert response.citations == []
+    assert "4 nhóm" in response.message
+    assert retriever.queries == []
+
+@pytest.mark.asyncio
+async def test_agentic_ambiguous_route_asks_clarification_without_sources(ham_ninh_chunk):
+    service = AgentService(
+        retriever=FakeRetriever([ham_ninh_chunk]),
+        llm_service=FakeLLM(),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(session_id="sess-route", message="tìm đường thế nào?", language="vi")
+
+    assert response.intent == "conversational"
+    assert response.citations == []
+    assert "điểm xuất phát" in response.message
 
 @pytest.mark.asyncio
 async def test_fallback_answer_strips_raw_retrieval_preamble(ham_ninh_chunk):

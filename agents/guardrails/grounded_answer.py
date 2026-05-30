@@ -51,7 +51,7 @@ _NAVIGATION_KEYWORDS_VI = {
 _INTENT_SYSTEM_PROMPT = """\
 Classify the user's intent into exactly ONE of these categories:
 
-- conversational: Greetings, small talk, thanks, or very short messages with no information need (e.g. "chào", "hello", "cảm ơn", "ok", "hi bạn")
+- conversational: Greetings, small talk, thanks, capability/help questions, or very short messages with no information need (e.g. "chào", "hello", "cảm ơn", "bạn có thể giúp gì", "what can you do")
 - restaurant_search: Looking for places to eat, drink, or stay (restaurants, cafés, hotels, homestays, lodging, accommodation)
 - navigation: Asking for directions, routes, maps, distances, or how to get somewhere
 - cultural_query: Asking about history, culture, traditions, festivals, landmarks, or general info about Hàm Ninh
@@ -82,16 +82,24 @@ def detect_intent(message: str) -> str:
 
     lower = stripped.lower()
 
-    # Conversational / greeting — no info need, skip RAG
-    conversational = (
+    # Conversational / capability turns have no information need, so skip RAG.
+    conversational_exact_or_edge = (
         "chào", "hello", "hi", "hey", "xin chào",
         "cảm ơn", "thanks", "thank", "ok", "oke",
         "tạm biệt", "bye", "goodbye",
         "hẹn gặp", "good morning", "good evening",
     )
-    for word in conversational:
+    for word in conversational_exact_or_edge:
         if lower == word or lower.startswith(word + " ") or lower.endswith(" " + word):
             return "conversational"
+
+    conversational_help = (
+        "bạn có thể giúp gì", "bạn giúp được gì", "bạn làm được gì",
+        "có thể giúp gì", "giúp được gì", "làm được gì",
+        "what can you do", "how can you help", "help me",
+    )
+    if any(phrase in lower for phrase in conversational_help):
+        return "conversational"
 
     # Check recommendation-seeking queries first → Places API
     recommendation_phrases = (

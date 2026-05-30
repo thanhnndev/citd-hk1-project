@@ -10,6 +10,7 @@ interface WelcomeScreenProps {
     subtitle: string;
     promptChips: string[];
     badgeLabel?: string;
+    disclosure?: string;
   };
 }
 
@@ -31,6 +32,9 @@ export function WelcomeScreen({ onPromptClick, translations }: WelcomeScreenProp
       </h2>
       <p className="mt-4 max-w-xl text-base leading-8 text-muted-foreground">
         {translations.subtitle}
+      </p>
+      <p className="mt-3 max-w-xl rounded-2xl border border-[#0b5f63]/10 bg-white/65 px-4 py-3 text-xs leading-5 text-[#5d7373] shadow-sm">
+        {translations.disclosure ?? "AI assistant: verify important route, opening-hour, and safety details with a map or official source."}
       </p>
 
       <div className="mt-8 grid w-full max-w-2xl gap-2 sm:grid-cols-2">

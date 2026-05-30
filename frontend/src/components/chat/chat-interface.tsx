@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { MessageBubble } from "./message-bubble";
+import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
-import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult } from "@/lib/chat-api";
-import { ArrowUp, RotateCcw, Loader2, Trash2, ShieldCheck, Waves } from "lucide-react";
+import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
+import { ArrowDown, ArrowUp, Compass, Loader2, RotateCcw, ShieldCheck, Trash2, Waves } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -16,6 +16,8 @@ interface Message {
   fallback?: boolean;
   langfuseTraceId?: string | null;
   cacheHit?: boolean;
+  status?: MessageStatus;
+  streamStatus?: ChatStreamStatus | null;
 }
 
 interface ChatInterfaceProps {
@@ -44,21 +46,72 @@ interface ChatInterfaceProps {
   };
 }
 
+const SOURCE_LABELS = {
+  vi: { one: "nguồn", many: "nguồn", searching: "đang xử lý", inputHint: "Enter để gửi • Shift+Enter xuống dòng", scroll: "Xuống cuối", retrying: "Đang thử lại..." },
+  en: { one: "source", many: "sources", searching: "working", inputHint: "Enter to send • Shift+Enter for newline", scroll: "Jump to latest", retrying: "Retrying..." },
+} as const;
+
+const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
+  vi: {
+    understanding: "Đang hiểu câu hỏi...",
+    using_history: "Đang dùng ngữ cảnh cuộc trò chuyện...",
+    searching_knowledge: "Đang tìm nguồn phù hợp...",
+    checking_places: "Đang kiểm tra địa điểm/đường đi...",
+    composing: "Đang tổng hợp câu trả lời...",
+  },
+  en: {
+    understanding: "Understanding your question...",
+    using_history: "Using conversation context...",
+    searching_knowledge: "Searching relevant sources...",
+    checking_places: "Checking places/routes...",
+    composing: "Composing the answer...",
+  },
+};
+
 export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
   const [sessionId] = useState(() => crypto.randomUUID());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
   const language = (locale === "en" ? "en" : "vi") as "vi" | "en";
+  const labels = SOURCE_LABELS[language];
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+  }, []);
+
+  useEffect(() => {
+    if (isNearBottom || loading) {
+      scrollToBottom("smooth");
+    }
+  }, [messages, isNearBottom, loading, scrollToBottom]);
+
+  const handleScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const distance = target.scrollHeight - target.scrollTop - target.clientHeight;
+    setIsNearBottom(distance < 120);
+  }, []);
+
+  const updateLastAssistant = useCallback((updater: (message: Message) => Message) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const lastIndex = next.length - 1;
+      const lastMessage = next[lastIndex];
+
+      if (!lastMessage || lastMessage.role !== "assistant") {
+        return prev;
+      }
+
+      next[lastIndex] = updater(lastMessage);
+      return next;
+    });
+  }, []);
 
   const handleSubmit = useCallback(
     async (overrideMessage?: string) => {
@@ -67,49 +120,18 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       setError(null);
       setLoading(true);
+      setIsNearBottom(true);
 
-      // Append user message and the assistant placeholder that streaming will fill.
-      const userMsg: Message = { role: "user", content: messageText };
+      const userMsg: Message = { role: "user", content: messageText, status: "complete" };
       const assistantPlaceholder: Message = {
         role: "assistant",
         content: "",
         citations: [],
+        status: "submitted",
+        streamStatus: "understanding",
       };
       setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
       setInput("");
-
-      const appendToAssistant = (token: string) => {
-        setMessages((prev) => {
-          const next = [...prev];
-          const lastIndex = next.length - 1;
-          const lastMessage = next[lastIndex];
-
-          if (!lastMessage || lastMessage.role !== "assistant") {
-            return prev;
-          }
-
-          next[lastIndex] = {
-            ...lastMessage,
-            content: lastMessage.content + token,
-          };
-          return next;
-        });
-      };
-
-      const updateAssistantCitations = (citations: Citation[]) => {
-        setMessages((prev) => {
-          const next = [...prev];
-          const lastIndex = next.length - 1;
-          const lastMessage = next[lastIndex];
-
-          if (!lastMessage || lastMessage.role !== "assistant") {
-            return prev;
-          }
-
-          next[lastIndex] = { ...lastMessage, citations };
-          return next;
-        });
-      };
 
       const removeEmptyAssistantPlaceholder = () => {
         setMessages((prev) => {
@@ -122,45 +144,22 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       };
 
       const renderPostFallback = async () => {
+        updateLastAssistant((message) => ({ ...message, status: "submitted" }));
         const response: ChatResponse = await sendChat(messageText, sessionId, language);
-        const displayText =
-          response.message && response.message.trim()
-            ? response.message
-            : translations.noEvidence;
+        const displayText = response.message?.trim() ? response.message : translations.noEvidence;
 
-        setMessages((prev) => {
-          const next = [...prev];
-          const lastIndex = next.length - 1;
-          const lastMessage = next[lastIndex];
-
-          if (lastMessage?.role === "assistant") {
-            next[lastIndex] = {
-              ...lastMessage,
-              content: displayText,
-              citations: response.citations ?? [],
-              places: response.places ?? [],
-              guardrailStatus: response.guardrail_status,
-              fallback: response.fallback,
-              langfuseTraceId: response.langfuse_trace_id,
-              cacheHit: response.cache_hit,
-            };
-            return next;
-          }
-
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: displayText,
-              citations: response.citations ?? [],
-              places: response.places ?? [],
-              guardrailStatus: response.guardrail_status,
-              fallback: response.fallback,
-              langfuseTraceId: response.langfuse_trace_id,
-              cacheHit: response.cache_hit,
-            },
-          ];
-        });
+        updateLastAssistant((message) => ({
+          ...message,
+          content: displayText,
+          citations: response.citations ?? [],
+          places: response.places ?? [],
+          guardrailStatus: response.guardrail_status,
+          fallback: response.fallback,
+          langfuseTraceId: response.langfuse_trace_id,
+          cacheHit: response.cache_hit,
+          status: "complete",
+          streamStatus: null,
+        }));
       };
 
       try {
@@ -168,9 +167,18 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         let streamErrorMessage = translations.error;
 
         await streamChat(messageText, sessionId, language, {
-          onToken: appendToAssistant,
-          onCitations: updateAssistantCitations,
-          onDone: () => setLoading(false),
+          onOpen: () => updateLastAssistant((message) => ({ ...message, status: "streaming" })),
+          onStatus: (streamStatus) => updateLastAssistant((message) => ({ ...message, streamStatus, status: "streaming" })),
+          onToken: (token) => updateLastAssistant((message) => ({
+            ...message,
+            content: message.content + token,
+            status: "streaming",
+          })),
+          onCitations: (citations) => updateLastAssistant((message) => ({ ...message, citations })),
+          onDone: () => {
+            updateLastAssistant((message) => ({ ...message, status: "complete", streamStatus: null }));
+            setLoading(false);
+          },
           onError: (err) => {
             streamFailed = true;
             streamErrorMessage = err;
@@ -193,11 +201,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         setLoading(false);
       }
     },
-    [input, loading, sessionId, language, translations],
+    [input, loading, sessionId, language, translations, updateLastAssistant],
   );
 
   const handleRetry = useCallback(() => {
-    // Find the last user message and retry it
     const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
     if (lastUserMessage) {
       handleSubmit(lastUserMessage.content);
@@ -209,6 +216,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     setError(null);
     setLoading(false);
     setInput("");
+    setIsNearBottom(true);
+    textareaRef.current?.focus();
   }, []);
 
   const handlePromptClick = useCallback(
@@ -220,7 +229,6 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
   const handleRetryMessage = useCallback(
     (index: number) => {
-      // Find the user message before this assistant message and re-send it
       if (index > 0 && messages[index - 1]?.role === "user") {
         handleSubmit(messages[index - 1].content);
       }
@@ -235,141 +243,182 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     }
   };
 
-  // Auto-resize textarea
   useEffect(() => {
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = "auto";
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
     }
   }, [input]);
 
-  return (
-    <div className="relative flex h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(20,146,139,0.22),transparent_32%),linear-gradient(135deg,#f8f3e8_0%,#e8f4f1_48%,#fff8ed_100%)] md:h-[calc(100dvh-5rem)]">
-      <div className="pointer-events-none absolute -left-20 top-20 size-56 rounded-full bg-[#f2a65a]/20 blur-3xl" />
-      <div className="pointer-events-none absolute -right-24 bottom-24 size-64 rounded-full bg-[#0b8f8a]/18 blur-3xl" />
+  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const sourceCount = lastAssistant?.citations?.length ?? 0;
+  const activeStatus = lastAssistant?.streamStatus
+    ? STATUS_LABELS[language][lastAssistant.streamStatus]
+    : loading
+      ? labels.searching
+      : sourceCount > 0
+        ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
+        : "";
 
-      <header className="relative z-10 border-b border-white/60 bg-white/55 px-4 py-3 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary">
-              <Waves className="size-3.5" />
-              Ham Ninh Guide
+  return (
+    <div className="relative flex h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-[#f4eddf] md:h-[calc(100dvh-5rem)]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(12,95,99,0.18),transparent_34%),radial-gradient(circle_at_86%_22%,rgba(232,137,58,0.20),transparent_30%),linear-gradient(135deg,#f7f0e4_0%,#e3f2ee_54%,#fff8e9_100%)]" />
+      <div className="pointer-events-none absolute left-0 top-0 h-full w-full opacity-[0.08] [background-image:linear-gradient(90deg,#0b5f63_1px,transparent_1px),linear-gradient(#0b5f63_1px,transparent_1px)] [background-size:44px_44px]" />
+
+      <header className="relative z-10 border-b border-[#0b5f63]/10 bg-[#fffaf0]/78 px-4 py-3 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#0b5f63] text-[#fffaf0] shadow-lg shadow-[#0b5f63]/20">
+              <Compass className="size-5" />
             </div>
-            <h1 className="mt-1 text-lg font-semibold tracking-tight text-foreground md:text-2xl">
-              {translations.title}
-            </h1>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#0b5f63]">
+                <Waves className="size-3.5" />
+                Ham Ninh Guide
+              </div>
+              <h1 className="mt-0.5 truncate text-lg font-semibold tracking-tight text-[#123436] md:text-2xl">
+                {translations.title}
+              </h1>
+            </div>
           </div>
-          <div className="hidden items-center gap-2 rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-xs text-muted-foreground shadow-sm md:flex">
-            <ShieldCheck className="size-3.5 text-primary" />
-            {language === "vi" ? "Trả lời mềm, có kiểm chứng" : "Soft, grounded answers"}
+          <div className="hidden items-center gap-2 rounded-full border border-[#0b5f63]/15 bg-white/70 px-3 py-1.5 text-xs text-[#426365] shadow-sm md:flex">
+            <ShieldCheck className="size-3.5 text-[#0b5f63]" />
+            {language === "vi" ? "Trợ lý AI - hãy kiểm chứng thông tin quan trọng" : "AI assistant - verify important details"}
           </div>
         </div>
       </header>
 
-      {/* Messages area */}
       <div
-        className="relative z-10 flex-1 space-y-4 overflow-y-auto px-4 py-5 md:px-6"
+        ref={scrollRef}
+        className="relative z-10 flex-1 overflow-y-auto px-3 py-5 md:px-6"
         role="log"
         aria-live="polite"
         aria-label={translations.title}
+        onScroll={handleScroll}
       >
-        {messages.length === 0 && !error && (
-          <WelcomeScreen
-            onPromptClick={handlePromptClick}
-            translations={{
-              greeting: translations.welcomeGreeting ?? translations.title,
-              subtitle: translations.welcomeSubtitle ?? translations.placeholder,
-              promptChips: translations.prompts ?? [],
-              badgeLabel: language === "vi" ? "Trợ lý du lịch địa phương" : "Local AI travel guide",
-            }}
-          />
-        )}
+        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-5">
+          {messages.length === 0 && !error && (
+            <WelcomeScreen
+              onPromptClick={handlePromptClick}
+              translations={{
+                greeting: translations.welcomeGreeting ?? translations.title,
+                subtitle: translations.welcomeSubtitle ?? translations.placeholder,
+                promptChips: translations.prompts ?? [],
+                badgeLabel: language === "vi" ? "Trợ lý du lịch địa phương" : "Local AI travel guide",
+                disclosure: language === "vi"
+                  ? "Đây là trợ lý AI; thông tin có thể sai. Với đường đi, giờ mở cửa hoặc an toàn, hãy kiểm tra lại trên bản đồ/nguồn chính thức."
+                  : "This is an AI assistant and can be wrong. For routes, opening hours, or safety, verify with a map or official source.",
+              }}
+            />
+          )}
 
-        {messages.map((msg, i) => (
-          <MessageBubble
-            key={i}
-            role={msg.role}
-            content={msg.content}
-            citations={msg.citations}
-            places={msg.places}
-            guardrailStatus={msg.guardrailStatus}
-            fallback={msg.fallback}
-            langfuseTraceId={msg.langfuseTraceId}
-            cacheHit={msg.cacheHit}
-            typingLabel={translations.typing}
-            onRetry={msg.role === "assistant" ? () => handleRetryMessage(i) : undefined}
-            placeTranslations={{
-              placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
-              viewOnMap: translations.viewOnMap ?? "View on Map",
-              scoreLabel: translations.scoreLabel ?? "Score",
-              noRating: translations.noRating ?? "No rating",
-            }}
-          />
-        ))}
+          {messages.map((msg, i) => (
+            <MessageBubble
+              key={i}
+              role={msg.role}
+              content={msg.content}
+              citations={msg.citations}
+              places={msg.places}
+              guardrailStatus={msg.guardrailStatus}
+              fallback={msg.fallback}
+              langfuseTraceId={msg.langfuseTraceId}
+              cacheHit={msg.cacheHit}
+              status={msg.status}
+              streamStatusLabel={msg.streamStatus ? STATUS_LABELS[language][msg.streamStatus] : undefined}
+              typingLabel={translations.typing}
+              assistantLabel={language === "vi" ? "Trợ lý Hàm Ninh" : "Ham Ninh Assistant"}
+              userLabel={language === "vi" ? "Bạn" : "You"}
+              sourcesLabel={translations.citations}
+              onRetry={msg.role === "assistant" ? () => handleRetryMessage(i) : undefined}
+              actionTranslations={{
+                copy: translations.copy,
+                copied: translations.copied,
+                retry: translations.retryMessage,
+              }}
+              placeTranslations={{
+                placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
+                viewOnMap: translations.viewOnMap ?? "View on Map",
+                scoreLabel: translations.scoreLabel ?? "Score",
+                noRating: translations.noRating ?? "No rating",
+              }}
+            />
+          ))}
 
-        {/* Error state */}
-        {error && (
-          <div className="flex justify-center">
-            <div className="bg-destructive/10 border border-destructive/20 rounded-xl px-4 py-3 max-w-md text-center">
-              <p className="text-sm text-destructive">{error}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2"
-                onClick={handleRetry}
-                disabled={loading}
-              >
-                <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                {translations.retry}
-              </Button>
+          {error && (
+            <div className="flex justify-center">
+              <div className="max-w-md rounded-2xl border border-destructive/20 bg-white/85 px-4 py-3 text-center shadow-lg shadow-destructive/5">
+                <p className="text-sm text-destructive">{error}</p>
+                <Button variant="outline" size="sm" className="mt-3 rounded-full" onClick={handleRetry} disabled={loading}>
+                  <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                  {translations.retry}
+                </Button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        <div ref={messagesEndRef} />
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
-      {/* Input area */}
-      <div className="relative z-10 border-t border-white/60 bg-white/65 px-4 py-3 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[1.35rem] border border-white/80 bg-white/85 p-2 shadow-lg shadow-slate-900/8">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={translations.placeholder}
-            disabled={loading}
-            rows={1}
-            className="max-h-[120px] min-h-[44px] flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2.5 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50"
-            aria-label={translations.placeholder}
-          />
-          {messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-2xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              onClick={handleClearConversation}
+      {!isNearBottom && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="absolute bottom-28 left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/80 bg-white/90 shadow-lg"
+          onClick={() => scrollToBottom("smooth")}
+        >
+          <ArrowDown className="size-3.5" />
+          {labels.scroll}
+        </Button>
+      )}
+
+      <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/82 px-3 py-3 backdrop-blur-xl md:px-4">
+        <div className="mx-auto max-w-4xl">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.72rem] text-[#5d7373]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {activeStatus && loading && <Loader2 className="size-3 animate-spin" />}
+              {activeStatus && <span>{activeStatus}</span>}
+            </div>
+            <span className="hidden sm:inline">{labels.inputHint}</span>
+          </div>
+          <div className="flex items-end gap-2 rounded-[1.45rem] border border-white/90 bg-white/90 p-2 shadow-2xl shadow-[#0b5f63]/10 ring-1 ring-[#0b5f63]/8">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={translations.placeholder}
               disabled={loading}
-              aria-label={translations.newConversation ?? "New conversation"}
-              title={translations.newConversation ?? "New conversation"}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-          <Button
-            onClick={() => handleSubmit()}
-            disabled={loading || !input.trim()}
-            size="icon"
-            className="h-11 w-11 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50]"
-            aria-label={translations.send}
-          >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArrowUp className="h-4 w-4" />
+              rows={1}
+              className="max-h-36 min-h-11 flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2.5 text-sm leading-6 text-[#123436] placeholder:text-[#6f8584] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50"
+              aria-label={translations.placeholder}
+            />
+            {messages.length > 0 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-11 w-11 shrink-0 rounded-2xl text-[#6f8584] hover:bg-destructive/10 hover:text-destructive"
+                onClick={handleClearConversation}
+                disabled={loading}
+                aria-label={translations.newConversation ?? "New conversation"}
+                title={translations.newConversation ?? "New conversation"}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             )}
-          </Button>
+            <Button
+              onClick={() => handleSubmit()}
+              disabled={loading || !input.trim()}
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50]"
+              aria-label={translations.send}
+              title={translations.send}
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

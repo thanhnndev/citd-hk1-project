@@ -74,10 +74,19 @@ export interface ChatResponse {
   latency_ms: number;
 }
 
+export type ChatStreamStatus =
+  | "understanding"
+  | "using_history"
+  | "searching_knowledge"
+  | "checking_places"
+  | "composing";
+
 export interface StreamChatCallbacks {
   onToken: (token: string) => void;
   onCitations: (citations: Citation[]) => void;
+  onStatus?: (status: ChatStreamStatus) => void;
   onDone: () => void;
+  onOpen?: () => void;
   onError: (error: string) => void;
 }
 
@@ -151,6 +160,8 @@ export async function streamChat(
     return;
   }
 
+  callbacks.onOpen?.();
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -176,6 +187,11 @@ export async function streamChat(
         if (data === "[DONE]") {
           callbacks.onDone();
           return;
+        }
+
+        if (data.startsWith("[STATUS] ")) {
+          callbacks.onStatus?.(data.slice(9) as ChatStreamStatus);
+          continue;
         }
 
         if (data.startsWith("[CITATIONS] ")) {

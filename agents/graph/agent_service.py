@@ -31,6 +31,7 @@ from app.models.response import ChatResponse, Citation
 from agents.guardrails.grounded_answer import GroundedAnswerService
 from agents.tools.retriever import Retriever
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
+from agents.services.agentic_chat_service import AgenticChatService
 
 try:
     from langgraph.graph import END, StateGraph
@@ -280,6 +281,16 @@ class AgentService:
         self._semantic_cache = semantic_cache
         self._embedding_service = embedding_service
         self._langfuse_client = langfuse_client
+        self._agentic_chat = (
+            AgenticChatService(
+                retriever=retriever,
+                hybrid_retriever=hybrid_retriever,
+                llm_service=llm_service,
+                place_recommendation_service=place_recommendation_service,
+            )
+            if llm_service is not None
+            else None
+        )
         self._graph = self._build_graph()
 
     def _build_graph(self) -> Any | None:
@@ -331,6 +342,24 @@ class AgentService:
         """
         t0 = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
+
+        if self._agentic_chat is not None:
+            try:
+                response = await self._agentic_chat.answer(
+                    session_id=session_id,
+                    message=message,
+                    language=language,
+                    history=state.get("history", []),
+                )
+                await self._save_turn(session_id, message, response.message)
+                logger.info(
+                    "agent.agentic_end", session_id=session_id,
+                    retrieval_count=len(response.citations), fallback=response.fallback,
+                    latency_ms=round((time.perf_counter() - t0) * 1000, 3),
+                )
+                return response
+            except Exception as exc:
+                logger.warning("agent.agentic_fallback", session_id=session_id, reason=type(exc).__name__)
 
         trace_id: str | None = None
         if self._langfuse_client is not None:
@@ -391,6 +420,24 @@ class AgentService:
     async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         """Yield answer tokens, then citations marker and DONE marker."""
         state = await self._initial_state(session_id, message, language)
+
+        if self._agentic_chat is not None:
+            try:
+                answer_text = ""
+                async for event in self._agentic_chat.answer_stream(
+                    session_id=session_id,
+                    message=message,
+                    language=language,
+                    history=state.get("history", []),
+                ):
+                    if not event.startswith("["):
+                        answer_text += event
+                    yield event
+                await self._save_turn(session_id, message, answer_text)
+                logger.info("agent.agentic_stream_complete", session_id=session_id)
+                return
+            except Exception as exc:
+                logger.warning("agent.agentic_stream_fallback", session_id=session_id, reason=type(exc).__name__)
 
         trace_id: str | None = None
         if self._langfuse_client is not None:
@@ -662,13 +709,19 @@ class AgentService:
         lang = (state.get("language") or "vi").lower()
 
         if lang == "vi":
-            text = ("Chào bạn! Mình là trợ lý du lịch Hàm Ninh. "
-                    "Mình có thể giúp tìm địa điểm ăn ở, đường đi, hoặc kể ngắn gọn "
-                    "về văn hóa và lịch sử làng chài. Bạn muốn bắt đầu từ đâu?")
+            text = ("Mình có thể giúp bạn theo 4 nhóm chính:\n"
+                    "- Tìm quán ăn, hải sản, cà phê hoặc chỗ lưu trú quanh Hàm Ninh.\n"
+                    "- Gợi ý đường đi, khu vực nên ghé và cách sắp lịch tham quan.\n"
+                    "- Tóm tắt văn hóa, lịch sử, nghề biển và trải nghiệm địa phương.\n"
+                    "- Trả lời có nguồn khi câu hỏi cần kiểm chứng; còn chào hỏi thì mình trò chuyện bình thường.\n\n"
+                    "Bạn có thể hỏi kiểu: 'Gợi ý quán hải sản ít đông' hoặc 'Kể ngắn gọn lịch sử làng chài'.")
         else:
-            text = ("Hello! I'm your Ham Ninh travel assistant. I can help with places "
-                    "to eat or stay, directions, and concise local culture or history. "
-                    "Where would you like to start?")
+            text = ("I can help in four practical ways:\n"
+                    "- Find food, seafood, cafes, or stays around Ham Ninh.\n"
+                    "- Suggest directions, areas to visit, and simple trip planning.\n"
+                    "- Summarize local culture, history, fishing life, and experiences.\n"
+                    "- Use sources when a question needs evidence; small talk stays conversational.\n\n"
+                    "Try: 'Suggest a quiet seafood spot' or 'Give me a short village history'.")
         return ChatResponse(
             session_id=state["session_id"], message=text,
             citations=[], places=[], intent="conversational",
