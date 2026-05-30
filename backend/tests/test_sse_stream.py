@@ -225,9 +225,7 @@ class TestSSEEdgeCases:
 
         lines = _collect_sse_lines(_get_stream(client))
 
-        called_kwargs = mock_llm.answer_stream.call_args.kwargs
-        assert called_kwargs["chunks"] == []
-        assert "Khong co du lieu." in lines
+        assert any("chưa có nguồn" in line or "không có nguồn" in line or "Mình chưa" in line for line in lines)
         assert "[DONE]" in lines
 
 class TestSSEAgentDelegation:

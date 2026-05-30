@@ -105,7 +105,7 @@ async def test_non_place_cultural_query_does_not_call_recommendation_service() -
     response = await service.answer(session_id="s-culture", message="Kể về lịch sử làng chài Hàm Ninh", language="vi")
 
     recommender.recommend.assert_not_called()
-    llm.answer.assert_awaited_once()
+    llm.answer.assert_not_called()
     assert response.intent == "cultural_query"
     assert response.places == []
 
@@ -127,9 +127,10 @@ async def test_missing_recommendation_dependency_falls_through_to_llm() -> None:
 
     response = await service.answer(session_id="s-missing", message="Recommend a place in Ham Ninh", language="en")
 
-    # Soft routing: LLM handles the response when Places API is unavailable
-    llm.answer.assert_awaited_once()
+    # Tool policy: place requests never fall back to document RAG/LLM when Places is unavailable.
+    llm.answer.assert_not_called()
     assert response.fallback is False
+    assert response.places == []
 
 
 @pytest.mark.asyncio
@@ -151,10 +152,10 @@ async def test_recommendation_exception_falls_through_to_llm() -> None:
 
     response = await service.answer(session_id="s-error", message="Gợi ý dịch vụ ở Hàm Ninh", language="vi")
 
-    # Soft routing: LLM handles the response when Places API fails
-    # Error message is not leaked to user
+    # Tool policy: provider errors are reported honestly and not leaked.
     assert "secret provider payload" not in response.message
-    llm.answer.assert_awaited_once()
+    llm.answer.assert_not_called()
+    assert response.places == []
 
 
 @pytest.mark.asyncio
