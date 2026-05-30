@@ -44,7 +44,11 @@ def _error_stream(reason: str) -> StreamingResponse:
 
 
 def _sse_payload(value: str) -> str:
-    return f"data: {value}\n\n"
+    # SSE data payloads cannot contain raw newlines in a single data line.
+    # Emit multi-line payloads using repeated data: fields so clients can
+    # reconstruct assistant messages with paragraphs/lists intact.
+    lines = str(value).splitlines() or [""]
+    return "".join(f"data: {line}\n" for line in lines) + "\n"
 
 
 def _streaming_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:

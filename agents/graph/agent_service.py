@@ -31,7 +31,7 @@ from app.models.response import ChatResponse, Citation
 from agents.guardrails.grounded_answer import GroundedAnswerService
 from agents.tools.retriever import Retriever
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
-from agents.services.agentic_chat_service import AgenticChatService
+from agents.services.agentic_chat_service import AgenticChatService, _safe_direct_answer
 
 try:
     from langgraph.graph import END, StateGraph
@@ -288,7 +288,7 @@ class AgentService:
                 llm_service=llm_service,
                 place_recommendation_service=place_recommendation_service,
             )
-            if llm_service is not None
+            if llm_service is not None and hasattr(llm_service, "_client")
             else None
         )
         self._graph = self._build_graph()
@@ -342,6 +342,20 @@ class AgentService:
         """
         t0 = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
+
+        direct = _safe_direct_answer(message, state.get("history", []), "en" if language == "en" else "vi")
+        if direct is not None:
+            response = ChatResponse(
+                session_id=session_id,
+                message=direct,
+                citations=[],
+                places=[],
+                intent="conversational",
+                latency_ms=round((time.perf_counter() - t0) * 1000, 3),
+                fallback=False,
+            )
+            await self._save_turn(session_id, message, direct)
+            return response
 
         if self._agentic_chat is not None:
             try:
@@ -420,6 +434,13 @@ class AgentService:
     async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         """Yield answer tokens, then citations marker and DONE marker."""
         state = await self._initial_state(session_id, message, language)
+
+        direct = _safe_direct_answer(message, state.get("history", []), "en" if language == "en" else "vi")
+        if direct is not None:
+            await self._save_turn(session_id, message, direct)
+            yield "[STATUS] using_history"
+            yield direct
+            return
 
         if self._agentic_chat is not None:
             try:

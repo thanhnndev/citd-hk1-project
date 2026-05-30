@@ -181,36 +181,34 @@ export async function streamChat(
         .split("\n")
         .filter((line) => line.startsWith("data: "));
 
-      for (const line of dataLines) {
-        const data = line.slice(6);
+      const data = dataLines.map((line) => line.slice(6)).join("\n");
 
-        if (data === "[DONE]") {
-          callbacks.onDone();
-          return;
-        }
-
-        if (data.startsWith("[STATUS] ")) {
-          callbacks.onStatus?.(data.slice(9) as ChatStreamStatus);
-          continue;
-        }
-
-        if (data.startsWith("[CITATIONS] ")) {
-          try {
-            callbacks.onCitations(JSON.parse(data.slice(12)) as Citation[]);
-          } catch {
-            callbacks.onError("Invalid citations payload");
-            return;
-          }
-          continue;
-        }
-
-        if (data.startsWith("[ERROR] ")) {
-          callbacks.onError(data.slice(8));
-          return;
-        }
-
-        callbacks.onToken(data);
+      if (data === "[DONE]") {
+        callbacks.onDone();
+        return;
       }
+
+      if (data.startsWith("[STATUS] ")) {
+        callbacks.onStatus?.(data.slice(9) as ChatStreamStatus);
+        continue;
+      }
+
+      if (data.startsWith("[CITATIONS] ")) {
+        try {
+          callbacks.onCitations(JSON.parse(data.slice(12)) as Citation[]);
+        } catch {
+          callbacks.onError("Invalid citations payload");
+          return;
+        }
+        continue;
+      }
+
+      if (data.startsWith("[ERROR] ")) {
+        callbacks.onError(data.slice(8));
+        return;
+      }
+
+      callbacks.onToken(data);
     }
   }
 }

@@ -149,16 +149,14 @@ class AgenticChatService:
         if safe_direct is not None:
             yield _status("using_history")
             yield safe_direct
-            yield "[CITATIONS] []"
-            yield "[DONE]"
+            self._last_citations = []
             self._last_intent = "conversational"
             return
 
         if self._client is None:
             clarification = _clarification_answer(message, lang)
             yield clarification
-            yield "[CITATIONS] []"
-            yield "[DONE]"
+            self._last_citations = []
             self._last_intent = "clarification"
             return
 
@@ -177,8 +175,7 @@ class AgenticChatService:
         if not tool_calls:
             content = assistant.content or _clarification_answer(message, lang)
             yield content
-            yield "[CITATIONS] []"
-            yield "[DONE]"
+            self._last_citations = []
             self._last_intent = "conversational"
             return
 
@@ -221,7 +218,6 @@ class AgenticChatService:
 
         self._last_citations = citations[:5]
         yield f"[CITATIONS] {json.dumps([c.model_dump() for c in self._last_citations], ensure_ascii=False)}"
-        yield "[DONE]"
 
     def _build_messages(self, *, message: str, language: str, history: list[dict[str, str]]) -> list[dict[str, Any]]:
         lang_name = "Vietnamese" if language == "vi" else "English"
@@ -264,8 +260,14 @@ def _safe_direct_answer(message: str, history: list[dict[str, str]], language: s
     if _is_greeting(normalized):
         return _GREETING_TEXT[language]
 
+    if _is_bare_follow_up(normalized, history):
+        return _expand_recent_assistant(history, language)
+
     if _is_capability_question(normalized) or _asks_about_previous_groups(normalized, history):
         return _CAPABILITY_TEXT[language]
+
+    if _is_place_capability_question(normalized):
+        return _place_capability_answer(language)
 
     if _is_ai_disclosure_question(normalized):
         return _AI_DISCLOSURE[language]
@@ -286,10 +288,41 @@ def _is_capability_question(normalized: str) -> bool:
         r"bạn .*hỗ trợ.*gì",
         r"giúp được gì",
         r"có thể giúp gì",
+        r"giúp được gì nữa",
+        r"vấn đề là giúp được gì",
         r"what can you do",
         r"how can you help",
     )
     return any(re.search(pattern, normalized) for pattern in patterns)
+
+def _is_place_capability_question(normalized: str) -> bool:
+    has_place_need = any(term in normalized for term in ("nhà hàng", "khách sạn", "hotel", "restaurant", "quán", "lưu trú"))
+    asks_capability = any(term in normalized for term in ("được không", "có được", "có thể", "can you"))
+    return has_place_need and asks_capability
+
+def _place_capability_answer(language: str) -> str:
+    if language == "vi":
+        return (
+            "Được. Mình có thể tìm nhà hàng, quán hải sản, khách sạn/chỗ lưu trú quanh Hàm Ninh. "
+            "Bạn cho mình biết bạn muốn tìm loại nào, ngân sách/khu vực gần đâu, và có yêu cầu như đi bộ được, phù hợp gia đình hay cần đường đi không?"
+        )
+    return (
+        "Yes. I can help find restaurants, seafood spots, hotels, and stays around Ham Ninh. "
+        "Tell me the type, budget/area, and whether you need walkability, family suitability, or directions."
+    )
+
+def _is_bare_follow_up(normalized: str, history: list[dict[str, str]]) -> bool:
+    if normalized not in {"?", "??", "là sao", "la sao", "ý là sao", "y la sao", "gì", "gi"}:
+        return False
+    return any(item.get("role") == "assistant" and item.get("content") for item in history[-4:])
+
+def _expand_recent_assistant(history: list[dict[str, str]], language: str) -> str:
+    recent = next((item.get("content", "") for item in reversed(history) if item.get("role") == "assistant"), "")
+    if "4 nhóm" in recent or "4 main ways" in recent:
+        return _CAPABILITY_TEXT[language]
+    if language == "vi":
+        return "Ý mình là bạn có thể hỏi trực tiếp về địa điểm, đường đi, văn hóa/lịch sử Hàm Ninh hoặc nhờ mình giải thích vì sao một gợi ý phù hợp."
+    return "I mean you can ask about places, directions, Ham Ninh culture/history, or why a recommendation fits your needs."
 
 def _asks_about_previous_groups(normalized: str, history: list[dict[str, str]]) -> bool:
     if not re.search(r"\b(4|bốn|bon)\b.*(nhóm|nhom)|nhóm gì|nhom gi", normalized):
