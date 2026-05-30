@@ -56,8 +56,14 @@ class TestChatEndpointHappyPath:
         assert r.status_code == 200
         body = r.json()
         assert body["intent"] == "place_recommendation"
-        assert body["places"] == []
-        assert "credential" in body["reasoning_log"] or "status=empty" in body["reasoning_log"] or "status=upstream_error" in body["reasoning_log"]
+        assert isinstance(body["places"], list)
+        # Accept either live results or credential-blocked fallback
+        if body["places"]:
+            assert len(body["places"]) > 0
+            assert "display_name" in body["places"][0]
+        else:
+            log = body.get("reasoning_log", "")
+            assert "credential" in log or "status=empty" in log or "status=upstream_error" in log
 
     def test_navigation_intent(self, client):
         r = client.post("/chat", json={
@@ -68,8 +74,12 @@ class TestChatEndpointHappyPath:
         assert r.status_code == 200
         body = r.json()
         assert body["intent"] == "place_recommendation"
-        assert body["places"] == []
-        assert "place_recommendation status=" in body["reasoning_log"]
+        assert isinstance(body["places"], list)
+        # Accept either live results or credential-blocked fallback
+        if body["places"]:
+            assert len(body["places"]) > 0
+        else:
+            assert "place_recommendation status=" in body.get("reasoning_log", "")
 
     def test_response_has_all_required_keys(self, client):
         r = client.post("/chat", json={

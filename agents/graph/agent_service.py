@@ -22,7 +22,7 @@ import structlog
 
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse, Citation
-from agents.guardrails.grounded_answer import GroundedAnswerService, detect_intent
+from agents.guardrails.grounded_answer import GroundedAnswerService, detect_intent, classify_intent
 from agents.tools.retriever import Retriever
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 
@@ -202,9 +202,28 @@ class AgentService:
         self._langfuse_client = langfuse_client
         self._graph = self._build_graph()
 
+        # Extract OpenAI client from LLM service for intent classification
+        self._intent_client: Any | None = None
+        self._intent_model: str = "gpt-4o-mini"
+        if llm_service is not None:
+            self._intent_client = getattr(llm_service, "_client", None)
+            self._intent_model = getattr(llm_service, "model", "gpt-4o-mini")
+
     def _build_graph(self) -> Any | None:
+        """Build LangGraph state graph for compile-time validation.
+
+        The actual routing is handled imperatively in answer()/answer_stream()
+        for better Langfuse span control and per-node timeout handling.
+        This graph exists to verify the node topology is valid.
+
+        Topology:
+          START → classify (in _initial_state)
+            ├─ place intent  → answer (skip RAG, call Places API) → END
+            └─ cultural query → retrieve (RAG) → answer (LLM) → END
+        """
         if StateGraph is None:
             return None
+
         graph = StateGraph(AgentState)
         graph.add_node("retrieve", self._retrieve_node)
         graph.add_node("answer", self._answer_node)
@@ -357,7 +376,13 @@ class AgentService:
             )
 
     async def answer(self, *, session_id: str, message: str, language: str = "vi") -> ChatResponse:
-        """Return a grounded ChatResponse and persist the turn for the session."""
+        """Return a grounded ChatResponse and persist the turn for the session.
+
+        Routing:
+          - classify intent first
+          - place/navigation intent → skip RAG, go straight to answer (Places API)
+          - cultural query → retrieve RAG → answer (LLM)
+        """
         t0 = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
 
@@ -375,42 +400,68 @@ class AgentService:
                     reason=type(exc).__name__,
                 )
 
-        # -- Retrieve node with span and per-node timeout (ROB-06) --
-        retrieve_span = self._start_langfuse_span(
-            trace_id=trace_id or "",
-            name="retrieve",
-            as_type="retriever",
-            input_data={"query": state["retrieval_query"]},
-        )
-        try:
-            state = await asyncio.wait_for(
-                self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "agent.node_timeout",
-                session_id=session_id,
-                node="retrieve",
-                timeout_seconds=NODE_TIMEOUT_RETRIEVE,
-            )
-            state["fallback_reason"] = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
-            state["chunks"] = []
-            state["citations"] = []
-        self._end_langfuse_span(
-            retrieve_span,
-            trace_id=trace_id or "",
-            name="retrieve",
-            output_data={
-                "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
-                "retrieval_count": len(state.get("chunks", [])),
-            },
+        # -- Classify node with span --
+        # (intent already set in _initial_state, log it here)
+        intent = state.get("intent", "unknown")
+        logger.info(
+            "agent.intent_classified",
+            session_id=session_id,
+            intent=intent,
         )
 
-        # -- Answer node with span and per-node timeout (ROB-06) --
+        # -- Conditional routing: skip RAG for place/navigation intents --
+        is_place = intent in {"restaurant_search", "navigation"}
+
+        if is_place:
+            # Place intent → skip RAG retrieval entirely
+            state["chunks"] = []
+            state["citations"] = []
+            logger.info(
+                "agent.skip_retrieval",
+                session_id=session_id,
+                intent=intent,
+                reason="place_query_uses_places_api_not_rag",
+            )
+        else:
+            # Cultural query → retrieve RAG first
+            retrieve_span = self._start_langfuse_span(
+                trace_id=trace_id or "",
+                name="retrieve",
+                as_type="retriever",
+                input_data={"query": state["retrieval_query"]},
+            )
+            try:
+                state = await asyncio.wait_for(
+                    self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "agent.node_timeout",
+                    session_id=session_id,
+                    node="retrieve",
+                    timeout_seconds=NODE_TIMEOUT_RETRIEVE,
+                )
+                state["fallback_reason"] = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
+                state["chunks"] = []
+                state["citations"] = []
+            self._end_langfuse_span(
+                retrieve_span,
+                trace_id=trace_id or "",
+                name="retrieve",
+                output_data={
+                    "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
+                    "retrieval_count": len(state.get("chunks", [])),
+                },
+            )
+
+        # -- Answer node --
         answer_span = self._start_langfuse_span(
             trace_id=trace_id or "",
             name="answer",
-            input_data={"chunks_count": len(state.get("chunks", []))},
+            input_data={
+                "chunks_count": len(state.get("chunks", [])),
+                "intent": intent,
+            },
         )
         try:
             state = await asyncio.wait_for(
@@ -424,7 +475,6 @@ class AgentService:
                 timeout_seconds=NODE_TIMEOUT_ANSWER,
             )
             state["fallback_reason"] = state.get("fallback_reason") or f"NodeTimeoutError(answer, {NODE_TIMEOUT_ANSWER}s)"
-            # Fall through to compose_fallback below
             state["response"] = await self._compose_fallback(state, state.get("fallback_reason", "llm_timeout"))
         response = state["response"]
         self._end_langfuse_span(
@@ -447,6 +497,7 @@ class AgentService:
         logger.info(
             "agent.graph_end",
             session_id=session_id,
+            intent=intent,
             retrieval_count=len(response.citations),
             fallback=response.fallback,
             fallback_reason=state.get("fallback_reason"),
@@ -458,7 +509,13 @@ class AgentService:
     async def answer_stream(
         self, *, session_id: str, message: str, language: str = "vi"
     ) -> AsyncGenerator[str, None]:
-        """Yield answer tokens, then a citations marker and DONE marker."""
+        """Yield answer tokens, then a citations marker and DONE marker.
+
+        Routing:
+          - classify intent first
+          - place/navigation intent → skip RAG, go straight to answer (Places API)
+          - cultural query → retrieve RAG → answer (LLM)
+        """
         state = await self._initial_state(session_id, message, language)
 
         # -- Langfuse trace creation --
@@ -475,38 +532,54 @@ class AgentService:
                     reason=type(exc).__name__,
                 )
 
-        # -- Retrieve node with span and per-node timeout (ROB-06) --
-        retrieve_span = self._start_langfuse_span(
-            trace_id=trace_id or "",
-            name="retrieve",
-            as_type="retriever",
-            input_data={"query": state["retrieval_query"]},
-        )
-        try:
-            state = await asyncio.wait_for(
-                self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "agent.node_timeout",
-                session_id=session_id,
-                node="retrieve",
-                timeout_seconds=NODE_TIMEOUT_RETRIEVE,
-            )
-            fallback_reason = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
+        # -- Classify node --
+        intent = state.get("intent", "unknown")
+        is_place = intent in {"restaurant_search", "navigation"}
+
+        # -- Conditional routing: skip RAG for place/navigation intents --
+        if is_place:
             state["chunks"] = []
             state["citations"] = []
+            fallback_reason: str | None = None
+            logger.info(
+                "agent.skip_retrieval",
+                session_id=session_id,
+                intent=intent,
+                reason="place_query_uses_places_api_not_rag",
+            )
         else:
-            fallback_reason = None
-        self._end_langfuse_span(
-            retrieve_span,
-            trace_id=trace_id or "",
-            name="retrieve",
-            output_data={
-                "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
-                "retrieval_count": len(state.get("chunks", [])),
-            },
-        )
+            # Cultural query → retrieve RAG first
+            retrieve_span = self._start_langfuse_span(
+                trace_id=trace_id or "",
+                name="retrieve",
+                as_type="retriever",
+                input_data={"query": state["retrieval_query"]},
+            )
+            try:
+                state = await asyncio.wait_for(
+                    self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "agent.node_timeout",
+                    session_id=session_id,
+                    node="retrieve",
+                    timeout_seconds=NODE_TIMEOUT_RETRIEVE,
+                )
+                fallback_reason = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
+                state["chunks"] = []
+                state["citations"] = []
+            else:
+                fallback_reason = None
+            self._end_langfuse_span(
+                retrieve_span,
+                trace_id=trace_id or "",
+                name="retrieve",
+                output_data={
+                    "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
+                    "retrieval_count": len(state.get("chunks", [])),
+                },
+            )
 
         answer_text = ""
         citations = state.get("citations", [])
@@ -517,6 +590,7 @@ class AgentService:
             session_id=session_id,
             checkpoint_mode=self.checkpoint_mode,
             retrieval_count=len(citations),
+            intent=intent,
         )
         if self._is_place_intent(state):
             # -- Place recommendation span --
@@ -623,6 +697,20 @@ class AgentService:
             history = []
         prior_user = next((h["content"] for h in reversed(history) if h.get("role") == "user"), "")
         retrieval_query = f"{prior_user}\n{message}" if prior_user else message
+
+        # LLM-based intent classification (with keyword fallback)
+        # Uses a lightweight gpt-4o-mini call with 3s timeout — understands semantics, not keywords
+        intent, confidence = await classify_intent(
+            message, client=self._intent_client, model=self._intent_model
+        )
+        logger.info(
+            "agent.intent_classified",
+            session_id=session_id,
+            intent=intent,
+            confidence=confidence,
+            method="llm" if confidence > 0.5 else "keyword_fallback",
+        )
+
         return {
             "session_id": session_id,
             "message": message,
@@ -630,7 +718,7 @@ class AgentService:
             "history": history,
             "retrieval_query": retrieval_query,
             "fallback_reason": None,
-            "intent": detect_intent(message),
+            "intent": intent,
         }
 
     async def _retrieve_node(self, state: AgentState) -> AgentState:
@@ -767,13 +855,14 @@ class AgentService:
         return state
 
     def _is_place_intent(self, state: AgentState) -> bool:
+        """Check if the classified intent targets Places API.
+
+        Uses the LLM-classified intent directly — no keyword scanning needed.
+        """
         intent = state.get("intent") or detect_intent(state["message"])
-        if intent in {"restaurant_search", "navigation"}:
-            return True
-        lower = state["message"].lower()
-        recommendation_terms = ("recommend", "gợi ý", "đề xuất", "dịch vụ", "service", "place", "địa điểm")
-        ham_ninh_terms = ("hàm ninh", "ham ninh")
-        return any(term in lower for term in recommendation_terms) and any(term in lower for term in ham_ninh_terms)
+        # restaurant_search covers: restaurants, cafés, hotels, homestays, lodging
+        # navigation covers: directions, routes, maps
+        return intent in {"restaurant_search", "navigation"}
 
     # -- SOC-05: Cultural context before commercial recommendations --
 
