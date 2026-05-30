@@ -44,7 +44,7 @@ class FakeClient:
 
 
 def settings(api_key: str = "test-google-key") -> Settings:
-    return Settings(OPENAI_API_KEY="openai-test", GOONG_API_KEY=api_key)
+    return Settings(OPENAI_API_KEY="openai-test", GOOGLE_PLACES_API_KEY=api_key)
 
 
 def google_place(**overrides: object) -> dict[str, object]:

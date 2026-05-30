@@ -33,8 +33,14 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
-    # ── Goong APIs ──────────────────────────────────────────────
-    # Optional: blank values let Places/Routes services fail honestly at runtime.
+    # ── Google Places API (New) ─────────────────────────────────
+    # Required for place search (text/nearby) and details.
+    # Get from Google Cloud Console: https://console.cloud.google.com/apis/api/places.googleapis.com
+    GOOGLE_PLACES_API_KEY: str = ""
+
+    # ── Goong Maps (Distance Matrix + Map Tiles) ────────────────
+    # Distance Matrix used by backend for route enrichment (optional).
+    # Map tiles key is browser-safe, exposed via NEXT_PUBLIC_GOONG_MAPTILES_KEY.
     GOONG_API_KEY: str = ""
 
     # ── Langfuse ────────────────────────────────────────────────

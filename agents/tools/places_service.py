@@ -6,6 +6,7 @@ Uses Google Places API (New) endpoints:
 - Place Details: GET /v1/places/{place_id}
 
 All endpoints require X-Goog-Api-Key and X-Goog-FieldMask headers.
+Configured via GOOGLE_PLACES_API_KEY in .env.
 """
 
 from __future__ import annotations
@@ -93,7 +94,7 @@ class GooglePlacesService:
         self._client = client or HttpxPlacesClient()
 
     def _api_key(self) -> str | None:
-        key = self._settings.GOONG_API_KEY.strip()
+        key = self._settings.GOOGLE_PLACES_API_KEY.strip()
         return key if key else None
 
     def _auth_headers(self, language_code: str = "en") -> dict[str, str]:

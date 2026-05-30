@@ -35,7 +35,7 @@ PLACEHOLDER_MARKERS = ("[redacted", "redacted", "xxxx", "<", "your_", "replace_m
 
 
 def key_status() -> str:
-    key = os.environ.get("GOONG_API_KEY", "").strip()
+    key = os.environ.get("GOOGLE_PLACES_API_KEY", "").strip()
     lowered = key.lower()
     if not key:
         return "missing"
@@ -57,7 +57,7 @@ def print_json(label: str, value: object) -> None:
 def settings_for_google() -> Settings:
     return Settings(
         OPENAI_API_KEY=os.environ.get("OPENAI_API_KEY", "unused-for-places-live-verifier"),
-        GOONG_API_KEY=os.environ.get("GOONG_API_KEY", ""),
+        GOOGLE_PLACES_API_KEY=os.environ.get("GOOGLE_PLACES_API_KEY", ""),
     )
 
 
