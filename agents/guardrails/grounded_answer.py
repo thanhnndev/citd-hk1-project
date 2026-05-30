@@ -51,6 +51,7 @@ _NAVIGATION_KEYWORDS_VI = {
 _INTENT_SYSTEM_PROMPT = """\
 Classify the user's intent into exactly ONE of these categories:
 
+- conversational: Greetings, small talk, thanks, or very short messages with no information need (e.g. "chào", "hello", "cảm ơn", "ok", "hi bạn")
 - restaurant_search: Looking for places to eat, drink, or stay (restaurants, cafés, hotels, homestays, lodging, accommodation)
 - navigation: Asking for directions, routes, maps, distances, or how to get somewhere
 - cultural_query: Asking about history, culture, traditions, festivals, landmarks, or general info about Hàm Ninh
@@ -69,6 +70,7 @@ def detect_intent(message: str) -> str:
     (test mode, API down, timeout).
 
     Returns one of:
+    - "conversational"
     - "restaurant_search"
     - "navigation"
     - "cultural_query"
@@ -80,8 +82,18 @@ def detect_intent(message: str) -> str:
 
     lower = stripped.lower()
 
+    # Conversational / greeting — no info need, skip RAG
+    conversational = (
+        "chào", "hello", "hi", "hey", "xin chào",
+        "cảm ơn", "thanks", "thank", "ok", "oke",
+        "tạm biệt", "bye", "goodbye",
+        "hẹn gặp", "good morning", "good evening",
+    )
+    for word in conversational:
+        if lower == word or lower.startswith(word + " ") or lower.endswith(" " + word):
+            return "conversational"
+
     # Check recommendation-seeking queries first → Places API
-    # Covers: "recommend me", "gợi ý chỗ nào", "nên ăn ở đâu"
     recommendation_phrases = (
         "recommend", "gợi ý", "đề xuất",
         "nên đi", "nên đến", "nên ăn", "nên ở",

@@ -111,32 +111,50 @@ async def test_non_place_cultural_query_does_not_call_recommendation_service() -
 
 
 @pytest.mark.asyncio
-async def test_missing_recommendation_dependency_fails_honestly_without_llm() -> None:
+async def test_missing_recommendation_dependency_falls_through_to_llm() -> None:
+    """Soft routing: when Places API is missing, place intent falls through to LLM."""
     llm = AsyncMock()
+    llm.answer.return_value = ChatResponse(
+        session_id="s-missing",
+        message="I don't have specific place data, but Ham Ninh is a fishing village.",
+        citations=[],
+        places=[],
+        intent="cultural_query",
+        latency_ms=1.0,
+        fallback=False,
+    )
     service = AgentService(retriever=None, llm_service=llm, checkpoint_mode="test")
 
     response = await service.answer(session_id="s-missing", message="Recommend a place in Ham Ninh", language="en")
 
-    llm.answer.assert_not_called()
-    assert response.fallback is True
-    assert response.places == []
-    assert response.intent == "place_recommendation"
-    assert "not configured" in response.message
-    assert response.reasoning_log is not None
+    # Soft routing: LLM handles the response when Places API is unavailable
+    llm.answer.assert_awaited_once()
+    assert response.fallback is False
 
 
 @pytest.mark.asyncio
-async def test_recommendation_exception_is_sanitized() -> None:
+async def test_recommendation_exception_falls_through_to_llm() -> None:
+    """Soft routing: when Places API throws, LLM handles the response."""
     recommender = AsyncMock()
     recommender.recommend.side_effect = RuntimeError("secret provider payload")
-    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+    llm = AsyncMock()
+    llm.answer.return_value = ChatResponse(
+        session_id="s-error",
+        message="Tôi chưa có thông tin cụ thể về khoản này.",
+        citations=[],
+        places=[],
+        intent=None,
+        latency_ms=1.0,
+        fallback=False,
+    )
+    service = AgentService(retriever=None, llm_service=llm, place_recommendation_service=recommender, checkpoint_mode="test")
 
     response = await service.answer(session_id="s-error", message="Gợi ý dịch vụ ở Hàm Ninh", language="vi")
 
-    assert response.fallback is True
-    assert response.places == []
+    # Soft routing: LLM handles the response when Places API fails
+    # Error message is not leaked to user
     assert "secret provider payload" not in response.message
-    assert response.reasoning_log == "place_recommendation status=upstream_error source=none candidate_count=0 result_count=0"
+    llm.answer.assert_awaited_once()
 
 
 @pytest.mark.asyncio

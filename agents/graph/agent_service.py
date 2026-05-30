@@ -378,10 +378,10 @@ class AgentService:
     async def answer(self, *, session_id: str, message: str, language: str = "vi") -> ChatResponse:
         """Return a grounded ChatResponse and persist the turn for the session.
 
-        Routing:
-          - classify intent first
-          - place/navigation intent → skip RAG, go straight to answer (Places API)
-          - cultural query → retrieve RAG → answer (LLM)
+        Soft routing:
+          - conversational/greeting → skip RAG, answer directly from LLM
+          - everything else → retrieve RAG + answer (LLM decides what to use)
+          - place/navigation intent → also call Places API alongside RAG
         """
         t0 = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
@@ -400,30 +400,17 @@ class AgentService:
                     reason=type(exc).__name__,
                 )
 
-        # -- Classify node with span --
-        # (intent already set in _initial_state, log it here)
         intent = state.get("intent", "unknown")
-        logger.info(
-            "agent.intent_classified",
-            session_id=session_id,
-            intent=intent,
-        )
-
-        # -- Conditional routing: skip RAG for place/navigation intents --
+        is_conversational = intent == "conversational"
         is_place = intent in {"restaurant_search", "navigation"}
 
-        if is_place:
-            # Place intent → skip RAG retrieval entirely
+        # -- Conversational: skip RAG entirely --
+        if is_conversational:
             state["chunks"] = []
             state["citations"] = []
-            logger.info(
-                "agent.skip_retrieval",
-                session_id=session_id,
-                intent=intent,
-                reason="place_query_uses_places_api_not_rag",
-            )
+            logger.info("agent.skip_retrieval", session_id=session_id, intent=intent, reason="conversational")
         else:
-            # Cultural query → retrieve RAG first
+            # -- Retrieve RAG (always for non-conversational) --
             retrieve_span = self._start_langfuse_span(
                 trace_id=trace_id or "",
                 name="retrieve",
@@ -454,7 +441,7 @@ class AgentService:
                 },
             )
 
-        # -- Answer node --
+        # -- Answer: LLM decides how to use context + Places API --
         answer_span = self._start_langfuse_span(
             trace_id=trace_id or "",
             name="answer",
@@ -490,7 +477,6 @@ class AgentService:
 
         await self._save_turn(session_id, message, response.message)
 
-        # -- Attach trace_id to response --
         if trace_id is not None:
             response.langfuse_trace_id = trace_id
 
@@ -511,10 +497,10 @@ class AgentService:
     ) -> AsyncGenerator[str, None]:
         """Yield answer tokens, then a citations marker and DONE marker.
 
-        Routing:
-          - classify intent first
-          - place/navigation intent → skip RAG, go straight to answer (Places API)
-          - cultural query → retrieve RAG → answer (LLM)
+        Soft routing:
+          - conversational/greeting → skip RAG, answer directly
+          - everything else → retrieve RAG + LLM stream
+          - place/navigation → enrich with Places API alongside RAG
         """
         state = await self._initial_state(session_id, message, language)
 
@@ -532,23 +518,17 @@ class AgentService:
                     reason=type(exc).__name__,
                 )
 
-        # -- Classify node --
+        # -- Classify intent --
         intent = state.get("intent", "unknown")
-        is_place = intent in {"restaurant_search", "navigation"}
+        is_conversational = intent == "conversational"
 
-        # -- Conditional routing: skip RAG for place/navigation intents --
-        if is_place:
+        # -- Conversational: skip RAG --
+        if is_conversational:
             state["chunks"] = []
             state["citations"] = []
             fallback_reason: str | None = None
-            logger.info(
-                "agent.skip_retrieval",
-                session_id=session_id,
-                intent=intent,
-                reason="place_query_uses_places_api_not_rag",
-            )
+            logger.info("agent.skip_retrieval", session_id=session_id, intent=intent, reason="conversational")
         else:
-            # Cultural query → retrieve RAG first
             retrieve_span = self._start_langfuse_span(
                 trace_id=trace_id or "",
                 name="retrieve",
@@ -592,35 +572,34 @@ class AgentService:
             retrieval_count=len(citations),
             intent=intent,
         )
-        if self._is_place_intent(state):
-            # -- Place recommendation span --
-            place_span = self._start_langfuse_span(
-                trace_id=trace_id or "",
-                name="place_recommendation",
-                as_type="tool",
-                input_data={"query": state["message"]},
-            )
-            response = await self._answer_place_intent(state)
-            self._end_langfuse_span(
-                place_span,
-                trace_id=trace_id or "",
-                name="place_recommendation",
-                output_data={
-                    "result_count": len(response.places),
-                    "fallback": response.fallback,
-                },
-            )
-            answer_text = response.message
-            citations = response.citations
-            yield answer_text
-            logger.info(
-                "agent.stream_place_recommendation",
-                session_id=session_id,
-                result_count=len(response.places),
-                fallback=response.fallback,
-            )
-        elif self._llm_service is not None:
-            # -- Answer span for streaming with per-token timeout (ROB-06) --
+
+        # -- Place intent: use Places API (stream the result text) --
+        if intent in {"restaurant_search", "navigation"} and self._place_recommendation_service is not None:
+            try:
+                place_response = await self._place_recommendation_service.recommend(
+                    query=state["message"],
+                    language=language,
+                    session_id=session_id,
+                )
+                answer_text = place_response.message
+                citations = place_response.citations
+                yield answer_text
+                logger.info(
+                    "agent.stream_place_recommendation",
+                    session_id=session_id,
+                    result_count=len(place_response.places),
+                    fallback=place_response.fallback,
+                )
+            except Exception as exc:
+                fallback_reason = type(exc).__name__
+                logger.warning(
+                    "agent.place_recommendation_stream_failed",
+                    session_id=session_id,
+                    reason=fallback_reason,
+                )
+
+        # -- Default: LLM streaming --
+        if not answer_text and self._llm_service is not None:
             answer_span = self._start_langfuse_span(
                 trace_id=trace_id or "",
                 name="answer",
@@ -816,18 +795,90 @@ class AgentService:
         return state
 
     async def _answer_node(self, state: AgentState) -> AgentState:
-        if self._is_place_intent(state):
-            state["response"] = await self._answer_place_intent(state)
-            logger.info(
-                "agent.node_complete",
-                phase="place_recommendation",
-                session_id=state["session_id"],
-                intent=state.get("intent"),
-                result_count=len(state["response"].places),
-                fallback=state["response"].fallback,
-            )
-            return state
+        """Answer using LLM. Places intent gets enriched with Places API data.
 
+        Soft approach: LLM always answers, Places data is optional enrichment.
+        No hard routing — LLM decides how to combine context + places.
+        """
+        intent = state.get("intent") or detect_intent(state["message"])
+        is_place = intent in {"restaurant_search", "navigation"}
+
+        # For place/navigation: try Places API for enrichment
+        if is_place and self._place_recommendation_service is not None:
+            try:
+                place_response = await self._place_recommendation_service.recommend(
+                    query=state["message"],
+                    language=state["language"],
+                    session_id=state["session_id"],
+                )
+                self._fairness_audit_log(
+                    places=place_response.places,
+                    trace_id=state.get("langfuse_trace_id"),
+                )
+
+                # Build enriched context: RAG chunks + Places data
+                # Prepend places info as additional context for the LLM
+                if place_response.places:
+                    places_context = self._build_places_context(place_response.places)
+                    # Append places context to existing chunks
+                    from app.models.rag import RAGChunk
+                    place_chunk = RAGChunk(
+                        chunk_id="places_api",
+                        source_id="places_api",
+                        title="Local Places (Google Places API)",
+                        url="",
+                        domain="places",
+                        source_type="api",
+                        reliability="high",
+                        language="unknown",
+                        location="",
+                        text=places_context,
+                        chunk_index=0,
+                        total_chunks=1,
+                    )
+                    state["chunks"] = [place_chunk] + state.get("chunks", [])
+                    state["citations"] = place_response.citations + state.get("citations", [])
+
+                # Build answer from enriched context
+                response = ChatResponse(
+                    session_id=state["session_id"],
+                    message=place_response.message,
+                    citations=state["citations"],
+                    places=place_response.places,
+                    reasoning_log=place_response.reasoning_log,
+                    intent=PLACE_RECOMMENDATION_INTENT,
+                    langfuse_trace_id=state.get("langfuse_trace_id"),
+                    latency_ms=place_response.latency_ms,
+                    fallback=place_response.fallback,
+                )
+
+                # Cultural context enrichment (SOC-05)
+                cultural_chunks = self._extract_cultural_context(state.get("chunks", []))
+                if cultural_chunks:
+                    cultural_intro = self._build_cultural_intro(
+                        cultural_chunks, state["language"]
+                    )
+                    response.message = f"{cultural_intro}\n\n{response.message}"
+
+                state["response"] = response
+                logger.info(
+                    "agent.node_complete",
+                    phase="place_recommendation",
+                    session_id=state["session_id"],
+                    intent=intent,
+                    result_count=len(response.places),
+                    fallback=response.fallback,
+                )
+                return state
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "agent.place_recommendation_fallback",
+                    session_id=state["session_id"],
+                    reason=type(exc).__name__,
+                )
+                # Fall through to LLM answer
+
+        # Default: LLM answers with RAG context
         if self._llm_service is not None:
             try:
                 response = await self._llm_service.answer(
@@ -854,15 +905,16 @@ class AgentService:
         )
         return state
 
-    def _is_place_intent(self, state: AgentState) -> bool:
-        """Check if the classified intent targets Places API.
-
-        Uses the LLM-classified intent directly — no keyword scanning needed.
-        """
-        intent = state.get("intent") or detect_intent(state["message"])
-        # restaurant_search covers: restaurants, cafés, hotels, homestays, lodging
-        # navigation covers: directions, routes, maps
-        return intent in {"restaurant_search", "navigation"}
+    def _build_places_context(self, places: list) -> str:
+        """Build a text context block from Places API results for LLM injection."""
+        lines = ["Các địa điểm tìm được từ Google Places:"]
+        for i, place in enumerate(places[:5], 1):
+            name = getattr(place, "display_name", "Unknown")
+            address = getattr(place, "formatted_address", "")
+            rating = getattr(place, "rating", None)
+            rating_str = f" (đánh giá {rating})" if rating else ""
+            lines.append(f"{i}. **{name}**{rating_str} — {address}")
+        return "\n".join(lines)
 
     # -- SOC-05: Cultural context before commercial recommendations --
 
