@@ -73,18 +73,18 @@ class GoongPlacesService:
             {
                 "input": request.query,
                 "location": _location_param(request.location_bias),
+                "origin": _location_param(request.location_bias),
                 "radius": request.radius_meters,
                 "limit": request.max_result_count,
             }
         )
-        if request.included_type:
-            params["types"] = request.included_type
         return await self._execute_search(
             operation="text_search",
+            path=AUTOCOMPLETE_PATH,
             request=request,
             params=params,
             origin=request.location_bias,
-            metadata={"endpoint": "goong_text_search", "radius_meters": request.radius_meters},
+            metadata={"endpoint": "goong_autocomplete_text_search", "radius_meters": request.radius_meters},
         )
 
     async def nearby_search(self, request: PlaceNearbyRequest) -> PlaceToolResponse:
@@ -100,6 +100,7 @@ class GoongPlacesService:
         )
         return await self._execute_search(
             operation="nearby_search",
+            path=AUTOCOMPLETE_PATH,
             request=request,
             params=params,
             origin=request.center,
@@ -123,6 +124,7 @@ class GoongPlacesService:
         self,
         *,
         operation: str,
+        path: str,
         request: PlaceSearchRequest | PlaceNearbyRequest,
         params: Mapping[str, Any],
         origin: LatLng,
@@ -132,7 +134,7 @@ class GoongPlacesService:
         if not params.get("api_key"):
             return self._credential_error(request, retrieved_at, metadata)
 
-        response_payload = await self._request_payload(operation, TEXT_SEARCH_PATH, params, request, retrieved_at, metadata)
+        response_payload = await self._request_payload(operation, path, params, request, retrieved_at, metadata)
         if isinstance(response_payload, PlaceToolResponse):
             return response_payload
 

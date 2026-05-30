@@ -98,9 +98,11 @@ async def test_text_search_normalizes_goong_payload_and_rest_params():
     path, params = client.calls[0]
     assert path == "/v2/place/autocomplete"
     assert params["input"] == "seafood"
+    assert params["origin"] == "10.1835208,104.0496843"
     assert params["location"] == "10.1835208,104.0496843"
     assert params["radius"] == 5000
     assert params["limit"] == 3
+    assert "types" not in params
     assert "test-goong-key" not in response.model_dump_json()
 
 
