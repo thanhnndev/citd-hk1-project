@@ -293,8 +293,8 @@
     }
   },
   "Chat": {
-    "title": "Chat with AI Guide",
-    "placeholder": "Ask about Ham Ninh...",
+    "title": "Ham Ninh Assistant",
+    "placeholder": "Ask naturally: say hi, find food, get directions, explore culture...",
     "send": "Send",
     "reasoningLog": "Why this suggestion?",
     "citations": "Sources",
@@ -308,17 +308,17 @@
     "viewOnMap": "View on Map",
     "scoreLabel": "Score",
     "noRating": "No rating",
-    "welcomeGreeting": "Hello! I'm your Ham Ninh AI Guide",
-    "welcomeSubtitle": "Ask me anything about Ham Ninh's culture, history, food, and places.",
+    "welcomeGreeting": "Plan Ham Ninh with an assistant that chats like a real guide",
+    "welcomeSubtitle": "Start with small talk or ask directly. The assistant answers naturally and only reaches for sources when your question needs them.",
     "newConversation": "New conversation",
     "copy": "Copy",
     "copied": "Copied!",
     "retryMessage": "Retry",
     "prompts": [
-      "What is the history of Ham Ninh fishing village?",
-      "Recommend local seafood restaurants",
-      "How do I get to Ham Ninh from Duong Dong?",
-      "What cultural festivals happen in Ham Ninh?"
+      "Hello there",
+      "Suggest a local seafood spot",
+      "Give me a short village history",
+      "How do I get there from Duong Dong?"
     ]
   },
   "Map": {

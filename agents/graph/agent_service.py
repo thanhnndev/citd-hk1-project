@@ -416,6 +416,16 @@ class AgentService:
             output_data={"retrieval_count": len(state.get("chunks", []))},
         )
 
+        intent = await self._classify_message_intent(state)
+        if intent == "conversational":
+            response = self._conversational_response(state)
+            await self._save_turn(session_id, message, response.message)
+            yield response.message
+            yield "[CITATIONS] []"
+            yield "[DONE]"
+            logger.info("agent.stream_complete", session_id=session_id, intent=intent, fallback_reason=None, langfuse_trace_id=trace_id)
+            return
+
         answer_text = ""
         citations = state.get("citations", [])
         fallback_reason: str | None = None
@@ -549,17 +559,7 @@ class AgentService:
           - Place search (restaurant, hotel) → call Places API
           - Cultural/historical → use RAG context directly
         """
-        from agents.guardrails.grounded_answer import classify_intent, detect_intent
-
-        intent = detect_intent(state["message"])
-        confidence = 0.5
-        if self._llm_service is not None:
-            client = getattr(self._llm_service, "_client", None)
-            model = getattr(self._llm_service, "model", "gpt-4o-mini")
-            intent, confidence = await classify_intent(state["message"], client=client, model=model)
-        intent = _normalize_intent(intent)
-        state["intent"] = intent
-        state["intent_confidence"] = confidence
+        intent = await self._classify_message_intent(state)
         is_conversational = intent == "conversational"
         is_place = _is_place_intent(intent)
 
@@ -637,6 +637,21 @@ class AgentService:
                     session_id=state["session_id"], fallback=state["response"].fallback)
         return state
 
+    async def _classify_message_intent(self, state: AgentState) -> str:
+        """Classify the current turn using the LLM router first, keywords only as fallback."""
+        from agents.guardrails.grounded_answer import classify_intent, detect_intent
+
+        intent = detect_intent(state["message"])
+        confidence = 0.5
+        if self._llm_service is not None:
+            client = getattr(self._llm_service, "_client", None)
+            model = getattr(self._llm_service, "model", "gpt-4o-mini")
+            intent, confidence = await classify_intent(state["message"], client=client, model=model)
+        intent = _normalize_intent(intent)
+        state["intent"] = intent
+        state["intent_confidence"] = confidence
+        return intent
+
     def _conversational_response(self, state: AgentState) -> ChatResponse:
         """Direct response for greetings/small talk — no LLM or RAG needed.
 
@@ -645,31 +660,15 @@ class AgentService:
         tool-calling yet, we respond directly for speed and correctness.
         """
         lang = (state.get("language") or "vi").lower()
-        msg = (state.get("message") or "").lower()
 
         if lang == "vi":
-            if any(w in msg for w in ("chào", "hello", "hi", "hey", "xin chào")):
-                text = ("Chào bạn! 👋 Mình là trợ lý du lịch Hàm Ninh. "
-                        "Mình có thể giúp tìm nhà hàng, khách sạn, đường đi, "
-                        "hoặc giới thiệu về văn hóa làng chài. Bạn cần gì ạ?")
-            elif any(w in msg for w in ("cảm ơn", "thanks", "thank")):
-                text = "Không có gì! Cần thêm thông tin về Hàm Ninh thì cứ hỏi nhé. 😊"
-            elif any(w in msg for w in ("tạm biệt", "bye", "goodbye")):
-                text = "Tạm biệt! Chúc bạn có chuyến đi vui vẻ đến Hàm Ninh! 🌊"
-            else:
-                text = "Chào bạn! Mình có thể giúp gì về du lịch Hàm Ninh?"
+            text = ("Chào bạn! Mình là trợ lý du lịch Hàm Ninh. "
+                    "Mình có thể giúp tìm địa điểm ăn ở, đường đi, hoặc kể ngắn gọn "
+                    "về văn hóa và lịch sử làng chài. Bạn muốn bắt đầu từ đâu?")
         else:
-            if any(w in msg for w in ("hello", "hi", "hey")):
-                text = ("Hello! 👋 I'm your Hàm Ninh tourism assistant. "
-                        "I can help find restaurants, hotels, directions, "
-                        "or share info about the fishing village. What do you need?")
-            elif any(w in msg for w in ("thanks", "thank")):
-                text = "You're welcome! Feel free to ask if you need more info. 😊"
-            elif any(w in msg for w in ("bye", "goodbye")):
-                text = "Goodbye! Have a great trip to Hàm Ninh! 🌊"
-            else:
-                text = "Hi! How can I help you with Hàm Ninh tourism?"
-
+            text = ("Hello! I'm your Ham Ninh travel assistant. I can help with places "
+                    "to eat or stay, directions, and concise local culture or history. "
+                    "Where would you like to start?")
         return ChatResponse(
             session_id=state["session_id"], message=text,
             citations=[], places=[], intent="conversational",

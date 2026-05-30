@@ -360,6 +360,32 @@ async def test_context_free_greeting_does_not_reuse_previous_query(ham_ninh_chun
     assert retriever.queries[-1] == "chào bạn"
     assert "tìm khách sạn" not in retriever.queries[-1]
 
+
+@pytest.mark.asyncio
+async def test_stream_context_free_greeting_skips_retrieval_payload(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    llm = FakeLLM()
+    service = AgentService(
+        retriever=retriever,
+        llm_service=llm,
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    await service.answer(session_id="sess-stream-context", message="tìm khách sạn", language="vi")
+    events = [
+        event
+        async for event in service.answer_stream(
+            session_id="sess-stream-context", message="chào bạn", language="vi"
+        )
+    ]
+
+    assert events[-2:] == ["[CITATIONS] []", "[DONE]"]
+    assert any("Chào bạn" in event for event in events)
+    assert not any("Lang chai Ham Ninh" in event for event in events)
+    assert llm.queries == ["tìm khách sạn"]
+    assert retriever.queries[-1] == "chào bạn"
+
 @pytest.mark.asyncio
 async def test_fallback_answer_strips_raw_retrieval_preamble(ham_ninh_chunk):
     service = AgentService(

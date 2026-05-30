@@ -44,14 +44,14 @@ export function MessageBubble({
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} animate-slideUp`}>
       <div
-        className={`group relative max-w-[85%] md:max-w-[75%] rounded-2xl px-4 py-3 ${
+        className={`group relative max-w-[92%] rounded-[1.5rem] px-4 py-3 shadow-sm md:max-w-[74%] ${
           isUser
-            ? "bg-primary text-primary-foreground rounded-br-sm"
-            : "bg-muted rounded-bl-sm"
+            ? "rounded-br-md bg-[#0b5f63] text-white shadow-[#0b5f63]/15"
+            : "rounded-bl-md border border-white/70 bg-white/88 text-foreground shadow-slate-900/8 backdrop-blur"
         }`}
       >
         {/* Content */}
-        <div className={`whitespace-pre-wrap text-sm leading-relaxed ${isUser ? "text-primary-foreground" : ""}`}>
+        <div className={`whitespace-pre-wrap text-[0.95rem] leading-7 ${isUser ? "text-white" : ""}`}>
           {content || (
             <span className="inline-flex gap-1 items-center">
               <TypingDots />
@@ -81,7 +81,7 @@ export function MessageBubble({
 
         {/* Citations — only for assistant messages */}
         {!isUser && citations && citations.length > 0 && (
-          <div className="mt-3 space-y-2">
+          <div className="mt-4 space-y-2 border-t border-slate-200/70 pt-3">
             {citations.map((citation, i) => (
               <CitationCard key={i} citation={citation} />
             ))}
@@ -90,7 +90,7 @@ export function MessageBubble({
 
         {/* Place cards — only for assistant messages with places */}
         {!isUser && places && places.length > 0 && placeTranslations && (
-          <div className="mt-3" role="region" aria-label={placeTranslations.placeResultsHeading}>
+          <div className="mt-4 border-t border-slate-200/70 pt-3" role="region" aria-label={placeTranslations.placeResultsHeading}>
             <p className="text-xs font-medium text-muted-foreground mb-2">
               {placeTranslations.placeResultsHeading}
             </p>

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { MessageBubble } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult } from "@/lib/chat-api";
-import { ArrowUp, RotateCcw, Loader2, Trash2 } from "lucide-react";
+import { ArrowUp, RotateCcw, Loader2, Trash2, ShieldCheck, Waves } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -245,10 +245,31 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, [input]);
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-4rem)] md:h-[calc(100dvh-5rem)]">
+    <div className="relative flex h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(20,146,139,0.22),transparent_32%),linear-gradient(135deg,#f8f3e8_0%,#e8f4f1_48%,#fff8ed_100%)] md:h-[calc(100dvh-5rem)]">
+      <div className="pointer-events-none absolute -left-20 top-20 size-56 rounded-full bg-[#f2a65a]/20 blur-3xl" />
+      <div className="pointer-events-none absolute -right-24 bottom-24 size-64 rounded-full bg-[#0b8f8a]/18 blur-3xl" />
+
+      <header className="relative z-10 border-b border-white/60 bg-white/55 px-4 py-3 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-primary">
+              <Waves className="size-3.5" />
+              Ham Ninh Guide
+            </div>
+            <h1 className="mt-1 text-lg font-semibold tracking-tight text-foreground md:text-2xl">
+              {translations.title}
+            </h1>
+          </div>
+          <div className="hidden items-center gap-2 rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-xs text-muted-foreground shadow-sm md:flex">
+            <ShieldCheck className="size-3.5 text-primary" />
+            {language === "vi" ? "Trả lời mềm, có kiểm chứng" : "Soft, grounded answers"}
+          </div>
+        </div>
+      </header>
+
       {/* Messages area */}
       <div
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-4"
+        className="relative z-10 flex-1 space-y-4 overflow-y-auto px-4 py-5 md:px-6"
         role="log"
         aria-live="polite"
         aria-label={translations.title}
@@ -260,6 +281,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               greeting: translations.welcomeGreeting ?? translations.title,
               subtitle: translations.welcomeSubtitle ?? translations.placeholder,
               promptChips: translations.prompts ?? [],
+              badgeLabel: language === "vi" ? "Trợ lý du lịch địa phương" : "Local AI travel guide",
             }}
           />
         )}
@@ -309,8 +331,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       </div>
 
       {/* Input area */}
-      <div className="border-t bg-background px-4 py-3">
-        <div className="max-w-3xl mx-auto flex gap-2 items-end">
+      <div className="relative z-10 border-t border-white/60 bg-white/65 px-4 py-3 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[1.35rem] border border-white/80 bg-white/85 p-2 shadow-lg shadow-slate-900/8">
           <textarea
             ref={textareaRef}
             value={input}
@@ -319,14 +341,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             placeholder={translations.placeholder}
             disabled={loading}
             rows={1}
-            className="flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 min-h-[40px] max-h-[120px]"
+            className="max-h-[120px] min-h-[44px] flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2.5 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50"
             aria-label={translations.placeholder}
           />
           {messages.length > 0 && (
             <Button
               variant="ghost"
               size="icon"
-              className="rounded-xl shrink-0 h-10 w-10 text-muted-foreground hover:text-destructive"
+              className="h-11 w-11 shrink-0 rounded-2xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               onClick={handleClearConversation}
               disabled={loading}
               aria-label={translations.newConversation ?? "New conversation"}
@@ -339,7 +361,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             onClick={() => handleSubmit()}
             disabled={loading || !input.trim()}
             size="icon"
-            className="rounded-xl shrink-0 h-10 w-10"
+            className="h-11 w-11 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50]"
             aria-label={translations.send}
           >
             {loading ? (
