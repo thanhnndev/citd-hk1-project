@@ -146,7 +146,7 @@ async def classify_intent(
     import asyncio
     import openai as _openai
 
-    valid = {"restaurant_search", "navigation", "cultural_query", "unknown"}
+    valid = {"conversational", "restaurant_search", "navigation", "cultural_query", "unknown"}
 
     # Try LLM classification first (with 3s timeout to avoid blocking)
     if client is not None:

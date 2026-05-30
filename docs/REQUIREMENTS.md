@@ -868,6 +868,20 @@ flowchart TD
 | `content_safety` | Nội dung không phù hợp | Block |
 | `hallucination_flag` | RAG tham chiếu thông tin ngoài retrieved context | Flag + disclaimer |
 
+
+### 11.5 Agent Quality Requirements
+
+Các yêu cầu này chốt lại best practice từ LangGraph/Context7 cho ứng dụng AI có tool, RAG và memory:
+
+| ID | Requirement | Acceptance criteria |
+|---|---|---|
+| AGQ-01 | **Tool gating trước retrieval:** tin nhắn chào hỏi, cảm ơn, hoặc hỏi khả năng trợ lý không được kế thừa query cũ để retrieve. | `chào bạn` sau `tìm khách sạn` trả lời hội thoại, `citations=[]`, không lặp nội dung Hàm Ninh sai ngữ cảnh. |
+| AGQ-02 | **Semantic intent router có fallback:** ưu tiên LLM/structured classifier, fallback keyword chỉ để chống lỗi provider. | Intent `conversational`, `restaurant_search`, `navigation`, `cultural_query`, `unknown` được normalize trước khi chọn tool. |
+| AGQ-03 | **ReAct/tool loop rõ ràng:** LLM hoặc router chỉ gọi Places tool khi intent là địa điểm/ăn uống/lưu trú/đường đi; câu văn hóa dùng RAG; small talk không gọi tool. | Log mỗi request có `intent`, `intent_confidence`, node đã chạy và số chunk/place trả về. |
+| AGQ-04 | **Grounded answer không lộ raw retrieval:** fallback deterministic phải tổng hợp thành câu trả lời tự nhiên, không mở đầu bằng boilerplate như `Dựa trên thông tin thu thập được:` rồi dump chunk. | Regression test kiểm tra fallback không trả raw preamble và vẫn giữ citation. |
+| AGQ-05 | **Session memory có boundary:** chỉ ghép câu hỏi trước vào retrieval query khi tin nhắn hiện tại là follow-up có thông tin cần ngữ cảnh. | Small talk/help intent dùng chính message hiện tại làm retrieval query; follow-up như `còn nhà hàng nào nữa?` vẫn có thể dùng history. |
+| AGQ-06 | **No-evidence honesty:** nếu RAG và Places không có bằng chứng, trả lời thiếu dữ liệu + gợi ý câu hỏi tiếp theo; không bịa khách sạn/nhà hàng. | 0% hallucinated place names ngoài Places API/corpus trong eval set. |
+
 ---
 
 ## 12. Đặc tả Module Backend (FastAPI)

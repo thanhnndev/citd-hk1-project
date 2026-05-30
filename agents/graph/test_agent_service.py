@@ -341,3 +341,40 @@ async def test_existing_tests_still_pass_without_langfuse(ham_ninh_chunk):
         checkpoint_mode="test",
     )
     assert service._langfuse_client is None
+
+@pytest.mark.asyncio
+async def test_context_free_greeting_does_not_reuse_previous_query(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        llm_service=FakeLLM(),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    await service.answer(session_id="sess-context", message="tìm khách sạn", language="vi")
+    response = await service.answer(session_id="sess-context", message="chào bạn", language="vi")
+
+    assert response.intent == "conversational"
+    assert response.citations == []
+    assert retriever.queries[-1] == "chào bạn"
+    assert "tìm khách sạn" not in retriever.queries[-1]
+
+@pytest.mark.asyncio
+async def test_fallback_answer_strips_raw_retrieval_preamble(ham_ninh_chunk):
+    service = AgentService(
+        retriever=FakeRetriever([ham_ninh_chunk]),
+        llm_service=FailingLLM(),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="sess-clean-fallback",
+        message="Ham Ninh co gi dac biet?",
+        language="vi",
+    )
+
+    assert response.fallback is True
+    assert not response.message.startswith("Dựa trên thông tin thu thập được:")
+    assert "Ham Ninh Culture" in response.message
