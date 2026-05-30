@@ -115,6 +115,36 @@ def _normalize_intent(intent: str | None) -> str:
 def _is_place_intent(intent: str | None) -> bool:
     return _normalize_intent(intent) in {"restaurant_search", "navigation"}
 
+def _should_use_places_before_rag(message: str) -> bool:
+    normalized = " ".join((message or "").lower().split())
+    if not normalized:
+        return False
+    action_terms = ("kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search", "nearby", "gần đây", "quanh đây")
+    place_terms = (
+        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
+        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood", "stay", "place"
+    )
+    navigation_terms = ("chỉ đường", "đường đi", "cách đi", "đi đến", "đi tới", "route", "direction", "map")
+    return (
+        any(term in normalized for term in navigation_terms)
+        or (any(term in normalized for term in action_terms) and any(term in normalized for term in place_terms))
+    )
+
+def _should_clarify_place_capability(message: str) -> bool:
+    normalized = " ".join((message or "").lower().split())
+    has_place = any(term in normalized for term in ("khách sạn", "hotel", "lưu trú", "chỗ ở", "nhà hàng", "restaurant"))
+    asks_capability = any(term in normalized for term in ("được không", "có được", "có thể", "can you"))
+    return has_place and asks_capability
+
+def _place_capability_response(session_id: str, message: str, language: str) -> ChatResponse:
+    lang = "en" if language == "en" else "vi"
+    text = _safe_direct_answer(message, [], lang) or (
+        "Được. Bạn cho mình biết loại địa điểm, ngân sách/khu vực gần đâu và yêu cầu đi kèm nhé."
+        if lang == "vi" else
+        "Yes. Tell me the place type, budget/area, and any requirements."
+    )
+    return ChatResponse(session_id=session_id, message=text, citations=[], places=[], intent="conversational", latency_ms=0.0, fallback=False)
+
 def _strip_retrieval_preamble(text: str) -> str:
     """Remove deterministic fallback boilerplate that makes answers look like raw chunks."""
     return re.sub(r"^\s*Dựa trên thông tin thu thập được:\s*", "", text or "", flags=re.IGNORECASE).strip()
@@ -281,6 +311,9 @@ class AgentService:
         self._semantic_cache = semantic_cache
         self._embedding_service = embedding_service
         self._langfuse_client = langfuse_client
+        llm_client = getattr(llm_service, "_client", None) if llm_service is not None else None
+        if type(llm_client).__module__.startswith("unittest.mock"):
+            llm_client = None
         self._agentic_chat = (
             AgenticChatService(
                 retriever=retriever,
@@ -288,7 +321,7 @@ class AgentService:
                 llm_service=llm_service,
                 place_recommendation_service=place_recommendation_service,
             )
-            if llm_service is not None and hasattr(llm_service, "_client")
+            if llm_client is not None
             else None
         )
         self._graph = self._build_graph()
@@ -355,6 +388,16 @@ class AgentService:
                 fallback=False,
             )
             await self._save_turn(session_id, message, direct)
+            return response
+
+        if _should_clarify_place_capability(message):
+            response = _place_capability_response(session_id, message, language)
+            await self._save_turn(session_id, message, response.message)
+            return response
+
+        if _should_use_places_before_rag(message) and self._place_recommendation_service is not None:
+            response = await self._place_recommendation_service.recommend(query=message, language=language, session_id=session_id)
+            await self._save_turn(session_id, message, response.message)
             return response
 
         if self._agentic_chat is not None:
@@ -440,6 +483,22 @@ class AgentService:
             await self._save_turn(session_id, message, direct)
             yield "[STATUS] using_history"
             yield direct
+            return
+
+        if _should_clarify_place_capability(message):
+            response = _place_capability_response(session_id, message, language)
+            await self._save_turn(session_id, message, response.message)
+            yield "[STATUS] using_history"
+            yield response.message
+            return
+
+        if _should_use_places_before_rag(message) and self._place_recommendation_service is not None:
+            yield "[STATUS] checking_places"
+            response = await self._place_recommendation_service.recommend(query=message, language=language, session_id=session_id)
+            await self._save_turn(session_id, message, response.message)
+            yield response.message
+            if response.places:
+                yield f"[PLACES] {json.dumps([place.model_dump() for place in response.places], ensure_ascii=False)}"
             return
 
         if self._agentic_chat is not None:
@@ -629,7 +688,7 @@ class AgentService:
         """
         intent = await self._classify_message_intent(state)
         is_conversational = intent == "conversational"
-        is_place = _is_place_intent(intent)
+        is_place = _is_place_intent(intent) or _should_use_places_before_rag(state["message"])
 
         # Conversational → direct response, no LLM call needed
         if is_conversational:

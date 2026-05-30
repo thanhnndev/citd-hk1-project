@@ -95,6 +95,23 @@ _CAPABILITY_TEXT = {
     ),
 }
 
+_CAPABILITY_EXAMPLES = {
+    "vi": (
+        "Ví dụ cụ thể bạn có thể hỏi mình như sau:\n"
+        "1. Tìm địa điểm: 'Kiếm nhà hàng hải sản gần đây', 'Có khách sạn/homestay nào quanh Hàm Ninh không?'\n"
+        "2. Hỏi đường và lịch trình: 'Từ Dương Đông đi Hàm Ninh thế nào?', 'Đi Hàm Ninh buổi sáng nên ghé đâu?'\n"
+        "3. Văn hóa và lịch sử: 'Làng chài Hàm Ninh có gì đặc biệt?', 'Nghề biển ở đây như thế nào?'\n"
+        "4. Giải thích gợi ý: 'Vì sao quán này được xếp cao?', 'Có lựa chọn nào phù hợp gia đình hơn không?'"
+    ),
+    "en": (
+        "Concrete examples you can ask:\n"
+        "1. Places: 'Find seafood restaurants nearby', 'Any hotels or homestays around Ham Ninh?'\n"
+        "2. Directions/planning: 'How do I get from Duong Dong to Ham Ninh?', 'What should I visit in a morning trip?'\n"
+        "3. Culture/history: 'What makes Ham Ninh fishing village special?', 'How does local fishing life work?'\n"
+        "4. Explanation: 'Why is this place ranked high?', 'Is there a more family-friendly option?'"
+    ),
+}
+
 _GREETING_TEXT = {
     "vi": "Chào bạn! Mình là trợ lý AI về Hàm Ninh. Bạn có thể hỏi về địa điểm, đường đi, văn hóa/lịch sử hoặc gợi ý lịch trình.",
     "en": "Hello! I'm the Ham Ninh AI assistant. You can ask about places, directions, culture/history, or simple trip planning.",
@@ -260,8 +277,11 @@ def _safe_direct_answer(message: str, history: list[dict[str, str]], language: s
     if _is_greeting(normalized):
         return _GREETING_TEXT[language]
 
-    if _is_bare_follow_up(normalized, history):
+    if _is_bare_follow_up(normalized, history) or _asks_for_examples(normalized, history):
         return _expand_recent_assistant(history, language)
+
+    if _is_fresh_food_followup(normalized, history):
+        return _fresh_food_answer(language)
 
     if _is_capability_question(normalized) or _asks_about_previous_groups(normalized, history):
         return _CAPABILITY_TEXT[language]
@@ -273,6 +293,9 @@ def _safe_direct_answer(message: str, history: list[dict[str, str]], language: s
         return _AI_DISCLOSURE[language]
 
     if _looks_like_ambiguous_route(normalized):
+        # Let specific destination requests reach the Places/routes tool.
+        if any(term in normalized for term in ("đến", "toi", "tới", "to ")):
+            return None
         return _route_clarification(language)
 
     return None
@@ -316,13 +339,38 @@ def _is_bare_follow_up(normalized: str, history: list[dict[str, str]]) -> bool:
         return False
     return any(item.get("role") == "assistant" and item.get("content") for item in history[-4:])
 
+def _asks_for_examples(normalized: str, history: list[dict[str, str]]) -> bool:
+    if not any(term in normalized for term in ("ví dụ", "vi du", "cụ thể", "cu the", "example", "for example")):
+        return False
+    recent = _recent_assistant_text(history)
+    return "4 nhóm" in recent or "4 main ways" in recent or "giúp" in recent
+
+def _is_fresh_food_followup(normalized: str, history: list[dict[str, str]]) -> bool:
+    asks_food = any(term in normalized for term in ("tươi ngon", "tuoi ngon", "đồ ngon", "do ngon", "món ngon", "mon ngon"))
+    if not asks_food:
+        return False
+    recent = _recent_assistant_text(history)
+    return "4 nhóm" in recent or "địa điểm" in recent or "places" in recent or "nhà hàng" in recent
+
+
+def _recent_assistant_text(history: list[dict[str, str]]) -> str:
+    return "\n".join(item.get("content", "") for item in history[-6:] if item.get("role") == "assistant").lower()
+
 def _expand_recent_assistant(history: list[dict[str, str]], language: str) -> str:
-    recent = next((item.get("content", "") for item in reversed(history) if item.get("role") == "assistant"), "")
+    recent = _recent_assistant_text(history)
     if "4 nhóm" in recent or "4 main ways" in recent:
-        return _CAPABILITY_TEXT[language]
+        return _CAPABILITY_EXAMPLES[language]
     if language == "vi":
         return "Ý mình là bạn có thể hỏi trực tiếp về địa điểm, đường đi, văn hóa/lịch sử Hàm Ninh hoặc nhờ mình giải thích vì sao một gợi ý phù hợp."
     return "I mean you can ask about places, directions, Ham Ninh culture/history, or why a recommendation fits your needs."
+
+def _fresh_food_answer(language: str) -> str:
+    if language == "vi":
+        return (
+            "Có. Với Hàm Ninh, nhóm phù hợp nhất là hải sản tươi: ghẹ, tôm, mực, cá biển và các quán/nhà bè gần làng chài. "
+            "Nếu bạn muốn mình kiếm địa điểm cụ thể, hãy nói 'kiếm nhà hàng gần đây' hoặc cho mình ngân sách/khu vực bạn đang đứng."
+        )
+    return "Yes. In Ham Ninh, fresh seafood is the safest fit: crab, shrimp, squid, fish, and seafood rafts/restaurants near the fishing village. Ask me to find nearby restaurants for concrete options."
 
 def _asks_about_previous_groups(normalized: str, history: list[dict[str, str]]) -> bool:
     if not re.search(r"\b(4|bốn|bon)\b.*(nhóm|nhom)|nhóm gì|nhom gi", normalized):

@@ -84,6 +84,7 @@ export type ChatStreamStatus =
 export interface StreamChatCallbacks {
   onToken: (token: string) => void;
   onCitations: (citations: Citation[]) => void;
+  onPlaces?: (places: PlaceResult[]) => void;
   onStatus?: (status: ChatStreamStatus) => void;
   onDone: () => void;
   onOpen?: () => void;
@@ -198,6 +199,16 @@ export async function streamChat(
           callbacks.onCitations(JSON.parse(data.slice(12)) as Citation[]);
         } catch {
           callbacks.onError("Invalid citations payload");
+          return;
+        }
+        continue;
+      }
+
+      if (data.startsWith("[PLACES] ")) {
+        try {
+          callbacks.onPlaces?.(JSON.parse(data.slice(9)) as PlaceResult[]);
+        } catch {
+          callbacks.onError("Invalid places payload");
           return;
         }
         continue;

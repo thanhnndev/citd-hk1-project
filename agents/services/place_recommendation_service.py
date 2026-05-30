@@ -281,16 +281,16 @@ def _maps_url(place_id: str) -> str:
 
 def _message_for_status(status: PlaceToolStatus, *, result_count: int = 0) -> str:
     if status == PlaceToolStatus.OK:
-        return f"I found {result_count} Ham Ninh place option(s) from Goong Places."
+        return f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
     if status == PlaceToolStatus.EMPTY:
-        return "I could not find matching Ham Ninh places from Goong Places for that request."
+        return "Mình chưa tìm thấy địa điểm phù hợp quanh Hàm Ninh cho yêu cầu này. Bạn thử nói rõ loại địa điểm, ngân sách hoặc khu vực gần đâu nhé."
     if status == PlaceToolStatus.CREDENTIALS_BLOCKED:
-        return "Place recommendations are unavailable because the server Places credentials are not configured."
+        return "Tính năng tìm địa điểm đang thiếu cấu hình Places API trên máy chủ, nên mình chưa thể trả kết quả địa điểm thật lúc này."
     if status == PlaceToolStatus.UPSTREAM_ERROR:
-        return "Place recommendations are temporarily unavailable because Goong Places could not be reached. Please try again shortly."
+        return "Tính năng tìm địa điểm đang tạm lỗi từ Places API. Bạn thử lại sau một chút nhé."
     if status == PlaceToolStatus.INVALID_REQUEST:
-        return "I could not search for places because the request was invalid. Please try a shorter Ham Ninh place request."
-    return "Place recommendations are unavailable right now. Please try again later."
+        return "Mình chưa tìm được vì yêu cầu tìm địa điểm chưa đủ rõ. Bạn thử viết ngắn hơn, ví dụ: 'nhà hàng hải sản gần Hàm Ninh'."
+    return "Tính năng tìm địa điểm đang tạm không khả dụng. Bạn thử lại sau nhé."
 
 
 def _elapsed_ms(started: float) -> float:

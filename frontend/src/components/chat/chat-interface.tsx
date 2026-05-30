@@ -175,6 +175,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             status: "streaming",
           })),
           onCitations: (citations) => updateLastAssistant((message) => ({ ...message, citations })),
+          onPlaces: (places) => updateLastAssistant((message) => ({ ...message, places })),
           onDone: () => {
             updateLastAssistant((message) => ({ ...message, status: "complete", streamStatus: null }));
             setLoading(false);

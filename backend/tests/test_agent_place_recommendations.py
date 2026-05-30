@@ -158,7 +158,7 @@ async def test_recommendation_exception_falls_through_to_llm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_place_intent_uses_deterministic_text_and_no_structured_places_marker() -> None:
+async def test_stream_place_intent_uses_deterministic_text_and_places_marker() -> None:
     recommender = AsyncMock()
     recommender.recommend.return_value = _place_response("s-stream")
     llm = AsyncMock()
@@ -173,9 +173,40 @@ async def test_stream_place_intent_uses_deterministic_text_and_no_structured_pla
 
     llm.answer_stream.assert_not_called()
     assert "I found 1 local place option(s) in Ho Chi Minh City from Goong Places." in events
-    assert "[CITATIONS] []" in events
-    assert "[DONE]" in events
-    assert not any(event.startswith("[PLACES]") for event in events)
+    assert "[DONE]" not in events  # router owns the terminal SSE marker
+    assert any(event.startswith("[PLACES]") for event in events)
+
+
+@pytest.mark.asyncio
+async def test_nearby_restaurant_query_routes_to_places_before_rag() -> None:
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response("s-nearby")
+    llm = AsyncMock()
+    service = AgentService(
+        retriever=None,
+        llm_service=llm,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(session_id="s-nearby", message="kiếm nhà hàng gần đây", language="vi")
+
+    recommender.recommend.assert_awaited_once()
+    llm.answer.assert_not_called()
+    assert response.places
+    assert response.citations == []
+
+@pytest.mark.asyncio
+async def test_capability_example_followup_does_not_rag() -> None:
+    service = AgentService(retriever=None, checkpoint_mode="test")
+
+    first = await service.answer(session_id="s-examples", message="bạn giúp được gì", language="vi")
+    second = await service.answer(session_id="s-examples", message="ví dụ cụ thể hơn đi", language="vi")
+
+    assert "4 nhóm" in first.message
+    assert "Ví dụ cụ thể" in second.message
+    assert second.citations == []
+    assert second.places == []
 
 @pytest.mark.asyncio
 async def test_recommendation_service_preserves_pin_ready_candidate_fields() -> None:
