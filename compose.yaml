@@ -256,6 +256,10 @@ services:
       langfuse:
         condition: service_healthy
     volumes:
+      # Keep backend source bind-mounted so uvicorn --reload actually picks up
+      # local fixes to the API wrapper and agent package during development.
+      - ./backend/app:/app/app:ro
+      - ./agents:/app/agents:ro
       - ./data:/data:ro
     restart: no
     networks:
