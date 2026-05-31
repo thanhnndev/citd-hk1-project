@@ -191,6 +191,38 @@ class TestSearchPlacesToolResult:
         assert result.provider_status.http_status == 403
         assert result.provider_status.provider_code == "REQUEST_DENIED"
 
+    def test_interpreted_query_and_request_metadata_are_safe(self):
+        result = self._make_result(
+            interpreted_query="nhà hàng Hàm Ninh",
+            request_metadata={
+                "endpoint": "google_text_search",
+                "field_mask": GOOGLE_PLACES_FIELD_MASK,
+                "language_code": "vi",
+                "max_result_count": 3,
+            },
+        )
+        assert result.interpreted_query == "nhà hàng Hàm Ninh"
+        assert result.request_metadata["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+        dump = result.model_dump_json()
+        assert "google_places_api_key" not in dump.lower()
+        assert "secret" not in dump.lower()
+
+    def test_interpreted_query_constrained_length(self):
+        with pytest.raises(ValidationError):
+            SearchPlacesToolResult(
+                status=PlaceToolStatus.OK,
+                source=PlaceToolSource.GOOGLE_PLACES,
+                interpreted_query="x" * 161,
+            )
+
+    def test_request_metadata_constrained_length(self):
+        with pytest.raises(ValidationError):
+            SearchPlacesToolResult(
+                status=PlaceToolStatus.OK,
+                source=PlaceToolSource.GOOGLE_PLACES,
+                request_metadata={f"k{i}": i for i in range(21)},
+            )
+
     def test_warnings_constrained_length(self):
         with pytest.raises(ValidationError):
             SearchPlacesToolResult(

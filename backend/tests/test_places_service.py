@@ -678,3 +678,6 @@ class TestExistingBehaviorPreserved:
         assert "endpoint" in response.audit
         assert "field_mask" in response.audit
         assert response.audit["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+        assert response.interpreted_query == "test"
+        assert response.request_metadata["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+        assert response.request_metadata["max_result_count"] == 10

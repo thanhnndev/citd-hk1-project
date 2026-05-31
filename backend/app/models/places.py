@@ -429,6 +429,16 @@ class SearchPlacesToolResult(BaseModel):
     status: PlaceToolStatus
     source: PlaceToolSource
     provider_status: ProviderStatus = Field(default_factory=ProviderStatus)
+    interpreted_query: str | None = Field(
+        default=None,
+        max_length=160,
+        description="Provider-ready query text after safe request interpretation; no API keys or raw payloads.",
+    )
+    request_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        max_length=20,
+        description="Safe request-shaping metadata such as endpoint, field mask, locale, and result limits.",
+    )
     candidates: list[PlaceCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list, max_length=10, description="User-safe warning messages.")
     reasoning_log: list[str] = Field(default_factory=list, max_length=50, description="Step-by-step reasoning entries (no secrets).")
