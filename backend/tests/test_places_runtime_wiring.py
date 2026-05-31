@@ -8,12 +8,16 @@ Covers:
 - Circuit-open skips provider and uses cache
 - No RAG fallback or document citations in any cache-fallback path
 - Secret redaction in all error/fallback paths
+- T02: AgentService chat-facing fallback paths never invoke RAG or citations
+- T02: Response text only references display_name values from typed places
+- T02: Malformed/injection-like provider names don't leak into chat response
 """
 
 from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -26,9 +30,11 @@ from app.models.places import (
     PlaceToolStatus,
 )
 from app.models.request import LatLng
+from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
 from agents.services.place_recommendation_service import PlaceRecommendationService
 from agents.tools.places_service import CircuitState, GooglePlacesService
 from agents.tools.place_cache import PlaceCache, CacheDiagnostics
+from agents.graph.agent_service import AgentService
 
 
 # ---------------------------------------------------------------------------
@@ -692,3 +698,545 @@ async def test_decision_trace_through_circuit_open_path() -> None:
     assert response.decision_trace.credential_status == "live"
     event_names = [e.event for e in response.decision_trace.events]
     assert "request_built" in event_names
+
+
+# ---------------------------------------------------------------------------
+# T02: AgentService-level tests — prove chat fallback paths never invoke RAG
+# ---------------------------------------------------------------------------
+
+def _make_cached_place_result(
+    place_id: str = "places/t02-cached",
+    display_name: str = "Quán T02 Test",
+) -> PlaceResult:
+    """Helper to build a minimal PlaceResult for mocking."""
+    return PlaceResult(
+        place_id=place_id,
+        display_name=display_name,
+        formatted_address="Hàm Ninh, Phú Quốc",
+        location=LatLng(lat=10.1794, lng=104.0491),
+        types=["restaurant"],
+        primary_type="restaurant",
+        rating=4.2,
+        user_rating_count=50,
+        price_level=2,
+        open_now=True,
+        business_status="OPERATIONAL",
+        local_factor=0.7,
+        final_score=0.72,
+        score_breakdown=ScoreBreakdown(
+            tree1_locality=0.7, tree2_proximity=0.6, tree3_quality=0.7,
+            s_bag=0.67, delta1_fairness=0.0, delta2_access=0.0,
+            final_score=0.72, rank=1,
+        ),
+        map_uri=f"https://map.goong.io/?pid={place_id}",
+    )
+
+
+def _make_recommendation_response(
+    *,
+    message: str,
+    status: PlaceToolStatus = PlaceToolStatus.OK,
+    places: list[PlaceResult] | None = None,
+    fallback: bool = False,
+    source: PlaceToolSource | None = None,
+) -> ChatResponse:
+    """Helper to build a ChatResponse for mocking PlaceRecommendationService."""
+    return ChatResponse(
+        session_id="t02-session",
+        message=message,
+        citations=[],
+        places=places or [],
+        reasoning_log=f"place_recommendation status={status.value} source={source.value if source else 'none'}",
+        intent="place_recommendation",
+        latency_ms=42.0,
+        fallback=fallback,
+        decision_trace=None,
+    )
+
+
+class FakePlaceRecommenderNoLLM:
+    """Fake place recommender that returns controlled responses without calling LLM."""
+
+    def __init__(self, responses: list[ChatResponse] | None = None, raise_on: Exception | None = None) -> None:
+        self._responses = responses or []
+        self._call_index = 0
+        self._raise_on = raise_on
+        self.call_count = 0
+        self.last_query: str | None = None
+
+    async def recommend(self, *, query: str, **kwargs: Any) -> ChatResponse:
+        self.call_count += 1
+        self.last_query = query
+        if self._raise_on is not None:
+            raise self._raise_on
+        if self._responses:
+            resp = self._responses[min(self._call_index, len(self._responses) - 1)]
+            self._call_index += 1
+            return resp
+        return _make_recommendation_response(
+            message="Mình tìm được 0 địa điểm phù hợp.",
+            places=[],
+            fallback=True,
+        )
+
+
+class FakeCheckpointer:
+    """In-memory checkpointer for AgentService tests."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, list[dict[str, str]]] = {}
+
+    async def load_history(self, session_id: str) -> list[dict[str, str]]:
+        return list(self._store.get(session_id, []))
+
+    async def save_turn(self, session_id: str, user: str, assistant: str) -> None:
+        history = self._store.setdefault(session_id, [])
+        history.extend([{"role": "user", "content": user}, {"role": "assistant", "content": assistant}])
+        del history[:-8]
+
+
+# ---------------------------------------------------------------------------
+# T02.1: AgentService with no LLM client — place fallback → no RAG, citations=[]
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_agent_service_place_fallback_no_rag_cache_hit() -> None:
+    """AgentService routes place request → cache-backed response → RAG never called, citations=[]."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Mình tìm được 1 địa điểm phù hợp quanh Hàm Ninh: 1. Quán T02 Test.",
+            places=[_make_cached_place_result()],
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-no-rag-hit",
+        message="kiếm nhà hàng hải sản gần đây",
+        language="vi",
+    )
+
+    # R038 proof: citations must be empty — no RAG fallback
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    # Places must be present from cache
+    assert len(response.places) == 1
+    assert response.places[0].display_name == "Quán T02 Test"
+    # Response must not contain any document-citation-like text
+    assert "[1]" not in response.message
+    assert "nguồn" not in response.message.lower() or "địa điểm" in response.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_agent_service_place_fallback_no_rag_cache_miss() -> None:
+    """AgentService routes place request → provider fails + cache miss → honest unavailable, citations=[]."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Tính năng tìm địa điểm đang tạm không khả dụng. Bạn thử lại sau nhé.",
+            status=PlaceToolStatus.UNAVAILABLE,
+            places=[],
+            fallback=True,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-no-rag-miss",
+        message="tìm quán không tồn tại",
+        language="vi",
+    )
+
+    # R038 proof: no RAG citations on cache-miss fallback
+    assert response.citations == []
+    assert response.places == []
+    assert response.fallback is True
+    # Honest unavailable message — no invented place names
+    assert "không khả dụng" in response.message
+
+
+# ---------------------------------------------------------------------------
+# T02.2: AgentService with no LLM — circuit-open cache hit → no RAG
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_agent_service_circuit_open_cache_hit_no_rag() -> None:
+    """Circuit-open + cache hit through AgentService → citations=[], no RAG call."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Mình tìm được 1 địa điểm phù hợp quanh Hàm Ninh: 1. Quán Circuit.",
+            places=[_make_cached_place_result(display_name="Quán Circuit")],
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-circuit-hit",
+        message="kiếm cafe gần đây",
+        language="vi",
+    )
+
+    assert response.citations == []
+    assert len(response.places) == 1
+    assert response.places[0].display_name == "Quán Circuit"
+
+
+@pytest.mark.asyncio
+async def test_agent_service_circuit_open_cache_miss_no_rag() -> None:
+    """Circuit-open + cache miss through AgentService → honest unavailable, citations=[]."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Tính năng tìm địa điểm đang tạm không khả dụng. Bạn thử lại sau nhé.",
+            status=PlaceToolStatus.UNAVAILABLE,
+            places=[],
+            fallback=True,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-circuit-miss",
+        message="tìm homestay Hàm Ninh",
+        language="vi",
+    )
+
+    assert response.citations == []
+    assert response.places == []
+    assert response.fallback is True
+
+
+# ---------------------------------------------------------------------------
+# T02.3: AgentService with no LLM — credential-blocked path
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_agent_service_credential_blocked_no_rag() -> None:
+    """Credential-blocked path through AgentService → honest message, citations=[]."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Tính năng tìm địa điểm đang thiếu cấu hình Places API trên máy chủ, nên mình chưa thể trả kết quả địa điểm thật lúc này.",
+            status=PlaceToolStatus.CREDENTIALS_BLOCKED,
+            places=[],
+            fallback=True,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-cred-blocked",
+        message="kiếm nhà hàng gần đây",
+        language="vi",
+    )
+
+    assert response.citations == []
+    assert response.places == []
+    assert response.fallback is True
+    assert "thiếu cấu hình" in response.message
+
+
+# ---------------------------------------------------------------------------
+# T02.4: AgentService with no LLM — provider exception → cache hit
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_agent_service_provider_exception_cache_hit_no_rag() -> None:
+    """Provider raises exception → cache-backed results through AgentService, citations=[]."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Mình tìm được 1 địa điểm phù hợp quanh Hàm Ninh: 1. Quán Sau Lỗi.",
+            places=[_make_cached_place_result(display_name="Quán Sau Lỗi")],
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-exc-hit",
+        message="tìm quán ăn ngon",
+        language="vi",
+    )
+
+    assert response.citations == []
+    assert len(response.places) == 1
+    assert response.places[0].display_name == "Quán Sau Lỗi"
+    # Reasoning log should reveal cache source
+    assert response.reasoning_log is not None
+    assert "cache" in response.reasoning_log.lower()
+
+
+# ---------------------------------------------------------------------------
+# T02.5: Response text only references display_name values
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_response_text_only_references_display_names() -> None:
+    """Response message must only reference returned PlaceResult.display_name values."""
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Mình tìm được 2 địa điểm phù hợp quanh Hàm Ninh: 1. Quán A; 2. Quán B.",
+            places=[
+                _make_cached_place_result(place_id="p1", display_name="Quán A"),
+                _make_cached_place_result(place_id="p2", display_name="Quán B"),
+            ],
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-names",
+        message="tìm quán ăn",
+        language="vi",
+    )
+
+    # All display names in response must match actual returned places
+    returned_names = {p.display_name for p in response.places}
+    # "Quán A" and "Quán B" must both be in places
+    assert returned_names == {"Quán A", "Quán B"}
+    # Response must reference them
+    assert "Quán A" in response.message
+    assert "Quán B" in response.message
+    # Response must NOT contain any other business names
+    assert "Quán C" not in response.message
+    assert "McDonald" not in response.message
+
+
+# ---------------------------------------------------------------------------
+# T02.6: Malformed/injection-like provider names don't leak
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_malformed_injection_names_do_not_leak() -> None:
+    """Malformed/injection-like display names from cache are returned as-is but NOT duplicated in extra text."""
+    # Simulate a provider result that has injection-like display_name
+    malicious_name = "<script>alert('xss')</script> Quán Độc"
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message=f"Mình tìm được 1 địa điểm phù hợp.",
+            places=[_make_cached_place_result(place_id="p-inject", display_name=malicious_name)],
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-inject",
+        message="tìm quán lạ",
+        language="vi",
+    )
+
+    # Must have the place (even with weird name — it's grounded in typed data)
+    assert len(response.places) == 1
+    # The display_name comes from typed PlaceResult, not invented
+    assert response.places[0].display_name == malicious_name
+    # citations must be empty — no RAG was invoked
+    assert response.citations == []
+    # The message should NOT repeat the injection string in free-form text
+    # (it may reference it via structured places, but not in the prose message)
+    assert "<script>" not in response.message
+    assert "alert(" not in response.message
+
+
+# ---------------------------------------------------------------------------
+# T02.7: PlaceRecommendationService exception → AgentService degrades gracefully
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_recommendation_service_exception_degrades_gracefully() -> None:
+    """If PlaceRecommendationService raises, AgentService returns honest unavailable, citations=[]."""
+    recommender = FakePlaceRecommenderNoLLM(raise_on=RuntimeError("db connection lost"))
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-svc-exc",
+        message="tìm nhà hàng",
+        language="vi",
+    )
+
+    # Must not crash — returns unavailable
+    assert response.citations == []
+    assert response.places == []
+    assert response.fallback is True
+    # Must contain honest unavailable text
+    assert "không khả dụng" in response.message or "tạm lỗi" in response.message
+
+
+# ---------------------------------------------------------------------------
+# T02.8: AgentService with no LLM — no place service → honest unavailable
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_agent_service_no_place_service_no_rag() -> None:
+    """AgentService with no place_recommendation_service → honest unavailable, citations=[]."""
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=None,
+    )
+
+    response = await agent.answer(
+        session_id="t02-no-svc",
+        message="kiếm nhà hàng gần đây",
+        language="vi",
+    )
+
+    assert response.citations == []
+    assert response.places == []
+    assert response.fallback is True
+    # The _place_unavailable_message says "không dùng nguồn RAG để giả kết quả"
+    assert "không" in response.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# T02.9: No RAG retriever called even when hybrid_retriever is available
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_place_path_does_not_call_hybrid_retriever() -> None:
+    """Place-deterministic routing must NOT call hybrid_retriever even when it exists."""
+    mock_hybrid = AsyncMock()
+    mock_hybrid.search_with_citations = AsyncMock(
+        return_value=(MagicMock(chunks=[]), [])
+    )
+
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Mình tìm được 1 địa điểm.",
+            places=[_make_cached_place_result()],
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=mock_hybrid,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-no-retriever-call",
+        message="tìm quán hải sản",
+        language="vi",
+    )
+
+    # R038 proof: hybrid_retriever must NOT be called for place paths
+    mock_hybrid.search_with_citations.assert_not_called()
+    assert response.citations == []
+
+
+# ---------------------------------------------------------------------------
+# T02.10: Multi-place cache hit — all display_names accounted for
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_multi_place_cache_hit_all_names_accounted() -> None:
+    """Multi-place cache hit: every display_name in message matches a returned PlaceResult."""
+    places = [
+        _make_cached_place_result(place_id=f"p-{i}", display_name=f"Quán {chr(65+i)}")
+        for i in range(3)
+    ]
+    recommender = FakePlaceRecommenderNoLLM(responses=[
+        _make_recommendation_response(
+            message="Mình tìm được 3 địa điểm phù hợp.",
+            places=places,
+            fallback=False,
+            source=PlaceToolSource.CACHE,
+        ),
+    ])
+    agent = AgentService(
+        retriever=None,
+        hybrid_retriever=None,
+        llm_service=None,
+        checkpointer=FakeCheckpointer(),
+        checkpoint_mode="test",
+        place_recommendation_service=recommender,
+    )
+
+    response = await agent.answer(
+        session_id="t02-multi",
+        message="tìm nhiều quán",
+        language="vi",
+    )
+
+    assert response.citations == []
+    assert len(response.places) == 3
+    returned_names = {p.display_name for p in response.places}
+    assert returned_names == {"Quán A", "Quán B", "Quán C"}
+    # No unexpected names in message
+    assert "Quán D" not in response.message
