@@ -932,6 +932,13 @@ class TestPlaceSearchRequestInvalidPreferences:
                 budget_filter=[2],  # ints not accepted — must be symbolic strings
             )
 
+    def test_rejects_empty_budget_list(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                budget_filter=[],  # empty list rejected — use None for no constraint
+            )
+
     def test_rejects_oversized_budget_list(self):
         with pytest.raises(ValidationError):
             PlaceSearchRequest(

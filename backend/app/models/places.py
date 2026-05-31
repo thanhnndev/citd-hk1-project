@@ -93,10 +93,12 @@ class PlaceSearchRequest(BaseModel):
 
     budget_filter: list[PriceLevel] | None = Field(
         default=None,
+        min_length=1,
         max_length=5,
         description=(
             "Symbolic budget constraint (e.g. ['free','inexpensive']). "
-            "Maps to numeric price_level 0-4 downstream. None = no price filtering."
+            "Maps to numeric price_level 0-4 downstream. None = no price filtering. "
+            "Empty list is rejected — use None for no constraint."
         ),
     )
     wheelchair_accessible_preference: bool | None = Field(
