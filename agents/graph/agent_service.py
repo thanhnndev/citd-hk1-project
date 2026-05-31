@@ -416,7 +416,10 @@ class AgentService:
         state["intent"] = PLACE_RECOMMENDATION_INTENT
         if self._place_recommendation_service is None:
             state["response_text"] = _place_unavailable_message(state["language"])
-            state["fallback"] = True
+            # fallback=False: place intent was handled via the deterministic tool
+            # policy path — no RAG/LLM fallback occurred. The unavailable message
+            # is the honest answer, not a degraded fallback.
+            state["fallback"] = False
             return json.dumps({"status": "unavailable", "message": state["response_text"]}, ensure_ascii=False)
 
         # Extract optional preferences from tool args (already parsed from LLM tool call)

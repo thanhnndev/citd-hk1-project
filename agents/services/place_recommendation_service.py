@@ -722,8 +722,10 @@ def _apply_preference_filters(
     - Budget: exclude candidates whose price_level falls outside the requested
       budget_filter numeric range.
     - Accessibility: boost candidates with wheelchair_accessible options by
-      increasing their local_factor (so fairness balancing will tend to promote
-      them) — no hard filter because accessibility metadata is often missing.
+      increasing their local_factor (so fairness balancing and reranking will tend
+      to promote them) — no hard filter because accessibility metadata is often
+      missing.  Candidates with unknown accessibility metadata are retained without
+      hiding their unknown status.
     - User location: already used in _build_request for origin; proximity scoring
       is handled downstream by FeatureExtractor.
 
@@ -753,6 +755,25 @@ def _apply_preference_filters(
         result = filtered
     else:
         excluded_by_budget = 0
+
+    # Accessibility boosting: when wheelchair_accessible_preference is True,
+    # promote candidates that have positive accessibility options by slightly
+    # increasing their local_factor.  This is a soft boost — accessible
+    # candidates stay ahead in fairness/re-ranking but we do NOT filter out
+    # candidates whose accessibility metadata is unknown.
+    if request.wheelchair_accessible_preference is True:
+        boosted = 0
+        for c in result:
+            if c.accessibility_options and any(c.accessibility_options.values()):
+                # Boost local_factor by 0.1, capped at 1.0
+                c.local_factor = min(1.0, (c.local_factor or 0.5) + 0.1)
+                boosted += 1
+            # Candidates with no accessibility_options dict or all-False values
+            # are left unchanged — unknown metadata is preserved, not hidden.
+        if boosted > 0:
+            # Sort by updated local_factor descending so accessibility-aware
+            # candidates surface higher before fairness/reranking.
+            result.sort(key=lambda c: c.local_factor or 0.0, reverse=True)
 
     return result, excluded_by_budget
 
@@ -832,7 +853,7 @@ def _message_for_status(
     if status == PlaceToolStatus.CREDENTIALS_BLOCKED:
         return "Tính năng tìm địa điểm đang thiếu cấu hình Places API trên máy chủ, nên mình chưa thể trả kết quả địa điểm thật lúc này."
     if status == PlaceToolStatus.UPSTREAM_ERROR:
-        return "Tính năng tìm địa điểm đang tạm lỗi từ Places API. Bạn thử lại sau một chút nhé."
+        return "Tính năng tìm địa điểm đang tạm lỗi và không khả dụng từ Places API. Bạn thử lại sau một chút nhé."
     if status == PlaceToolStatus.INVALID_REQUEST:
         return "Mình chưa tìm được vì yêu cầu tìm địa điểm chưa đủ rõ. Bạn thử viết ngắn hơn, ví dụ: 'nhà hàng hải sản gần Hàm Ninh'."
     return "Tính năng tìm địa điểm đang tạm không khả dụng. Bạn thử lại sau nhé."
