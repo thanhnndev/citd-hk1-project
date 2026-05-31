@@ -301,11 +301,15 @@ class TestProviderSourceAndStatus:
             assert r.explanation.provider_source == "google_places"
 
     def test_explanation_carries_provider_status(self) -> None:
-        """PlaceExplanation.provider_status must reflect candidate business_status."""
+        """PlaceExplanation.provider_status must reflect the provider/tool status."""
         candidates = [_candidate(business_status="OPERATIONAL")]
-        results = _reranked_results(candidates, "hải sản", provider_source="goong_places")
+        results = _reranked_results(
+            candidates, "hải sản",
+            provider_source="goong_places",
+            provider_status="ok",
+        )
         for r in results:
-            assert r.explanation.provider_status == "OPERATIONAL"
+            assert r.explanation.provider_status == "ok"
 
     def test_provider_source_none_when_unspecified(self) -> None:
         """When provider_source is None, explanation.provider_source is None."""

@@ -311,10 +311,12 @@ class PlaceRecommendationService:
 
         ensemble_ok = True
         provider_source_val = tool_response.source.value
+        provider_status_val = tool_response.status.value
         try:
             places = _reranked_results(
                 candidates, request.query,
                 provider_source=provider_source_val,
+                provider_status=provider_status_val,
                 request=request,
             )
             tracer.emit("reranking_ensemble", PlaceAuditPhase.RERANK, detail={
@@ -326,6 +328,7 @@ class PlaceRecommendationService:
             places = _grounded_results(
                 candidates,
                 provider_source=provider_source_val,
+                provider_status=provider_status_val,
                 request=request,
             )
             ensemble_ok = False
@@ -504,6 +507,7 @@ def _reranked_results(
     candidates: list[PlaceCandidate], query: str,
     *,
     provider_source: str | None = None,
+    provider_status: str | None = None,
     request: PlaceSearchRequest | None = None,
 ) -> list[PlaceResult]:
     """Run candidates through FeatureExtractor → EnsembleReranker pipeline."""
@@ -569,6 +573,7 @@ def _reranked_results(
                     breakdown=breakdown,
                     accessibility_score=accessibility_score,
                     provider_source=provider_source,
+                    provider_status=provider_status,
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
                 ),
@@ -582,6 +587,7 @@ def _grounded_results(
     candidates: list[PlaceCandidate],
     *,
     provider_source: str | None = None,
+    provider_status: str | None = None,
     request: PlaceSearchRequest | None = None,
 ) -> list[PlaceResult]:
     """Fallback path: return candidates with default ensemble ScoreBreakdown."""
@@ -647,6 +653,7 @@ def _grounded_results(
                     accessibility_score=accessibility_score,
                     fallback=True,
                     provider_source=provider_source,
+                    provider_status=provider_status,
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
                 ),
@@ -682,6 +689,7 @@ def _build_place_explanation(
     accessibility_score: float | None,
     fallback: bool = False,
     provider_source: str | None = None,
+    provider_status: str | None = None,
     budget_matched: bool = False,
     accessibility_matched: bool = False,
 ) -> PlaceExplanation:
@@ -778,7 +786,7 @@ def _build_place_explanation(
         accessibility_note=accessibility_note,
         route_summary=route_summary,
         provider_source=provider_source,
-        provider_status=candidate.business_status,
+        provider_status=provider_status,
         evidence_fields_used=sorted(set(evidence)),
     )
 
