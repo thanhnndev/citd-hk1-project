@@ -37,6 +37,19 @@ logger = structlog.get_logger(__name__)
 NODE_TIMEOUT_LLM = 20
 NODE_TIMEOUT_TOOL = 15
 
+# Per-node timeout constants (ROB-06)
+NODE_TIMEOUT_RETRIEVE = 10
+NODE_TIMEOUT_ANSWER = 15
+
+
+class NodeTimeoutError(Exception):
+    """Raised when a graph node exceeds its per-node timeout."""
+
+    def __init__(self, node_name: str, timeout_seconds: int) -> None:
+        self.node_name = node_name
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Node '{node_name}' timed out after {timeout_seconds}s")
+
 # ---------------------------------------------------------------------------
 # Structured follow-up context contract (R052)
 # ---------------------------------------------------------------------------
