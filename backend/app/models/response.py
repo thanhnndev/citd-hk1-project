@@ -53,6 +53,23 @@ class AccessibilityInfo(BaseModel):
     )
 
 
+class PlaceExplanation(BaseModel):
+    """Safe structured explanation for why a place was recommended."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rank: int = Field(default=0, ge=0, description="1-based recommendation rank, or 0 when not ranked.")
+    primary_reason: str = Field(default="Recommended from grounded place data with limited metadata.", max_length=240, description="Concise reason derived only from normalized place fields.")
+    matched_preferences: list[str] = Field(default_factory=list, max_length=10, description="Preference signals matched by the normalized candidate.")
+    local_context: str = Field(default="local signal unknown", max_length=160, description="Safe locality/fairness context without exact user GPS.")
+    score_factors: dict[str, float | int | str | None] = Field(default_factory=dict, max_length=12, description="Compact score fields used by the reranker or fallback scorer.")
+    fairness_note: str = Field(default="local representation metadata limited", max_length=200, description="Fairness/locality note derived from local_factor metadata.")
+    accessibility_note: str = Field(default="accessibility metadata unknown", max_length=200, description="Accessibility note derived from normalized accessibility fields.")
+    route_summary: str = Field(default="route metadata unavailable", max_length=200, description="Route summary without exact origin/user GPS.")
+    provider_source: str | None = Field(default=None, max_length=64, description="Normalized provider/source label when available.")
+    provider_status: str | None = Field(default=None, max_length=64, description="Normalized provider status when available.")
+    evidence_fields_used: list[str] = Field(default_factory=list, max_length=20, description="Normalized candidate/result fields used to build this explanation.")
+
 class PlaceResult(BaseModel):
     """
     A single place recommendation with full scoring details.
@@ -159,6 +176,10 @@ class PlaceResult(BaseModel):
     )
     map_uri: str = Field(
         description="Deep link to open the place in a provider map.",
+    )
+    explanation: PlaceExplanation = Field(
+        default_factory=PlaceExplanation,
+        description="Structured why-this-recommendation data for the place.",
     )
 
 

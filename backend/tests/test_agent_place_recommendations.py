@@ -2876,3 +2876,91 @@ async def test_commercial_message_result_count_matches() -> None:
 
     assert "3" in response.message
     assert "làng chài truyền thống" in response.message
+
+@pytest.mark.asyncio
+async def test_recommendation_service_emits_explanation_for_each_place() -> None:
+    from datetime import UTC, datetime
+
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus, RouteContext
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidate = PlaceCandidate(
+        place_id="places/explainable",
+        display_name="Explainable Seafood",
+        types=["restaurant"],
+        primary_type="seafood_restaurant",
+        rating=4.8,
+        price_level=2,
+        open_now=True,
+        business_status="OPERATIONAL",
+        accessibility_options={"wheelchair_accessible_entrance": True},
+        local_factor=0.9,
+        route_context=RouteContext(travel_mode="drive", distance_meters=1500, duration_seconds=420),
+        map_uri="https://maps.example/explainable",
+    )
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=[candidate],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await service.recommend(query="seafood", language="en", session_id="s-explain")
+
+    assert response.citations == []
+    assert all(place.explanation for place in response.places)
+    explanation = response.places[0].explanation
+    assert explanation.rank == response.places[0].score_breakdown.rank
+    assert "Explainable Seafood" not in explanation.primary_reason
+    assert "citation" not in explanation.model_dump_json().lower()
+    assert "place_id" in explanation.evidence_fields_used
+    assert "route" in explanation.route_summary
+    assert "api_key" not in response.model_dump_json().lower()
+    assert "phone" not in response.model_dump_json().lower()
+
+@pytest.mark.asyncio
+async def test_grounded_fallback_explanation_uses_conservative_defaults() -> None:
+    from datetime import UTC, datetime
+
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidate = PlaceCandidate(
+        place_id="places/sparse",
+        display_name="Sparse Cafe",
+        map_uri="https://maps.example/sparse",
+    )
+    request = PlaceSearchRequest(query="coffee")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=[candidate],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+    service_module = __import__("agents.services.place_recommendation_service", fromlist=["EnsembleReranker"])
+    original = service_module.EnsembleReranker
+
+    class FailingReranker:
+        def rerank(self, *_args, **_kwargs):
+            raise RuntimeError("force fallback")
+
+    service_module.EnsembleReranker = FailingReranker
+    try:
+        response = await service.recommend(query="coffee", language="en", session_id="s-sparse")
+    finally:
+        service_module.EnsembleReranker = original
+
+    place = response.places[0]
+    assert place.explanation.primary_reason.startswith("Recommended using fallback")
+    assert place.explanation.fairness_note == "local_factor missing; fairness treatment is conservative"
+    assert place.explanation.accessibility_note == "accessibility metadata unknown"
+    assert place.explanation.route_summary == "route metadata unavailable"
+    assert place.explanation.score_factors["local_factor"] is None

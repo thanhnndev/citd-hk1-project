@@ -927,3 +927,76 @@ class TestPreferenceSerialization:
         # But the method is callable
         summary = req.preference_summary()
         assert summary["budget_set"] is True
+
+# ---------------------------------------------------------------------------
+# PlaceResult explanation contract tests
+# ---------------------------------------------------------------------------
+
+class TestPlaceResultExplanation:
+    def _score_breakdown(self) -> ScoreBreakdown:
+        from app.models.response import ScoreBreakdown
+
+        return ScoreBreakdown(
+            tree1_locality=0.8,
+            tree2_proximity=0.7,
+            tree3_quality=0.9,
+            s_bag=0.8,
+            delta1_fairness=0.0,
+            delta2_access=0.0,
+            final_score=0.8,
+            rank=1,
+        )
+
+    def test_place_result_requires_strict_structured_explanation(self):
+        from app.models.response import PlaceExplanation, PlaceResult
+
+        explanation = PlaceExplanation(
+            rank=1,
+            primary_reason="Recommended by reranking grounded place fields.",
+            matched_preferences=["type:restaurant", "price_level:2"],
+            local_context="strong local signal from normalized provider metadata",
+            score_factors={"rank": 1, "final_score": 0.8, "local_factor": 0.7},
+            fairness_note="supports local representation balancing",
+            accessibility_note="accessibility score 1.00",
+            route_summary="route drive, 1200m, 5min",
+            provider_status="OPERATIONAL",
+            evidence_fields_used=["place_id", "display_name", "score_breakdown"],
+        )
+        place = PlaceResult(
+            place_id="places/explained",
+            display_name="Explained Cafe",
+            local_factor=0.7,
+            final_score=0.8,
+            score_breakdown=self._score_breakdown(),
+            map_uri="https://maps.example/explained",
+            explanation=explanation,
+        )
+
+        dumped = place.model_dump()
+        assert dumped["explanation"]["rank"] == 1
+        assert dumped["explanation"]["matched_preferences"] == ["type:restaurant", "price_level:2"]
+        assert "raw_provider_payload" not in place.model_dump_json().lower()
+        assert "phone" not in place.model_dump_json().lower()
+        assert "api_key" not in place.model_dump_json().lower()
+
+    def test_explanation_forbids_extra_secret_fields(self):
+        from app.models.response import PlaceExplanation
+
+        with pytest.raises(ValidationError):
+            PlaceExplanation(rank=1, api_key="secret")
+
+    def test_place_result_defaults_to_limited_explanation_when_missing_metadata(self):
+        from app.models.response import PlaceResult
+
+        place = PlaceResult(
+            place_id="places/minimal",
+            display_name="Minimal Cafe",
+            local_factor=0.5,
+            final_score=0.5,
+            score_breakdown=self._score_breakdown(),
+            map_uri="https://maps.example/minimal",
+        )
+
+        assert place.explanation.rank == 0
+        assert place.explanation.accessibility_note == "accessibility metadata unknown"
+        assert place.explanation.route_summary == "route metadata unavailable"

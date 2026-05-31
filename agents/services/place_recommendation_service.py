@@ -22,7 +22,7 @@ from app.models.places import (
     PlaceToolStatus,
 )
 from app.models.request import LatLng
-from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
+from app.models.response import ChatResponse, PlaceExplanation, PlaceResult, ScoreBreakdown
 from agents.ml.ensemble_reranker import EnsembleReranker
 from agents.ml.feature_extractor import FeatureExtractor
 from agents.tools.places_service import GooglePlacesService
@@ -381,6 +381,11 @@ def _reranked_results(
                 accessibility_warning=candidate.accessibility_warning,
                 map_uri=candidate.map_uri
                 or _maps_url(candidate.place_id),
+                explanation=_build_place_explanation(
+                    candidate=candidate,
+                    breakdown=breakdown,
+                    accessibility_score=accessibility_score,
+                ),
             )
         )
 
@@ -397,6 +402,16 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
                 1.0 if any(candidate.accessibility_options.values()) else 0.0
             )
 
+        breakdown = ScoreBreakdown(
+            tree1_locality=0.5,
+            tree2_proximity=0.5,
+            tree3_quality=0.5,
+            s_bag=0.5,
+            delta1_fairness=0.0,
+            delta2_access=0.0,
+            final_score=0.5,
+            rank=i + 1,
+        )
         results.append(
             PlaceResult(
                 place_id=candidate.place_id,
@@ -415,25 +430,113 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
                 if candidate.local_factor is not None
                 else 0.5,
                 final_score=0.5,
-                score_breakdown=ScoreBreakdown(
-                    tree1_locality=0.5,
-                    tree2_proximity=0.5,
-                    tree3_quality=0.5,
-                    s_bag=0.5,
-                    delta1_fairness=0.0,
-                    delta2_access=0.0,
-                    final_score=0.5,
-                    rank=i + 1,
-                ),
+                score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
                 accessibility_warning=candidate.accessibility_warning,
                 map_uri=candidate.map_uri
                 or _maps_url(candidate.place_id),
+                explanation=_build_place_explanation(
+                    candidate=candidate,
+                    breakdown=breakdown,
+                    accessibility_score=accessibility_score,
+                    fallback=True,
+                ),
             )
         )
 
     return results
 
+
+def _build_place_explanation(
+    *,
+    candidate: PlaceCandidate,
+    breakdown: ScoreBreakdown,
+    accessibility_score: float | None,
+    fallback: bool = False,
+) -> PlaceExplanation:
+    """Create a redacted explanation from normalized candidate fields only."""
+    evidence: list[str] = ["place_id", "display_name", "score_breakdown"]
+    matched: list[str] = []
+
+    if candidate.primary_type:
+        matched.append(f"type:{candidate.primary_type}")
+        evidence.append("primary_type")
+    elif candidate.types:
+        matched.append(f"type:{candidate.types[0]}")
+        evidence.append("types")
+
+    if candidate.price_level is not None:
+        matched.append(f"price_level:{candidate.price_level}")
+        evidence.append("price_level")
+    if candidate.rating is not None:
+        matched.append("provider_rating_available")
+        evidence.append("rating")
+    if candidate.open_now is not None:
+        matched.append("open_now" if candidate.open_now else "opening_status_known")
+        evidence.append("open_now")
+
+    local_factor = candidate.local_factor
+    if local_factor is None:
+        local_context = "local signal unknown"
+        fairness_note = "local_factor missing; fairness treatment is conservative"
+    elif local_factor >= FAIRNESS_LOCAL_THRESHOLD:
+        local_context = "strong local signal from normalized provider metadata"
+        fairness_note = "supports local representation balancing"
+        evidence.append("local_factor")
+    else:
+        local_context = "limited local signal from normalized provider metadata"
+        fairness_note = "included without overstating local ownership"
+        evidence.append("local_factor")
+
+    if accessibility_score is None and not candidate.accessibility_warning and not candidate.accessibility_options:
+        accessibility_note = "accessibility metadata unknown"
+    elif candidate.accessibility_warning:
+        accessibility_note = candidate.accessibility_warning
+        evidence.append("accessibility_warning")
+    elif accessibility_score is not None:
+        accessibility_note = f"accessibility score {accessibility_score:.2f}"
+        evidence.append("accessibility_score")
+    else:
+        accessibility_note = "accessibility options available"
+        evidence.append("accessibility_options")
+
+    route_summary = "route metadata unavailable"
+    if candidate.route_context is not None:
+        evidence.append("route_context")
+        parts: list[str] = []
+        if candidate.route_context.travel_mode:
+            parts.append(candidate.route_context.travel_mode)
+        if candidate.route_context.distance_meters is not None:
+            parts.append(f"{candidate.route_context.distance_meters}m")
+        if candidate.route_context.duration_seconds is not None:
+            parts.append(f"{round(candidate.route_context.duration_seconds / 60)}min")
+        route_summary = "route " + ", ".join(parts) if parts else "route metadata limited"
+
+    primary_reason = "Recommended using fallback grounded place fields." if fallback else "Recommended by reranking grounded place fields."
+    if matched:
+        primary_reason += f" Matched {', '.join(matched[:3])}."
+
+    score_factors: dict[str, float | int | str | None] = {
+        "rank": breakdown.rank,
+        "final_score": round(breakdown.final_score, 4),
+        "local_factor": round(local_factor, 4) if local_factor is not None else None,
+        "rating": candidate.rating,
+        "price_level": candidate.price_level,
+    }
+
+    return PlaceExplanation(
+        rank=breakdown.rank,
+        primary_reason=primary_reason,
+        matched_preferences=matched[:10],
+        local_context=local_context,
+        score_factors=score_factors,
+        fairness_note=fairness_note,
+        accessibility_note=accessibility_note,
+        route_summary=route_summary,
+        provider_source=None,
+        provider_status=candidate.business_status,
+        evidence_fields_used=sorted(set(evidence)),
+    )
 
 def _preference_flags(
     *,
