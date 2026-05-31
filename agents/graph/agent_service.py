@@ -125,9 +125,10 @@ class FollowUpContext:
         return bool(
             self.place_ids
             or self.place_display_names
-            or self.intent
             or self.citation_sources
             or self.reasoning_log_summary
+            or self.score_breakdown_keys
+            or self.provider_source
         )
 
 
@@ -334,6 +335,10 @@ class AgentState(TypedDict, total=False):
     response_text: str
     response: ChatResponse
     langfuse_trace_id: str | None
+    # Structured follow-up context loaded from prior turn (R052)
+    prior_context: FollowUpContext | None
+    followup_decision: FollowUpDecision | None
+    context_source: str | None  # "structured_context" | "history_context" | "none"
 
 @dataclass
 class InMemoryAgentCheckpointer:
@@ -508,13 +513,21 @@ class AgentService:
         else:
             state = await self._run_tool_loop(state)
         response = self._response_from_state(state, started)
+        # Persist structured follow-up context for next turn (R052)
+        await self._save_followup_context(session_id, response)
         await self._save_turn(session_id, message, response.message)
         return response
 
     async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
-        yield "[STATUS] understanding"
+        # Expose context source in streaming for observability (R052)
+        if state.get("context_source") == "structured_context":
+            yield "[STATUS] using_context"
+        elif state.get("context_source") == "history_context":
+            yield "[STATUS] using_history"
+        else:
+            yield "[STATUS] understanding"
         if self._should_route_places_deterministically(message, state.get("history", [])):
             yield "[STATUS] checking_places"
             await self._search_places_tool(state, message)
@@ -537,6 +550,8 @@ class AgentService:
                         yield _status_for_state(state)
                         yield state["response_text"]
         response = self._response_from_state(state, started)
+        # Persist structured follow-up context for next turn (R052)
+        await self._save_followup_context(session_id, response)
         await self._save_turn(session_id, message, response.message)
         if response.places:
             yield f"[PLACES] {json.dumps([p.model_dump() for p in response.places], ensure_ascii=False)}"
@@ -553,6 +568,23 @@ class AgentService:
         except Exception as exc:
             logger.warning("agent.checkpoint_load", session_id=session_id, reason=type(exc).__name__)
             history = []
+        # Load structured follow-up context from prior turn (R052)
+        prior_context: FollowUpContext | None = None
+        context_source = "none"
+        if history:
+            try:
+                prior_context = await self._checkpointer.load_context(session_id)
+                if prior_context is not None and prior_context.is_populated:
+                    context_source = "structured_context"
+                elif prior_context is not None:
+                    # Context exists but not populated — fall back to history
+                    context_source = "history_context"
+                    prior_context = None
+            except Exception as exc:
+                logger.warning("agent.context_load_failed", session_id=session_id, reason=type(exc).__name__)
+                prior_context = None
+        # Classify follow-up decision for observability
+        followup_decision = resolve_followup_decision(message, prior_context, history)
         return {
             "session_id": session_id,
             "message": message,
@@ -565,6 +597,9 @@ class AgentService:
             "intent": None,
             "response_text": "",
             "places_response_ready": False,
+            "prior_context": prior_context,
+            "followup_decision": followup_decision,
+            "context_source": context_source,
         }
 
     async def _run_tool_loop(self, state: AgentState) -> AgentState:
@@ -746,6 +781,20 @@ class AgentService:
             await self._checkpointer.save_turn(session_id, message, answer)
         except Exception as exc:
             logger.warning("agent.checkpoint_save", session_id=session_id, reason=type(exc).__name__)
+
+    async def _save_followup_context(self, session_id: str, response: ChatResponse) -> None:
+        """Persist structured follow-up context from a ChatResponse (R052).
+
+        Builds context only for place/intent-bearing responses; skips empty or
+        pure-conversational answers. Degrades gracefully on checkpointer errors.
+        """
+        try:
+            ctx = _build_followup_context(response)
+            if ctx.is_populated:
+                await self._checkpointer.save_context(session_id, ctx)
+                logger.debug("agent.context_saved", session_id=session_id, intent=ctx.intent, places=len(ctx.place_ids))
+        except Exception as exc:
+            logger.warning("agent.context_save_failed", session_id=session_id, reason=type(exc).__name__)
 
 # Compatibility seams for older tests. Active chat paths do not use retrieve-first.
     async def _retrieve_node(self, state: AgentState) -> AgentState:
