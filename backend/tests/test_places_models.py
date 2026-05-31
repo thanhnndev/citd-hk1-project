@@ -543,3 +543,387 @@ class TestChatResponseFairnessAudit:
         assert "fairness_audit" in dump
         assert dump["fairness_audit"]["candidate_count"] == 10
         assert dump["fairness_audit"]["top5_local_ratio"] == 0.4
+
+
+# ============================================================================
+# PlaceSearchRequest preference contract tests (M013/S04 — T01)
+# ============================================================================
+
+from app.models.places import (
+    PriceLevel,
+    _PRICE_LEVEL_TO_NUMERIC,
+)
+
+
+# ---------------------------------------------------------------------------
+# PriceLevel enum tests
+# ---------------------------------------------------------------------------
+
+class TestPriceLevelEnum:
+    def test_all_levels_exist(self):
+        expected = {"free", "inexpensive", "moderate", "expensive", "very_expensive"}
+        actual = {e.value for e in PriceLevel}
+        assert actual == expected
+
+    def test_symbolic_maps_to_numeric(self):
+        """Each symbolic level must map to at least one numeric price_level."""
+        for level in PriceLevel:
+            nums = _PRICE_LEVEL_TO_NUMERIC.get(level.value)
+            assert nums is not None, f"Missing mapping for {level.value}"
+            assert all(0 <= n <= 4 for n in nums), f"Numeric values out of range for {level.value}"
+
+    def test_free_maps_to_zero(self):
+        assert _PRICE_LEVEL_TO_NUMERIC[PriceLevel.FREE.value] == [0]
+
+    def test_very_expensive_maps_to_high_values(self):
+        assert _PRICE_LEVEL_TO_NUMERIC[PriceLevel.VERY_EXPENSIVE.value] == [3, 4]
+
+
+# ---------------------------------------------------------------------------
+# Valid preference acceptance tests
+# ---------------------------------------------------------------------------
+
+class TestPlaceSearchRequestValidPreferences:
+    def test_accepts_budget_filter_single(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["inexpensive"],
+        )
+        assert req.budget_filter == [PriceLevel.INEXPENSIVE]
+
+    def test_accepts_budget_filter_multiple(self):
+        req = PlaceSearchRequest(
+            query="restaurant",
+            budget_filter=["free", "inexpensive", "moderate"],
+        )
+        assert len(req.budget_filter) == 3
+
+    def test_accepts_wheelchair_accessible_preference_true(self):
+        req = PlaceSearchRequest(
+            query="pharmacy",
+            wheelchair_accessible_preference=True,
+        )
+        assert req.wheelchair_accessible_preference is True
+
+    def test_accepts_wheelchair_accessible_preference_false(self):
+        req = PlaceSearchRequest(
+            query="parking",
+            wheelchair_accessible_preference=False,
+        )
+        assert req.wheelchair_accessible_preference is False
+
+    def test_accepts_user_location(self):
+        req = PlaceSearchRequest(
+            query="hotel",
+            user_location=LatLng(lat=10.1794, lng=104.0491),
+        )
+        assert req.user_location is not None
+        assert req.user_location.lat == 10.1794
+        assert req.user_location.lng == 104.0491
+
+    def test_accepts_all_preferences_together(self):
+        req = PlaceSearchRequest(
+            query="seafood restaurant",
+            budget_filter=["moderate", "expensive"],
+            wheelchair_accessible_preference=True,
+            user_location=LatLng(lat=10.18, lng=104.05),
+        )
+        assert len(req.budget_filter) == 2
+        assert req.wheelchair_accessible_preference is True
+        assert req.user_location is not None
+
+    def test_defaults_preserve_existing_behaviour(self):
+        """No preference fields — existing default behaviour unchanged."""
+        req = PlaceSearchRequest(query="cafe")
+        assert req.budget_filter is None
+        assert req.wheelchair_accessible_preference is None
+        assert req.user_location is None
+        assert req.query == "cafe"
+        assert req.language_code == "vi"
+        assert req.max_result_count == 10
+
+
+# ---------------------------------------------------------------------------
+# effective_origin property tests
+# ---------------------------------------------------------------------------
+
+class TestEffectiveOrigin:
+    def test_uses_user_location_when_set(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            user_location=LatLng(lat=10.50, lng=105.00),
+        )
+        origin = req.effective_origin
+        assert origin.lat == 10.50
+        assert origin.lng == 105.00
+
+    def test_falls_back_to_location_bias_when_no_user_location(self):
+        req = PlaceSearchRequest(query="cafe")
+        origin = req.effective_origin
+        assert origin.lat == HAM_NINH_CENTER.lat
+        assert origin.lng == HAM_NINH_CENTER.lng
+
+    def test_falls_back_to_location_bias_when_user_location_none(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            location_bias=LatLng(lat=10.00, lng=104.00),
+        )
+        origin = req.effective_origin
+        assert origin.lat == 10.00
+        assert origin.lng == 104.00
+
+
+# ---------------------------------------------------------------------------
+# numeric_price_levels property tests
+# ---------------------------------------------------------------------------
+
+class TestNumericPriceLevels:
+    def test_none_when_no_budget(self):
+        req = PlaceSearchRequest(query="cafe")
+        assert req.numeric_price_levels is None
+
+    def test_single_level_maps_correctly(self):
+        req = PlaceSearchRequest(query="cafe", budget_filter=["free"])
+        assert req.numeric_price_levels == [0]
+
+    def test_multiple_levels_deduplicate_and_sort(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["inexpensive", "moderate"],
+        )
+        # inexpensive=[0,1] + moderate=[0,1,2] => {0,1,2} sorted
+        assert req.numeric_price_levels == [0, 1, 2]
+
+    def test_overlapping_levels_deduplicate(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["inexpensive", "expensive"],
+        )
+        # [0,1] + [2,3] => [0,1,2,3]
+        assert req.numeric_price_levels == [0, 1, 2, 3]
+
+    def test_all_levels_covers_full_range(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["free", "inexpensive", "moderate", "expensive", "very_expensive"],
+        )
+        assert req.numeric_price_levels == [0, 1, 2, 3, 4]
+
+
+# ---------------------------------------------------------------------------
+# preference_summary method tests
+# ---------------------------------------------------------------------------
+
+class TestPreferenceSummary:
+    def test_no_preferences_returns_safe_defaults(self):
+        req = PlaceSearchRequest(query="cafe")
+        summary = req.preference_summary()
+        assert summary["budget_set"] is False
+        assert summary["budget_count"] == 0
+        assert summary["wheelchair_accessible_preference"] is None
+        assert summary["has_user_location"] is False
+        assert "lat" in summary["effective_origin_rounded"]
+        assert "lng" in summary["effective_origin_rounded"]
+
+    def test_with_budget_shows_count(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["free", "moderate"],
+        )
+        summary = req.preference_summary()
+        assert summary["budget_set"] is True
+        assert summary["budget_count"] == 2
+
+    def test_with_wheelchair_shows_bool(self):
+        req = PlaceSearchRequest(
+            query="pharmacy",
+            wheelchair_accessible_preference=True,
+        )
+        summary = req.preference_summary()
+        assert summary["wheelchair_accessible_preference"] is True
+
+    def test_with_user_location_shows_flag(self):
+        req = PlaceSearchRequest(
+            query="hotel",
+            user_location=LatLng(lat=10.179444, lng=104.049123),
+        )
+        summary = req.preference_summary()
+        assert summary["has_user_location"] is True
+        # Coordinates are rounded — no exact GPS in summary
+        assert summary["effective_origin_rounded"]["lat"] == 10.18
+        assert summary["effective_origin_rounded"]["lng"] == 104.05
+
+    def test_no_pii_in_summary(self):
+        """preference_summary must never expose raw coordinates or secrets."""
+        req = PlaceSearchRequest(
+            query="test",
+            user_location=LatLng(lat=10.123456789, lng=104.987654321),
+        )
+        summary = req.preference_summary()
+        # Rounded to 2 decimals — not exact GPS
+        rounded = summary["effective_origin_rounded"]
+        assert str(rounded["lat"]) != "10.123456789"
+        assert str(rounded["lng"]) != "104.987654321"
+        assert len(str(rounded["lat"]).split(".")[1]) <= 2
+
+
+# ---------------------------------------------------------------------------
+# Negative tests: malformed preference values must fail validation
+# ---------------------------------------------------------------------------
+
+class TestPlaceSearchRequestInvalidPreferences:
+    def test_rejects_invalid_price_level_string(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                budget_filter=["luxury"],  # not a valid PriceLevel
+            )
+
+    def test_rejects_numeric_price_level(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                budget_filter=[2],  # ints not accepted — must be symbolic strings
+            )
+
+    def test_rejects_oversized_budget_list(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                budget_filter=["free", "inexpensive", "moderate", "expensive", "very_expensive", "free"],
+            )
+
+    def test_rejects_non_bool_wheelchair_preference(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                wheelchair_accessible_preference=["yes"],  # list not bool
+            )
+
+    def test_rejects_invalid_user_location_lat(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                user_location=LatLng(lat=91.0, lng=104.0),  # lat out of range
+            )
+
+    def test_rejects_invalid_user_location_lng(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                user_location=LatLng(lat=10.0, lng=181.0),  # lng out of range
+            )
+
+    def test_rejects_string_user_location(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                user_location="10.0,104.0",  # wrong type
+            )
+
+    def test_rejects_null_accessibility_value_via_dict(self):
+        """Null (JSON null) should be accepted as None, not crash."""
+        req = PlaceSearchRequest(
+            query="cafe",
+            wheelchair_accessible_preference=None,
+        )
+        assert req.wheelchair_accessible_preference is None
+
+    def test_rejects_forbidden_extra_fields(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="cafe",
+                secret_api_key="sk-123",
+            )
+
+    def test_rejects_empty_query_with_preferences(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(
+                query="",  # min_length=1
+                budget_filter=["free"],
+            )
+
+    def test_rejects_oversized_query(self):
+        with pytest.raises(ValidationError):
+            PlaceSearchRequest(query="x" * 161)
+
+    def test_rejects_duplicate_price_levels_no_crash(self):
+        """Duplicate symbolic levels should be accepted and deduplicated."""
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["free", "free", "free"],
+        )
+        # budget_filter stores the raw list (Pydantic accepts duplicates)
+        assert len(req.budget_filter) == 3
+        # But numeric conversion deduplicates
+        assert req.numeric_price_levels == [0]
+
+
+# ---------------------------------------------------------------------------
+# Default Ham Ninh bias when no user location
+# ---------------------------------------------------------------------------
+
+class TestDefaultHamNinhBias:
+    def test_location_bias_defaults_to_ham_ninh_center(self):
+        req = PlaceSearchRequest(query="cafe")
+        assert req.location_bias.lat == HAM_NINH_CENTER.lat
+        assert req.location_bias.lng == HAM_NINH_CENTER.lng
+
+    def test_effective_origin_is_ham_ninh_when_no_user_location(self):
+        req = PlaceSearchRequest(query="cafe")
+        origin = req.effective_origin
+        assert origin.lat == HAM_NINH_CENTER.lat
+        assert origin.lng == HAM_NINH_CENTER.lng
+
+    def test_location_bias_is_independent_copy(self):
+        """Each request should get its own copy of the default."""
+        req1 = PlaceSearchRequest(query="cafe")
+        req2 = PlaceSearchRequest(query="restaurant")
+        assert req1.location_bias is not req2.location_bias
+
+
+# ---------------------------------------------------------------------------
+# Serialization without secrets/PII
+# ---------------------------------------------------------------------------
+
+class TestPreferenceSerialization:
+    def test_model_dump_contains_preference_fields(self):
+        req = PlaceSearchRequest(
+            query="cafe",
+            budget_filter=["inexpensive"],
+            wheelchair_accessible_preference=True,
+            user_location=LatLng(lat=10.18, lng=104.05),
+        )
+        dump = req.model_dump()
+        assert dump["budget_filter"] == ["inexpensive"]
+        assert dump["wheelchair_accessible_preference"] is True
+        assert dump["user_location"]["lat"] == 10.18
+
+    def test_model_dump_json_round_trips(self):
+        req = PlaceSearchRequest(
+            query="hotel",
+            budget_filter=["moderate", "expensive"],
+            wheelchair_accessible_preference=False,
+        )
+        json_str = req.model_dump_json()
+        restored = PlaceSearchRequest.model_validate_json(json_str)
+        assert restored.query == "hotel"
+        assert len(restored.budget_filter) == 2
+        assert restored.wheelchair_accessible_preference is False
+
+    def test_no_api_key_in_serialization(self):
+        """Ensure serialization does not leak any secrets."""
+        req = PlaceSearchRequest(query="cafe", budget_filter=["free"])
+        dump = req.model_dump_json()
+        assert "api_key" not in dump.lower()
+        assert "secret" not in dump.lower()
+        assert "token" not in dump.lower()
+
+    def test_preference_summary_is_separate_from_model_dump(self):
+        """preference_summary is a computed method — not part of model_dump."""
+        req = PlaceSearchRequest(query="cafe", budget_filter=["free"])
+        dump = req.model_dump()
+        assert "preference_summary" not in dump
+        # But the method is callable
+        summary = req.preference_summary()
+        assert summary["budget_set"] is True

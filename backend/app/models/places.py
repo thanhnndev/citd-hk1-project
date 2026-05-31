@@ -52,8 +52,33 @@ class RouteContext(BaseModel):
     duration_seconds: int | None = Field(default=None, ge=0)
 
 
+class PriceLevel(StrEnum):
+    """Symbolic budget preference levels that map to Google/Goong price_level 0-4."""
+
+    FREE = "free"
+    INEXPENSIVE = "inexpensive"
+    MODERATE = "moderate"
+    EXPENSIVE = "expensive"
+    VERY_EXPENSIVE = "very_expensive"
+
+
+# Map symbolic budget names to numeric price_level values (0-4).
+_PRICE_LEVEL_TO_NUMERIC: dict[str, list[int]] = {
+    PriceLevel.FREE: [0],
+    PriceLevel.INEXPENSIVE: [0, 1],
+    PriceLevel.MODERATE: [0, 1, 2],
+    PriceLevel.EXPENSIVE: [2, 3],
+    PriceLevel.VERY_EXPENSIVE: [3, 4],
+}
+
+
 class PlaceSearchRequest(BaseModel):
-    """Text search request normalized before reaching Goong Places."""
+    """Text search request normalized before reaching Goong Places.
+
+    Preference fields (budget, accessibility, user-location) are explicit typed
+    inputs so downstream services can safely shape provider requests or reranking
+    without parsing raw user text.  See R043.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +88,71 @@ class PlaceSearchRequest(BaseModel):
     radius_meters: int = Field(default=DEFAULT_SEARCH_RADIUS_METERS, ge=1, le=MAX_SEARCH_RADIUS_METERS)
     included_type: str | None = Field(default=None, min_length=1, max_length=80)
     max_result_count: int = Field(default=10, ge=1, le=20)
+
+    # -- Preference contract (R043) --
+
+    budget_filter: list[PriceLevel] | None = Field(
+        default=None,
+        max_length=5,
+        description=(
+            "Symbolic budget constraint (e.g. ['free','inexpensive']). "
+            "Maps to numeric price_level 0-4 downstream. None = no price filtering."
+        ),
+    )
+    wheelchair_accessible_preference: bool | None = Field(
+        default=None,
+        description=(
+            "When true, prefer wheelchair-accessible venues in ranking/reranking. "
+            "None = no preference (provider default behaviour)."
+        ),
+    )
+    user_location: LatLng | None = Field(
+        default=None,
+        description=(
+            "User's current GPS coordinates for proximity scoring. "
+            "When absent the service falls back to location_bias (Ham Ninh center default)."
+        ),
+    )
+
+    @property
+    def effective_origin(self) -> LatLng:
+        """Return user_location if set, otherwise the default location_bias."""
+        return self.user_location or self.location_bias
+
+    @property
+    def numeric_price_levels(self) -> list[int] | None:
+        """Convert symbolic budget_filter to numeric price_level values for provider queries.
+
+        Returns None when no budget constraint is set (meaning: accept all price levels).
+        Deduplicates and sorts the result for stable provider behaviour.
+        """
+        if not self.budget_filter:
+            return None
+        numeric: set[int] = set()
+        for level in self.budget_filter:
+            numeric.update(_PRICE_LEVEL_TO_NUMERIC.get(level.value, []))
+        return sorted(numeric)
+
+    def preference_summary(self) -> dict[str, Any]:
+        """Audit-friendly summary of preference flags without raw user PII.
+
+        Returns a small dict safe for logger.info/reasoning_log:
+        - budget_set: whether any budget constraint was provided
+        - budget_count: number of symbolic price levels requested
+        - wheelchair_accessible_preference: bool or None
+        - has_user_location: whether user_location differs from default
+        - effective_origin_rounded: lat/lng rounded to 2 decimals (no exact GPS)
+        """
+        return {
+            "budget_set": self.budget_filter is not None,
+            "budget_count": len(self.budget_filter) if self.budget_filter else 0,
+            "wheelchair_accessible_preference": self.wheelchair_accessible_preference,
+            "has_user_location": self.user_location is not None,
+            "effective_origin_rounded": {
+                "lat": round(self.effective_origin.lat, 2),
+                "lng": round(self.effective_origin.lng, 2),
+            },
+        }
 
 
 class PlaceNearbyRequest(BaseModel):
