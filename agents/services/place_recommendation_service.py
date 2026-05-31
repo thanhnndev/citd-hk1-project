@@ -219,7 +219,12 @@ class PlaceRecommendationService:
         )
         return self._chat_response(
             session_id=session_id,
-            message=_message_for_status(tool_response.status, result_count=len(places)),
+            message=_message_for_status(
+                tool_response.status,
+                result_count=len(places),
+                is_commercial=_is_commercial_query(candidates),
+                language_code=request.language_code,
+            ),
             status=tool_response.status,
             source=tool_response.source,
             candidate_count=candidate_count,
@@ -498,9 +503,66 @@ def _maps_url(place_id: str) -> str:
     return f"https://map.goong.io/?pid={quote(place_id, safe='')}"
 
 
-def _message_for_status(status: PlaceToolStatus, *, result_count: int = 0) -> str:
+# -- Ham Ninh cultural/community context for commercial suggestions (R044) --
+
+# Place type values that indicate a commercial venue (food, lodging, hospitality).
+# Used to decide whether to prepend sustainable-tourism cultural context.
+_COMMERCIAL_PLACE_TYPES = frozenset({
+    "restaurant", "seafood_restaurant", "cafe", "bar", "meal_takeaway",
+    "meal_delivery", "bakery", "food", "lodging", "hotel", "motel",
+    "resort", "guest_house", "bed_and_breakfast", "hostel", "apartment",
+    "homestay", "rv_park", "campground",
+})
+
+# Short Ham Ninh cultural/community prefaces — generic and safe.
+# No document citations, no invented place names, no specific business claims.
+_HAM_NINH_CULTURAL_PREFACE_VI = (
+    "Hàm Ninh là làng chài truyền thống với cuộc sống biển đậm bản sắc. "
+    "Hãy ủng hộ doanh nghiệp địa phương và tôn trọng nhịp sống ngư dân khi ghé thăm. "
+)
+_HAM_NINH_CULTURAL_PREFACE_EN = (
+    "Ham Ninh is a traditional fishing village with a rich coastal community culture. "
+    "Consider supporting local businesses and respecting the daily rhythm of fishing life when visiting. "
+)
+
+
+def _is_commercial_query(candidates: list["PlaceCandidate"]) -> bool:
+    """Return True when any candidate carries a commercial place type.
+
+    Covers restaurants, seafood venues, cafes, bars, hotels, homestays,
+    and other hospitality/food categories. Returns False for empty lists.
+    """
+    if not candidates:
+        return False
+    for c in candidates:
+        for t in (c.types or []):
+            if t.lower() in _COMMERCIAL_PLACE_TYPES:
+                return True
+    return False
+
+
+def _cultural_preface(language_code: str) -> str:
+    """Return a short Ham Ninh cultural/community preface for the given language.
+
+    Defaults to Vietnamese for unknown language codes (safe fallback).
+    """
+    if language_code == "en":
+        return _HAM_NINH_CULTURAL_PREFACE_EN
+    return _HAM_NINH_CULTURAL_PREFACE_VI
+
+
+def _message_for_status(
+    status: PlaceToolStatus,
+    *,
+    result_count: int = 0,
+    is_commercial: bool = False,
+    language_code: str = "vi",
+) -> str:
     if status == PlaceToolStatus.OK:
-        return f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
+        base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
+        if is_commercial:
+            return _cultural_preface(language_code) + base
+        return base
     if status == PlaceToolStatus.EMPTY:
         return "Mình chưa tìm thấy địa điểm phù hợp quanh Hàm Ninh cho yêu cầu này. Bạn thử nói rõ loại địa điểm, ngân sách hoặc khu vực gần đâu nhé."
     if status == PlaceToolStatus.CREDENTIALS_BLOCKED:

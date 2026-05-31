@@ -2378,3 +2378,501 @@ async def test_preference_diagnostics_no_secret_exposure() -> None:
     # Should not contain exact high-precision coordinates
     assert "10.183521" not in log
     assert "104.049684" not in log
+
+
+# ============================================================================
+# T03: Ham Ninh cultural/community context for commercial suggestions
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_commercial_ok_message_includes_cultural_context_vi() -> None:
+    """Restaurant OK response must include Ham Ninh cultural preface in Vietnamese."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/seafood-a", display_name="Quán Hải Sản A",
+            types=["restaurant", "seafood_restaurant"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+        ),
+        PlaceCandidate(
+            place_id="places/seafood-b", display_name="Quán B",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.7,
+        ),
+    ]
+    request = PlaceSearchRequest(query="hải sản")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-cultural-vi", message="tìm nhà hàng hải sản", language="vi")
+
+    assert response.places != []
+    assert response.citations == []
+    assert "làng chài truyền thống" in response.message
+    assert "ủng hộ doanh nghiệp địa phương" in response.message
+    assert "tôn trọng nhịp sống ngư dân" in response.message
+
+
+@pytest.mark.asyncio
+async def test_commercial_ok_message_includes_cultural_context_en() -> None:
+    """Restaurant OK response must include Ham Ninh cultural preface in English."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/seafood-a", display_name="Ham Ninh Seafood",
+            types=["restaurant", "seafood_restaurant"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+        ),
+    ]
+    request = PlaceSearchRequest(query="seafood", language_code="en")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-cultural-en", message="find seafood restaurants", language="en")
+
+    assert response.places != []
+    assert response.citations == []
+    assert "traditional fishing village" in response.message
+    assert "supporting local businesses" in response.message
+
+
+@pytest.mark.asyncio
+async def test_hotel_ok_message_includes_cultural_context() -> None:
+    """Hotel/lodging OK response must include cultural context."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/hotel-a", display_name="Ham Ninh Hotel",
+            types=["lodging", "hotel"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.6,
+        ),
+    ]
+    request = PlaceSearchRequest(query="khách sạn")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-cultural-hotel", message="tìm khách sạn", language="vi")
+
+    assert response.places != []
+    assert "làng chài truyền thống" in response.message
+
+
+@pytest.mark.asyncio
+async def test_cafe_ok_message_includes_cultural_context() -> None:
+    """Cafe OK response must include cultural context."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/cafe-a", display_name="Cafe Biển",
+            types=["cafe", "food"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.9,
+        ),
+    ]
+    request = PlaceSearchRequest(query="cafe")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-cultural-cafe", message="tìm quán cafe", language="vi")
+
+    assert response.places != []
+    assert "làng chài truyền thống" in response.message
+
+
+@pytest.mark.asyncio
+async def test_non_commercial_ok_message_has_no_cultural_context() -> None:
+    """Query routes to place service but candidates are non-commercial — no cultural preface."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # Query triggers place intent routing ("quán" + "tìm"), but candidates have non-commercial types
+    candidates = [
+        PlaceCandidate(
+            place_id="places/park-a", display_name="Công viên Hàm Ninh",
+            types=["park", "tourist_attraction"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+        ),
+    ]
+    request = PlaceSearchRequest(query="quán công viên")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-no-cultural-park", message="tìm quán công viên", language="vi")
+
+    assert response.places != []
+    assert "làng chài truyền thống" not in response.message
+    assert "traditional fishing village" not in response.message
+    # But still has the base message
+    assert "Mình tìm được" in response.message
+
+
+@pytest.mark.asyncio
+async def test_empty_results_no_cultural_context() -> None:
+    """Empty results must NOT pretend cultural context exists."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    request = PlaceSearchRequest(query="nonexistent restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.EMPTY, source=PlaceToolSource.MOCK,
+        candidates=[], request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-empty-no-cultural", message="tìm nhà hàng không tồn tại", language="vi")
+
+    assert response.places == []
+    assert response.citations == []
+    assert "làng chài truyền thống" not in response.message
+    assert "traditional fishing village" not in response.message
+
+
+@pytest.mark.asyncio
+async def test_credentials_blocked_no_cultural_context() -> None:
+    """Credential-blocked status must NOT add cultural context."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.CREDENTIALS_BLOCKED, source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=[], request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-cred-no-cultural", message="tìm nhà hàng", language="vi")
+
+    assert response.places == []
+    assert "làng chài truyền thống" not in response.message
+    assert "traditional fishing village" not in response.message
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_no_cultural_context() -> None:
+    """Upstream error status must NOT add cultural context."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.UPSTREAM_ERROR, source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=[], request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-error-no-cultural", message="tìm nhà hàng", language="vi")
+
+    assert response.places == []
+    assert "làng chài truyền thống" not in response.message
+
+
+@pytest.mark.asyncio
+async def test_commercial_message_no_invented_place_names() -> None:
+    """Message text must not contain invented place names — only display_name values from results."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/a", display_name="Quán A",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+        ),
+    ]
+    request = PlaceSearchRequest(query="nhà hàng gần chợ")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(
+        session_id="s-no-invention", message="tìm nhà hàng gần chợ Dương Đông", language="vi"
+    )
+
+    msg = response.message
+    # Should not contain user-mentioned place names or invented names
+    assert "Dương Đông" not in msg
+    # Cultural preface should not mention specific place names either
+    assert "Chùa" not in msg
+    assert "Đình" not in msg
+
+
+@pytest.mark.asyncio
+async def test_commercial_message_no_document_citations() -> None:
+    """Commercial recommendations must emit zero document citations."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/homestay-a", display_name="Homнинь Homestay",
+            types=["lodging", "homestay"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.9,
+        ),
+    ]
+    request = PlaceSearchRequest(query="homestay")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-no-citations", message="tìm homestay", language="vi")
+
+    assert response.citations == []
+
+
+@pytest.mark.asyncio
+async def test_commercial_message_place_names_with_unusual_punctuation() -> None:
+    """Place names with unusual punctuation (URLs, quotes) must not break message composition."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/weird-a", display_name="Quán 'Đặc Biệt' & Co. — Seafood <bar>",
+            types=["restaurant", "seafood_restaurant"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+        ),
+        PlaceCandidate(
+            place_id="places/weird-b", display_name="Cafe @ Beach — https://example.com",
+            types=["cafe"],
+            location=LatLng(lat=10.18, lng=104.05), local_factor=0.7,
+        ),
+    ]
+    request = PlaceSearchRequest(query="quán lạ")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-weird-names", message="tìm quán lạ", language="vi")
+
+    # Message is from _message_for_status, does not embed display_name values directly
+    assert response.message is not None
+    assert "làng chài truyền thống" in response.message
+    # No document citations
+    assert response.citations == []
+    # Result count matches
+    assert len(response.places) == 2
+
+
+def test_is_commercial_query_restaurant() -> None:
+    """Restaurant types are detected as commercial."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="R1", types=["restaurant"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is True
+
+
+def test_is_commercial_query_hotel() -> None:
+    """Hotel/lodging types are detected as commercial."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="H1", types=["lodging", "hotel"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is True
+
+
+def test_is_commercial_query_cafe() -> None:
+    """Cafe types are detected as commercial."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="C1", types=["cafe"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is True
+
+
+def test_is_commercial_query_homestay() -> None:
+    """Homestay types are detected as commercial."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="HS1", types=["lodging", "homestay"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is True
+
+
+def test_is_commercial_query_park_not_commercial() -> None:
+    """Park/tourist_attraction types are NOT commercial."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="P1", types=["park", "tourist_attraction"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is False
+
+
+def test_is_commercial_query_museum_not_commercial() -> None:
+    """Museum types are NOT commercial."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="M1", types=["museum"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is False
+
+
+def test_is_commercial_query_empty_returns_false() -> None:
+    """Empty candidate list returns False."""
+    from agents.services.place_recommendation_service import _is_commercial_query
+    assert _is_commercial_query([]) is False
+
+
+def test_is_commercial_query_mixed_types() -> None:
+    """Mixed list with at least one commercial type returns True."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import _is_commercial_query
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="P1", types=["park"], location=LatLng(lat=10, lng=104)),
+        PlaceCandidate(place_id="p2", display_name="R1", types=["restaurant"], location=LatLng(lat=10, lng=104)),
+    ]
+    assert _is_commercial_query(candidates) is True
+
+
+def test_cultural_preface_vi_default() -> None:
+    """Vietnamese preface is returned for default/unknown language."""
+    from agents.services.place_recommendation_service import _cultural_preface
+    vi = _cultural_preface("vi")
+    assert "làng chài truyền thống" in vi
+    assert "ngư dân" in vi
+
+
+def test_cultural_preface_en() -> None:
+    """English preface is returned for 'en' language."""
+    from agents.services.place_recommendation_service import _cultural_preface
+    en = _cultural_preface("en")
+    assert "fishing village" in en
+    assert "local businesses" in en
+
+
+def test_cultural_preface_fallback_vi() -> None:
+    """Unknown language codes fall back to Vietnamese."""
+    from agents.services.place_recommendation_service import _cultural_preface
+    fallback = _cultural_preface("fr")
+    assert "làng chài" in fallback
+
+
+def test_cultural_preface_no_api_keys_or_pii() -> None:
+    """Cultural prefaces must not contain API keys, secrets, or PII."""
+    from agents.services.place_recommendation_service import (
+        _HAM_NINH_CULTURAL_PREFACE_VI,
+        _HAM_NINH_CULTURAL_PREFACE_EN,
+    )
+    for text in [_HAM_NINH_CULTURAL_PREFACE_VI, _HAM_NINH_CULTURAL_PREFACE_EN]:
+        assert "api_key" not in text.lower()
+        assert "secret" not in text.lower()
+        # No specific place names invented beyond "Hàm Ninh" / "Ham Ninh"
+        # (which is the topic, not an invention)
+
+
+@pytest.mark.asyncio
+async def test_commercial_message_result_count_matches() -> None:
+    """Commercial OK message must still show correct result count."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="p1", display_name="R1", types=["restaurant"], location=LatLng(lat=10, lng=104), local_factor=0.8),
+        PlaceCandidate(place_id="p2", display_name="R2", types=["restaurant"], location=LatLng(lat=10, lng=104), local_factor=0.7),
+        PlaceCandidate(place_id="p3", display_name="R3", types=["restaurant"], location=LatLng(lat=10, lng=104), local_factor=0.6),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK, source=PlaceToolSource.MOCK,
+        candidates=candidates, request=request, retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-count-commercial", message="tìm nhà hàng", language="vi")
+
+    assert "3" in response.message
+    assert "làng chài truyền thống" in response.message
