@@ -3542,3 +3542,180 @@ async def test_reasoning_log_includes_audit_summary() -> None:
     assert response.reasoning_log is not None
     assert "audit_events=" in response.reasoning_log
     assert "credential_status=" in response.reasoning_log
+
+
+# ============================================================================
+# T01: Explanation integration tests — every place, preferences, redaction
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_explanation_on_every_place_through_recommend() -> None:
+    """Every returned PlaceResult must carry a non-trivial PlaceExplanation."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="Place A", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.9, price_level=2, rating=4.5),
+        PlaceCandidate(place_id="places/b", display_name="Place B", types=["cafe"], location=LatLng(lat=10.19, lng=104.06), local_factor=0.7, price_level=1),
+        PlaceCandidate(place_id="places/c", display_name="Place C", types=["hotel"], location=LatLng(lat=10.17, lng=104.04), local_factor=0.3),
+    ]
+    request = PlaceSearchRequest(query="restaurants")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.GOONG_PLACES,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await service.recommend(query="restaurants", language="en", session_id="s-all-explain")
+
+    assert len(response.places) >= 1
+    for place in response.places:
+        assert place.explanation is not None
+        assert place.explanation.rank >= 0
+        assert place.explanation.primary_reason
+        assert isinstance(place.explanation.matched_preferences, list)
+        assert isinstance(place.explanation.evidence_fields_used, list)
+        assert "api_key" not in place.explanation.model_dump_json().lower()
+
+
+@pytest.mark.asyncio
+async def test_explanation_budget_match_through_recommend() -> None:
+    """When budget preference is set, matching candidates show budget_preference_matched."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/cheap", display_name="Cheap Eats", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.8, price_level=0),
+        PlaceCandidate(place_id="places/mid", display_name="Mid Range", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.7, price_level=2),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    # Budget='inexpensive' allows price_level 0,1
+    response = await service.recommend(query="restaurant", language="en", session_id="s-budget-explain", budget="inexpensive")
+
+    # price_level=0 (cheap) should be budget-matched; price_level=2 (mid) should be filtered
+    returned = response.places
+    if len(returned) > 0:
+        for p in returned:
+            if p.price_level in (0, 1):
+                assert "budget_preference_matched" in p.explanation.matched_preferences, \
+                    f"price_level {p.price_level} should match inexpensive budget"
+
+
+@pytest.mark.asyncio
+async def test_explanation_accessibility_match_through_recommend() -> None:
+    """When accessibility preference is set, matching candidates show accessibility_preference_matched."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/accessible",
+            display_name="Accessible Place",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            local_factor=0.8,
+            accessibility_options={"wheelchair_accessible_entrance": True},
+        ),
+        PlaceCandidate(
+            place_id="places/non-accessible",
+            display_name="Non Accessible",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            local_factor=0.7,
+            accessibility_options={},
+        ),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await service.recommend(query="restaurant", language="en", session_id="s-access-explain", accessibility=True)
+
+    # At least the accessible one should have the signal
+    accessible_places = [p for p in response.places if p.place_id == "places/accessible"]
+    if accessible_places:
+        exp = accessible_places[0].explanation
+        assert "accessibility_preference_matched" in exp.matched_preferences
+
+
+@pytest.mark.asyncio
+async def test_explanation_provider_source_through_recommend() -> None:
+    """Provider source should appear in each place explanation."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/ps", display_name="Source Test", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.8),
+    ]
+    request = PlaceSearchRequest(query="test")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.GOONG_PLACES,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await service.recommend(query="test", language="en", session_id="s-ps-explain")
+
+    for p in response.places:
+        assert p.explanation.provider_source == "goong_places"
+
+
+@pytest.mark.asyncio
+async def test_explanation_no_display_name_in_primary_reason() -> None:
+    """primary_reason must not contain the display_name (no echoing)."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/noecho", display_name="Secret Restaurant Name", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.8),
+    ]
+    request = PlaceSearchRequest(query="test")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await service.recommend(query="test", language="en", session_id="s-no-echo")
+
+    for p in response.places:
+        assert "Secret Restaurant Name" not in p.explanation.primary_reason

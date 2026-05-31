@@ -1267,3 +1267,378 @@ class TestPlaceDecisionTrace:
         dump = trace.model_dump_json()
         assert "api_key" not in dump.lower()
         assert "secret" not in dump.lower()
+
+
+# ============================================================================
+# T01: PlaceExplanation comprehensive contract tests (M013/S05)
+# ============================================================================
+
+class TestPlaceExplanationContract:
+    """PlaceExplanation must expose all required fields, forbid extras, and enforce bounds."""
+
+    def test_all_required_fields_exist(self):
+        from app.models.response import PlaceExplanation
+        pe = PlaceExplanation()
+        for field in (
+            "rank", "primary_reason", "matched_preferences", "local_context",
+            "score_factors", "fairness_note", "accessibility_note",
+            "route_summary", "provider_source", "provider_status",
+            "evidence_fields_used",
+        ):
+            assert hasattr(pe, field), f"Missing field: {field}"
+
+    def test_defaults_are_bounded_and_honest(self):
+        from app.models.response import PlaceExplanation
+        pe = PlaceExplanation()
+        assert pe.rank == 0
+        assert pe.primary_reason == "Recommended from grounded place data with limited metadata."
+        assert pe.matched_preferences == []
+        assert pe.local_context == "local signal unknown"
+        assert pe.score_factors == {}
+        assert "limited" in pe.fairness_note
+        assert pe.accessibility_note == "accessibility metadata unknown"
+        assert pe.route_summary == "route metadata unavailable"
+        assert pe.provider_source is None
+        assert pe.provider_status is None
+        assert pe.evidence_fields_used == []
+
+    def test_extra_fields_forbidden(self):
+        from app.models.response import PlaceExplanation
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlaceExplanation(rank=1, raw_provider_payload={"secret": True})
+        with pytest.raises(ValidationError):
+            PlaceExplanation(rank=1, api_key="sk-123")
+
+    def test_primary_reason_max_length_enforced(self):
+        from app.models.response import PlaceExplanation
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlaceExplanation(primary_reason="x" * 241)
+        # At limit should work
+        PlaceExplanation(primary_reason="x" * 240)
+
+    def test_local_context_max_length_enforced(self):
+        from app.models.response import PlaceExplanation
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlaceExplanation(local_context="x" * 161)
+
+    def test_matched_preferences_capped(self):
+        from app.models.response import PlaceExplanation
+        from pydantic import ValidationError
+        # More than 10 should be rejected
+        with pytest.raises(ValidationError):
+            PlaceExplanation(matched_preferences=[f"pref-{i}" for i in range(11)])
+
+    def test_evidence_fields_used_capped(self):
+        from app.models.response import PlaceExplanation
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlaceExplanation(evidence_fields_used=[f"field-{i}" for i in range(21)])
+
+    def test_full_envelope_round_trips(self):
+        from app.models.response import PlaceExplanation
+        pe = PlaceExplanation(
+            rank=1,
+            primary_reason="Recommended by reranking grounded place fields. Matched type:restaurant.",
+            matched_preferences=["type:restaurant", "price_level:2", "budget_preference_matched"],
+            local_context="strong local signal from normalized provider metadata",
+            score_factors={"rank": 1, "final_score": 0.85, "local_factor": 0.8},
+            fairness_note="supports local representation balancing",
+            accessibility_note="accessibility score 1.00",
+            route_summary="route drive, 1200m, 5min",
+            provider_source="goong_places",
+            provider_status="OPERATIONAL",
+            evidence_fields_used=["place_id", "display_name", "score_breakdown", "local_factor"],
+        )
+        dump = pe.model_dump()
+        restored = PlaceExplanation(**dump)
+        assert restored.rank == 1
+        assert restored.provider_source == "goong_places"
+        assert len(restored.matched_preferences) == 3
+
+
+class TestPlaceExplanationRedaction:
+    """Explanation fields must not echo raw secrets, phone numbers, exact GPS, or prompt-injection text."""
+
+    def test_no_api_key_patterns_in_explanation(self):
+        from app.models.response import PlaceExplanation
+        pe = PlaceExplanation(
+            rank=1,
+            primary_reason="Test explanation",
+            local_context="safe context",
+            fairness_note="safe fairness",
+            accessibility_note="safe access",
+            route_summary="safe route",
+        )
+        json_str = pe.model_dump_json().lower()
+        assert "api_key" not in json_str
+        assert "secret" not in json_str
+        assert "password" not in json_str
+        assert "token" not in json_str
+
+    def test_score_factors_no_raw_json(self):
+        from app.models.response import PlaceExplanation
+        pe = PlaceExplanation(
+            rank=1,
+            score_factors={"rank": 1, "final_score": 0.8},
+        )
+        dump = pe.model_dump()
+        # score_factors should only contain numeric/string primitives
+        for v in dump["score_factors"].values():
+            assert isinstance(v, (int, float, str, type(None))), \
+                f"score_factors value should be primitive, got {type(v)}"
+
+
+class TestPlaceExplanationWithPreferences:
+    """Explanation should reflect matched budget and accessibility preferences."""
+
+    def _score_breakdown(self):
+        from app.models.response import ScoreBreakdown
+        return ScoreBreakdown(
+            tree1_locality=0.8, tree2_proximity=0.7, tree3_quality=0.9,
+            s_bag=0.8, delta1_fairness=0.0, delta2_access=0.0,
+            final_score=0.8, rank=1,
+        )
+
+    def test_budget_matched_in_explanation(self):
+        """When budget filter matches candidate price_level, explanation shows it."""
+        from app.models.places import PlaceCandidate
+        from app.models.response import PlaceExplanation
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/budget-match",
+            display_name="Budget Cafe",
+            price_level=1,  # inexpensive
+            local_factor=0.7,
+            types=["cafe"],
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+            budget_matched=True,
+        )
+        assert "budget_preference_matched" in explanation.matched_preferences
+        assert "budget_filter" in explanation.evidence_fields_used
+
+    def test_accessibility_matched_in_explanation(self):
+        """When wheelchair accessibility preference matches, explanation shows it."""
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/accessible",
+            display_name="Accessible Cafe",
+            local_factor=0.7,
+            types=["cafe"],
+            accessibility_options={"wheelchair_accessible_entrance": True},
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+            accessibility_matched=True,
+        )
+        assert "accessibility_preference_matched" in explanation.matched_preferences
+        assert "accessibility_options" in explanation.evidence_fields_used
+
+    def test_budget_not_matched_when_price_outside_range(self):
+        """Budget_matched=False should not add budget signals."""
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/expensive",
+            display_name="Fancy Place",
+            price_level=4,
+            local_factor=0.5,
+            types=["restaurant"],
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+            budget_matched=False,
+        )
+        assert "budget_preference_matched" not in explanation.matched_preferences
+
+
+class TestPlaceExplanationWithRouteContext:
+    """Explanation should reflect route context when available."""
+
+    def _score_breakdown(self):
+        from app.models.response import ScoreBreakdown
+        return ScoreBreakdown(
+            tree1_locality=0.8, tree2_proximity=0.7, tree3_quality=0.9,
+            s_bag=0.8, delta1_fairness=0.0, delta2_access=0.0,
+            final_score=0.8, rank=1,
+        )
+
+    def test_route_context_in_explanation(self):
+        from app.models.places import PlaceCandidate, RouteContext
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/with-route",
+            display_name="Route Cafe",
+            local_factor=0.7,
+            types=["cafe"],
+            route_context=RouteContext(
+                travel_mode="drive",
+                distance_meters=1200,
+                duration_seconds=300,
+            ),
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+        )
+        assert "route_context" in explanation.evidence_fields_used
+        assert "drive" in explanation.route_summary
+        assert "1200m" in explanation.route_summary
+        assert "5min" in explanation.route_summary
+
+    def test_route_unavailable_when_no_context(self):
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/no-route",
+            display_name="No Route Cafe",
+            local_factor=0.5,
+            types=["cafe"],
+            route_context=None,
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+        )
+        assert explanation.route_summary == "route metadata unavailable"
+
+
+class TestPlaceExplanationProviderSource:
+    """Explanation should carry provider_source from the tool response."""
+
+    def _score_breakdown(self):
+        from app.models.response import ScoreBreakdown
+        return ScoreBreakdown(
+            tree1_locality=0.8, tree2_proximity=0.7, tree3_quality=0.9,
+            s_bag=0.8, delta1_fairness=0.0, delta2_access=0.0,
+            final_score=0.8, rank=1,
+        )
+
+    def test_provider_source_propagated(self):
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/prov",
+            display_name="Provider Cafe",
+            local_factor=0.5,
+            types=["cafe"],
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+            provider_source="goong_places",
+        )
+        assert explanation.provider_source == "goong_places"
+
+    def test_provider_source_none_when_unknown(self):
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/unknown",
+            display_name="Unknown Cafe",
+            local_factor=0.5,
+            types=["cafe"],
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+            provider_source=None,
+        )
+        assert explanation.provider_source is None
+
+
+class TestPlaceExplanationMalformedCandidates:
+    """Malformed or minimal candidates should produce bounded honest notes, not crash."""
+
+    def _score_breakdown(self):
+        from app.models.response import ScoreBreakdown
+        return ScoreBreakdown(
+            tree1_locality=0.5, tree2_proximity=0.5, tree3_quality=0.5,
+            s_bag=0.5, delta1_fairness=0.0, delta2_access=0.0,
+            final_score=0.5, rank=1,
+        )
+
+    def test_minimal_candidate_produces_honest_defaults(self):
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/minimal",
+            display_name="Minimal",
+            # Everything else is default/None
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+        )
+        assert explanation.local_context == "local signal unknown"
+        assert "missing" in explanation.fairness_note.lower() or "conservative" in explanation.fairness_note.lower()
+        assert explanation.accessibility_note == "accessibility metadata unknown"
+        assert explanation.route_summary == "route metadata unavailable"
+
+    def test_missing_types_produces_no_type_match(self):
+        from app.models.places import PlaceCandidate
+        from agents.services.place_recommendation_service import _build_place_explanation
+
+        candidate = PlaceCandidate(
+            place_id="places/no-types",
+            display_name="No Types",
+            local_factor=0.5,
+            types=[],  # empty types
+            primary_type=None,
+        )
+        explanation = _build_place_explanation(
+            candidate=candidate,
+            breakdown=self._score_breakdown(),
+            accessibility_score=None,
+        )
+        # Should not crash; matched_preferences may have other things but not type
+        assert "type:" not in " ".join(explanation.matched_preferences) or len(explanation.matched_preferences) == 0
+
+
+class TestPlaceExplanationRedactionService:
+    """_redact_text helper strips secrets from explanation fields."""
+
+    def test_phone_number_redacted(self):
+        from agents.services.place_recommendation_service import _redact_text
+        result = _redact_text("Call us at +84-123-456-7890 for info")
+        assert "123" not in result or "[phone_redacted]" in result
+
+    def test_api_key_pattern_redacted(self):
+        from agents.services.place_recommendation_service import _redact_text
+        result = _redact_text("Key: sk-abc12345678def")
+        assert "[key_redacted]" in result
+
+    def test_secret_token_redacted(self):
+        from agents.services.place_recommendation_service import _redact_text
+        result = _redact_text("token=mysecret123 value")
+        assert "[secret_redacted]" in result
+
+    def test_truncation_applied(self):
+        from agents.services.place_recommendation_service import _redact_text
+        long_text = "x" * 500
+        result = _redact_text(long_text, max_length=240)
+        assert len(result) <= 240

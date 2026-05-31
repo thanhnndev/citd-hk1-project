@@ -310,15 +310,24 @@ class PlaceRecommendationService:
             tracer.emit("preference_filter_skipped", PlaceAuditPhase.FILTER)
 
         ensemble_ok = True
+        provider_source_val = tool_response.source.value
         try:
-            places = _reranked_results(candidates, request.query)
+            places = _reranked_results(
+                candidates, request.query,
+                provider_source=provider_source_val,
+                request=request,
+            )
             tracer.emit("reranking_ensemble", PlaceAuditPhase.RERANK, detail={
                 "candidate_count": len(candidates),
                 "result_count": len(places),
             })
         except Exception as exc:  # noqa: BLE001 - ensemble pipeline fails closed.
             logger.warning("ensemble_reranking_failed", extra={"error_type": type(exc).__name__})
-            places = _grounded_results(candidates)
+            places = _grounded_results(
+                candidates,
+                provider_source=provider_source_val,
+                request=request,
+            )
             ensemble_ok = False
             tracer.emit("reranking_fallback", PlaceAuditPhase.RERANK, detail={
                 "error_type": type(exc).__name__,
@@ -492,7 +501,10 @@ class PlaceRecommendationService:
 
 
 def _reranked_results(
-    candidates: list[PlaceCandidate], query: str
+    candidates: list[PlaceCandidate], query: str,
+    *,
+    provider_source: str | None = None,
+    request: PlaceSearchRequest | None = None,
 ) -> list[PlaceResult]:
     """Run candidates through FeatureExtractor → EnsembleReranker pipeline."""
     extractor = FeatureExtractor()
@@ -505,6 +517,10 @@ def _reranked_results(
         candidates, feature_dicts
     )
 
+    # Derive preference match signals from the request
+    numeric_levels = request.numeric_price_levels if request else None
+    accessibility_pref = request.wheelchair_accessible_preference if request else None
+
     results: list[PlaceResult] = []
     for candidate, breakdown in zip(sorted_candidates, score_breakdowns):
         accessibility_score = candidate.accessibility_score
@@ -512,6 +528,18 @@ def _reranked_results(
             accessibility_score = (
                 1.0 if any(candidate.accessibility_options.values()) else 0.0
             )
+
+        # Budget match: candidate price_level within requested budget range
+        budget_matched = False
+        if numeric_levels is not None and candidate.price_level is not None:
+            budget_matched = candidate.price_level in set(numeric_levels)
+
+        # Accessibility match: candidate has positive options AND user requested it
+        accessibility_matched = (
+            accessibility_pref is True
+            and bool(candidate.accessibility_options)
+            and any(candidate.accessibility_options.values())
+        )
 
         results.append(
             PlaceResult(
@@ -540,6 +568,9 @@ def _reranked_results(
                     candidate=candidate,
                     breakdown=breakdown,
                     accessibility_score=accessibility_score,
+                    provider_source=provider_source,
+                    budget_matched=budget_matched,
+                    accessibility_matched=accessibility_matched,
                 ),
             )
         )
@@ -547,8 +578,16 @@ def _reranked_results(
     return results
 
 
-def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
+def _grounded_results(
+    candidates: list[PlaceCandidate],
+    *,
+    provider_source: str | None = None,
+    request: PlaceSearchRequest | None = None,
+) -> list[PlaceResult]:
     """Fallback path: return candidates with default ensemble ScoreBreakdown."""
+    numeric_levels = request.numeric_price_levels if request else None
+    accessibility_pref = request.wheelchair_accessible_preference if request else None
+
     results: list[PlaceResult] = []
     for i, candidate in enumerate(candidates):
         accessibility_score = candidate.accessibility_score
@@ -556,6 +595,18 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
             accessibility_score = (
                 1.0 if any(candidate.accessibility_options.values()) else 0.0
             )
+
+        # Budget match: candidate price_level within requested budget range
+        budget_matched = False
+        if numeric_levels is not None and candidate.price_level is not None:
+            budget_matched = candidate.price_level in set(numeric_levels)
+
+        # Accessibility match: candidate has positive options AND user requested it
+        accessibility_matched = (
+            accessibility_pref is True
+            and bool(candidate.accessibility_options)
+            and any(candidate.accessibility_options.values())
+        )
 
         breakdown = ScoreBreakdown(
             tree1_locality=0.5,
@@ -595,11 +646,33 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
                     breakdown=breakdown,
                     accessibility_score=accessibility_score,
                     fallback=True,
+                    provider_source=provider_source,
+                    budget_matched=budget_matched,
+                    accessibility_matched=accessibility_matched,
                 ),
             )
         )
 
     return results
+
+
+def _redact_text(value: str, *, max_length: int = 240) -> str:
+    """Strip API-key-like tokens, phone numbers, and truncate to bounded length.
+
+    Order matters: API-key patterns are stripped first to avoid phone regex
+    consuming digits within key tokens.
+
+    API-key pattern: sk-, gsk-, AIza- prefixes followed by 8+ alphanumeric/dash chars.
+    Secret pattern: key=, token=, secret= followed by non-whitespace.
+    Phone pattern: + or digit start, 7+ digits with optional dashes/spaces, digit end.
+    """
+    import re
+    # API-key-like tokens FIRST (before phone regex can consume their digits)
+    value = re.sub(r"(?:sk|gsk|AIza)[\w\-]{8,}", "[key_redacted]", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?:key|token|secret)\s*=\s*\S+", "[secret_redacted]", value, flags=re.IGNORECASE)
+    # Phone-like patterns (7+ consecutive digits with optional formatting)
+    value = re.sub(r"\+?[\d][\d\s\-]{6,}\d", "[phone_redacted]", value)
+    return value[:max_length]
 
 
 def _build_place_explanation(
@@ -608,16 +681,23 @@ def _build_place_explanation(
     breakdown: ScoreBreakdown,
     accessibility_score: float | None,
     fallback: bool = False,
+    provider_source: str | None = None,
+    budget_matched: bool = False,
+    accessibility_matched: bool = False,
 ) -> PlaceExplanation:
-    """Create a redacted explanation from normalized candidate fields only."""
+    """Create a redacted explanation from normalized candidate fields only.
+
+    Security: no raw provider JSON, no API keys, no phone numbers, no exact GPS.
+    All text fields pass through _redact_text for PII/secret sanitization.
+    """
     evidence: list[str] = ["place_id", "display_name", "score_breakdown"]
     matched: list[str] = []
 
     if candidate.primary_type:
-        matched.append(f"type:{candidate.primary_type}")
+        matched.append(f"type:{_redact_text(candidate.primary_type, max_length=40)}")
         evidence.append("primary_type")
     elif candidate.types:
-        matched.append(f"type:{candidate.types[0]}")
+        matched.append(f"type:{_redact_text(candidate.types[0], max_length=40)}")
         evidence.append("types")
 
     if candidate.price_level is not None:
@@ -629,6 +709,14 @@ def _build_place_explanation(
     if candidate.open_now is not None:
         matched.append("open_now" if candidate.open_now else "opening_status_known")
         evidence.append("open_now")
+
+    # Preference matching signals (from request-level preferences)
+    if budget_matched:
+        matched.append("budget_preference_matched")
+        evidence.append("budget_filter")
+    if accessibility_matched:
+        matched.append("accessibility_preference_matched")
+        evidence.append("accessibility_options")
 
     local_factor = candidate.local_factor
     if local_factor is None:
@@ -646,7 +734,7 @@ def _build_place_explanation(
     if accessibility_score is None and not candidate.accessibility_warning and not candidate.accessibility_options:
         accessibility_note = "accessibility metadata unknown"
     elif candidate.accessibility_warning:
-        accessibility_note = candidate.accessibility_warning
+        accessibility_note = _redact_text(candidate.accessibility_warning)
         evidence.append("accessibility_warning")
     elif accessibility_score is not None:
         accessibility_note = f"accessibility score {accessibility_score:.2f}"
@@ -670,6 +758,7 @@ def _build_place_explanation(
     primary_reason = "Recommended using fallback grounded place fields." if fallback else "Recommended by reranking grounded place fields."
     if matched:
         primary_reason += f" Matched {', '.join(matched[:3])}."
+    primary_reason = _redact_text(primary_reason)
 
     score_factors: dict[str, float | int | str | None] = {
         "rank": breakdown.rank,
@@ -688,7 +777,7 @@ def _build_place_explanation(
         fairness_note=fairness_note,
         accessibility_note=accessibility_note,
         route_summary=route_summary,
-        provider_source=None,
+        provider_source=provider_source,
         provider_status=candidate.business_status,
         evidence_fields_used=sorted(set(evidence)),
     )
