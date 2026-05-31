@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
-import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, MessageSquare, RotateCcw, ShieldCheck, Trash2, Waves } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, MessageSquare, RotateCcw, ShieldCheck, Trash2, Waves, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -51,6 +51,12 @@ interface ChatInterfaceProps {
     copied?: string;
     retryMessage?: string;
     prompts?: string[];
+    quickReplyLabels?: {
+      places?: string[];
+      sources?: string[];
+      fallback?: string[];
+      generic?: string[];
+    };
   };
 }
 
@@ -238,6 +244,84 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     textareaRef.current?.focus();
   }, []);
 
+  // Derived from messages — needed by quick reply derivation and status bar
+  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const sourceCount = lastAssistant?.citations?.length ?? 0;
+  const activeStatus = lastAssistant?.streamStatus
+    ? STATUS_LABELS[language][lastAssistant.streamStatus]
+    : loading
+      ? labels.searching
+      : sourceCount > 0
+        ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
+        : "";
+
+  // ── Deterministic Quick Reply Chips ──────────────────────────────────────
+  // Derives chip labels from local UI state only — no LLM/API calls.
+
+  const defaultQuickReplies: Record<"vi" | "en", {
+    places: string[];
+    sources: string[];
+    fallback: string[];
+    generic: string[];
+  }> = {
+    vi: {
+      places: ["Hiển thị trên bản đồ", "Kể thêm về chỗ này", "Có tiếp cận được không?"],
+      sources: ["Tóm tắt nguồn tham khảo", "Hỏi thêm về chủ đề này"],
+      fallback: ["Thử hỏi theo hướng khác", "Hỏi về làng chài"],
+      generic: ["Bạn còn làm được gì?", "Kể về ẩm thực địa phương"],
+    },
+    en: {
+      places: ["Show on map", "Tell me more", "Is it accessible?"],
+      sources: ["Summarize the sources", "Follow up on this"],
+      fallback: ["Try a different angle", "Ask about the village"],
+      generic: ["What else can you do?", "Tell me about local food"],
+    },
+  };
+
+  const getQuickReplyLabels = useCallback(
+    (category: "places" | "sources" | "fallback" | "generic"): string[] => {
+      const fromTranslations = translations.quickReplyLabels?.[category];
+      if (fromTranslations && Array.isArray(fromTranslations) && fromTranslations.length > 0) {
+        return fromTranslations;
+      }
+      return defaultQuickReplies[language][category];
+    },
+    [translations.quickReplyLabels, language],
+  );
+
+  const deriveQuickReplies = useCallback((): string[] => {
+    if (!lastAssistant || lastAssistant.status !== "complete") return [];
+
+    // Place results: show map / follow-up / accessibility chips
+    if (lastAssistant.places && lastAssistant.places.length > 0) {
+      return getQuickReplyLabels("places");
+    }
+
+    // Source-backed answer: show summary / follow-up chips
+    if (lastAssistant.citations && lastAssistant.citations.length > 0) {
+      return getQuickReplyLabels("sources");
+    }
+
+    // Fallback response: show recovery chips
+    if (lastAssistant.fallback) {
+      return getQuickReplyLabels("fallback");
+    }
+
+    // Generic next-question chips for any other assistant response
+    return getQuickReplyLabels("generic");
+  }, [lastAssistant, getQuickReplyLabels]);
+
+  const handleQuickReplyClick = useCallback(
+    (label: string) => {
+      if (!loading) {
+        handleSubmit(label);
+      }
+    },
+    [loading, handleSubmit],
+  );
+
+  const quickReplyChips = deriveQuickReplies();
+
   const handlePromptClick = useCallback(
     (prompt: string) => {
       handleSubmit(prompt);
@@ -268,16 +352,6 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
     }
   }, [input]);
-
-  const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
-  const sourceCount = lastAssistant?.citations?.length ?? 0;
-  const activeStatus = lastAssistant?.streamStatus
-    ? STATUS_LABELS[language][lastAssistant.streamStatus]
-    : loading
-      ? labels.searching
-      : sourceCount > 0
-        ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
-        : "";
 
   return (
     <div className="relative flex h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-[#f4eddf] md:h-[calc(100dvh-5rem)]">
@@ -404,6 +478,31 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           <div ref={messagesEndRef} />
         </div>
       </div>
+
+      {/* Quick reply chips — deterministic, derived from local UI state */}
+      {quickReplyChips.length > 0 && !loading && (
+        <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/60 px-2 py-2 sm:px-3 sm:py-2.5">
+          <div className="mx-auto max-w-4xl">
+            <div className="flex items-center gap-2 px-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-[#5d7373]">
+              <ArrowRight className="size-3" />
+              <span>{language === "vi" ? "Gợi ý tiếp theo" : "Quick replies"}</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5 sm:gap-2" role="group" aria-label={language === "vi" ? "Câu trả lời nhanh" : "Quick reply suggestions"}>
+              {quickReplyChips.map((label, i) => (
+                <button
+                  key={`${label}-${i}`}
+                  type="button"
+                  onClick={() => handleQuickReplyClick(label)}
+                  disabled={loading}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[#0b5f63]/20 bg-white/80 px-3 py-1.5 text-xs font-medium text-[#0b5f63] shadow-sm transition-colors hover:bg-[#0b5f63]/10 hover:border-[#0b5f63]/30 active:bg-[#0b5f63]/15 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {!isNearBottom && (
         <Button

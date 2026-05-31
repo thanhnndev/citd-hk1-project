@@ -324,7 +324,26 @@
       "Gợi ý một quán hải sản địa phương",
       "Kể ngắn gọn lịch sử làng chài",
       "Từ Dương Đông đi Hàm Ninh thế nào?"
+    ],
+    "quickReplyLabels": {
+      "places": [
+        "Hiển thị trên bản đồ",
+        "Kể thêm về chỗ này",
+        "Có tiếp cận được không?"
+      ],
+      "sources": [
+        "Tóm tắt nguồn tham khảo",
+        "Hỏi thêm về chủ đề này"
+      ],
+      "fallback": [
+        "Thử hỏi theo hướng khác",
+        "Hỏi về làng chài"
+      ],
+      "generic": [
+        "Bạn còn làm được gì?",
+        "Kể về ẩm thực địa phương"
     ]
+    }
   },
   "Map": {
     "title": "Bản đồ kiểm chứng địa điểm Hàm Ninh",

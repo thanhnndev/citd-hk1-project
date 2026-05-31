@@ -324,7 +324,26 @@
       "Suggest a local seafood spot",
       "Give me a short village history",
       "How do I get there from Duong Dong?"
-    ]
+    ],
+    "quickReplyLabels": {
+      "places": [
+        "Show on map",
+        "Tell me more",
+        "Is it accessible?"
+      ],
+      "sources": [
+        "Summarize the sources",
+        "Follow up on this"
+      ],
+      "fallback": [
+        "Try a different angle",
+        "Ask about the village"
+      ],
+      "generic": [
+        "What else can you do?",
+        "Tell me about local food"
+      ]
+    }
   },
   "Map": {
     "title": "Ham Ninh Place Proof Map",
