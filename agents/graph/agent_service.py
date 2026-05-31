@@ -63,11 +63,31 @@ _TOOLS = [
             "name": "search_places",
             "description": (
                 "Use for restaurants, hotels, homestays, cafes, seafood, nearby places, directions, maps, routes, "
-                "or local recommendations around Ham Ninh."
+                "or local recommendations around Ham Ninh. "
+                "Optionally accepts budget, accessibility, and user_location preferences."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"query": {"type": "string"}},
+                "properties": {
+                    "query": {"type": "string"},
+                    "budget": {
+                        "type": "string",
+                        "enum": ["free", "inexpensive", "moderate", "expensive", "very_expensive"],
+                        "description": "Optional budget preference. Maps to price level filtering.",
+                    },
+                    "accessibility": {
+                        "type": "boolean",
+                        "description": "Optional: when true, prefer wheelchair-accessible venues.",
+                    },
+                    "user_location": {
+                        "type": "object",
+                        "properties": {
+                            "lat": {"type": "number"},
+                            "lng": {"type": "number"},
+                        },
+                        "description": "Optional user GPS coordinates for proximity scoring.",
+                    },
+                },
                 "required": ["query"],
                 "additionalProperties": False,
             },
@@ -378,8 +398,31 @@ class AgentService:
         if self._place_recommendation_service is None:
             state["response_text"] = _place_unavailable_message(state["language"])
             return json.dumps({"status": "unavailable", "message": state["response_text"]}, ensure_ascii=False)
+
+        # Extract optional preferences from tool args (already parsed from LLM tool call)
+        # These are sourced from the last tool call's arguments, stored in state.
+        _budget: str | None = None
+        _accessibility: bool | None = None
+        _user_location: dict[str, float] | None = None
+        for call in state.get("tool_calls", [])[:2]:
+            if call.function.name == "search_places":
+                args = _json_args(call.function.arguments)
+                _budget = args.get("budget") if isinstance(args.get("budget"), str) else None
+                _accessibility = args.get("accessibility") if isinstance(args.get("accessibility"), bool) else None
+                ul = args.get("user_location")
+                if isinstance(ul, dict):
+                    _user_location = ul
+                break
+
         try:
-            response = await self._place_recommendation_service.recommend(query=query, language=state["language"], session_id=state["session_id"])
+            response = await self._place_recommendation_service.recommend(
+                query=query,
+                language=state["language"],
+                session_id=state["session_id"],
+                budget=_budget,
+                accessibility=_accessibility,
+                user_location=_user_location,
+            )
         except Exception as exc:
             logger.warning("agent.place_tool_error", session_id=state["session_id"], reason=type(exc).__name__)
             state["response_text"] = _place_unavailable_message(state["language"])

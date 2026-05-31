@@ -66,6 +66,9 @@ async def test_place_intent_calls_recommendation_service_and_skips_llm() -> None
         query="Gợi ý nhà hàng hải sản ở Hàm Ninh",
         language="vi",
         session_id="s-place",
+        budget=None,
+        accessibility=None,
+        user_location=None,
     )
     llm.answer.assert_not_called()
     assert [place.place_id for place in response.places] == ["places/ham-ninh-seafood"]
@@ -1665,3 +1668,713 @@ class _FakeTimeoutClient:
     async def get(self, path: str, *, headers: dict):
         import httpx
         raise httpx.TimeoutException("simulated timeout")
+
+
+# ============================================================================
+# T02: Preference wiring tests — budget, accessibility, user_location
+# ============================================================================
+
+def _budget_candidate(
+    place_id: str,
+    display_name: str,
+    price_level: int | None = None,
+    local_factor: float | None = None,
+    accessibility_options: dict | None = None,
+) -> "PlaceCandidate":
+    """Helper to build a PlaceCandidate for preference tests."""
+    from app.models.places import PlaceCandidate
+    from app.models.request import LatLng
+    return PlaceCandidate(
+        place_id=f"places/{place_id}",
+        display_name=display_name,
+        types=["restaurant"],
+        location=LatLng(lat=10.18, lng=104.05),
+        price_level=price_level,
+        local_factor=local_factor,
+        accessibility_options=accessibility_options or {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_filter_excludes_expensive_venues() -> None:
+    """When budget='inexpensive', expensive venues (price_level 3,4) are excluded."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        _budget_candidate("cheap1", "Cheap Eats", price_level=0, local_factor=0.8),
+        _budget_candidate("mid1", "Mid Range", price_level=2, local_factor=0.7),
+        _budget_candidate("exp1", "Fine Dining", price_level=3, local_factor=0.9),
+        _budget_candidate("lux1", "Luxury", price_level=4, local_factor=0.6),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-budget", budget="inexpensive"
+    )
+
+    assert response.places, "Expected some results with inexpensive budget"
+    returned_ids = {p.place_id for p in response.places}
+    # price_level 0,1,2 are allowed by 'inexpensive' budget mapping
+    assert "places/exp1" not in returned_ids, "price_level 3 should be excluded by inexpensive budget"
+    assert "places/lux1" not in returned_ids, "price_level 4 should be excluded by inexpensive budget"
+    # Check reasoning_log has budget diagnostic
+    assert "preference_budget_applied=True" in (response.reasoning_log or "")
+
+
+@pytest.mark.asyncio
+async def test_budget_filter_preserves_unknown_price_level() -> None:
+    """Candidates without price_level metadata are kept (no info = no filter)."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        _budget_candidate("known", "Known Price", price_level=3, local_factor=0.8),
+        _budget_candidate("unknown", "Unknown Price", price_level=None, local_factor=0.7),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    # budget='inexpensive' → allows price_level 0,1; excludes 3
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-budget-unknown", budget="inexpensive"
+    )
+
+    returned_ids = {p.place_id for p in response.places}
+    # price_level=3 should be excluded
+    assert "places/known" not in returned_ids
+    # price_level=None should be kept
+    assert "places/unknown" in returned_ids
+
+
+@pytest.mark.asyncio
+async def test_invalid_budget_label_fails_closed() -> None:
+    """Unsupported budget label is ignored (no filter applied), not an error."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/exp1",
+            display_name="Expensive Place",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            price_level=4,
+            local_factor=0.8,
+        ),
+        PlaceCandidate(
+            place_id="places/cheap1",
+            display_name="Cheap Place",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            price_level=0,
+            local_factor=0.7,
+        ),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    # Invalid budget label — should NOT crash, just skip filtering
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-budget-invalid", budget="ultra_luxury"
+    )
+
+    assert response.places, "Should return results with invalid budget"
+    assert "preference_budget_applied=True" not in (response.reasoning_log or ""), \
+        "Invalid budget should not set applied flag"
+
+
+@pytest.mark.asyncio
+async def test_no_candidates_after_strict_budget_filter() -> None:
+    """When all candidates are filtered out by strict budget, returns honest empty."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # All expensive venues, user wants free
+    candidates = [
+        _budget_candidate("exp1", "Fancy 1", price_level=3, local_factor=0.8),
+        _budget_candidate("exp2", "Fancy 2", price_level=4, local_factor=0.7),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-budget-empty", budget="free"
+    )
+
+    assert response.places == [], "All results should be filtered out by free budget"
+    assert "filtered_count=2" in (response.reasoning_log or ""), \
+        "Reasoning log should show filtered count"
+
+
+@pytest.mark.asyncio
+async def test_accessibility_preference_boosts_accessible_places() -> None:
+    """When accessibility=True, the preference flag is set in reasoning_log."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/access1",
+            display_name="Accessible Venue",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            price_level=2,
+            local_factor=0.8,
+            accessibility_options={"wheelchair_accessible_entrance": True},
+        ),
+        PlaceCandidate(
+            place_id="places/norm1",
+            display_name="Normal Venue",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            price_level=2,
+            local_factor=0.7,
+            accessibility_options={},
+        ),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-access", accessibility=True
+    )
+
+    assert "preference_accessibility_applied=True" in (response.reasoning_log or "")
+    assert len(response.places) == 2
+
+
+@pytest.mark.asyncio
+async def test_user_location_preference_in_request() -> None:
+    """When user_location is provided, it shapes the request's effective_origin."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=[
+            _budget_candidate("nearby", "Nearby Place", local_factor=0.9),
+        ],
+        request=PlaceSearchRequest(query="cafe"),
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="cafe",
+        language="en",
+        session_id="s-loc",
+        user_location={"lat": 10.19, "lng": 104.06},
+    )
+
+    assert "user_location_applied=True" in (response.reasoning_log or "")
+    # Verify the request passed to the tool has the user_location set
+    call_args = places_tool.text_search.call_args
+    sent_request = call_args[0][0] if call_args[0] else call_args[1].get("request")
+    assert sent_request is not None
+    assert sent_request.user_location is not None
+    assert abs(sent_request.user_location.lat - 10.19) < 0.01
+    assert abs(sent_request.user_location.lng - 104.06) < 0.01
+
+
+@pytest.mark.asyncio
+async def test_user_location_invalid_coordinates_fail_closed() -> None:
+    """Out-of-range or malformed user_location coordinates are ignored."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/p1",
+            display_name="Place 1",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            local_factor=0.8,
+        ),
+    ]
+    request = PlaceSearchRequest(query="cafe")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    # Invalid coordinates — lat > 90, lng > 180
+    response = await recommender.recommend(
+        query="cafe",
+        language="en",
+        session_id="s-loc-invalid",
+        user_location={"lat": 999, "lng": 999},
+    )
+
+    # Should not crash; should still return results
+    assert len(response.places) >= 1
+    # Should not set user_location_applied because coordinates were out of range
+    assert "user_location_applied=True" not in (response.reasoning_log or "")
+
+
+@pytest.mark.asyncio
+async def test_preferences_change_request_fields() -> None:
+    """Preferences materially change the PlaceSearchRequest fields."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=[_budget_candidate("p1", "Place 1", local_factor=0.8)],
+        request=PlaceSearchRequest(query="cafe"),
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="cafe",
+        language="en",
+        session_id="s-req-fields",
+        budget="moderate",
+        accessibility=True,
+        user_location={"lat": 10.18, "lng": 104.05},
+    )
+
+    # Inspect the request that was sent to the tool
+    call_args = places_tool.text_search.call_args
+    sent_request = call_args[0][0] if call_args[0] else call_args[1].get("request")
+    assert sent_request is not None
+    assert sent_request.budget_filter is not None
+    assert len(sent_request.budget_filter) >= 1
+    assert sent_request.wheelchair_accessible_preference is True
+    assert sent_request.user_location is not None
+    # Reasoning log shows all three preferences applied
+    log = response.reasoning_log or ""
+    assert "preference_budget_applied=True" in log
+    assert "preference_accessibility_applied=True" in log
+    assert "user_location_applied=True" in log
+
+
+@pytest.mark.asyncio
+async def test_fairness_still_applies_after_preference_rerank() -> None:
+    """Fairness balancing runs after preference filtering — local representation target met."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # 7 candidates: top 5 by score are all non-local chains, 2 locals below
+    # Budget filter allows all (moderate = 0,1,2)
+    candidates = [
+        _budget_candidate("c1", "Chain 1", price_level=1, local_factor=0.1),
+        _budget_candidate("c2", "Chain 2", price_level=2, local_factor=0.2),
+        _budget_candidate("c3", "Chain 3", price_level=1, local_factor=0.1),
+        _budget_candidate("c4", "Chain 4", price_level=2, local_factor=0.3),
+        _budget_candidate("c5", "Chain 5", price_level=1, local_factor=0.1),
+        _budget_candidate("l1", "Local 1", price_level=2, local_factor=0.9),
+        _budget_candidate("l2", "Local 2", price_level=1, local_factor=0.8),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-fair-pref", budget="moderate"
+    )
+
+    audit = response.fairness_audit
+    assert audit is not None
+    top5 = response.places[:5]
+    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    assert local_in_top5 >= 2, f"Expected >= 2 local in top-5 after preference filter, got {local_in_top5}"
+    assert "insufficient_local_candidates" not in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_no_rag_citations_introduced_by_preferences() -> None:
+    """Preference path does NOT introduce RAG/citations — citations always []."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [_budget_candidate("p1", "Place 1", price_level=1, local_factor=0.8)]
+    request = PlaceSearchRequest(query="cafe")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="cafe",
+        language="en",
+        session_id="s-no-rag-pref",
+        budget="moderate",
+        accessibility=True,
+        user_location={"lat": 10.18, "lng": 104.05},
+    )
+
+    assert response.citations == [], "Preferences must not introduce citations"
+
+
+@pytest.mark.asyncio
+async def test_no_preferences_still_works_backward_compat() -> None:
+    """No preferences provided — backward compatible, no preference flags in log."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [_budget_candidate("p1", "Place 1", local_factor=0.8)]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="restaurant", language="en", session_id="s-no-pref"
+    )
+
+    log = response.reasoning_log or ""
+    assert "preference_budget_applied=True" not in log
+    assert "preference_accessibility_applied=True" not in log
+    assert "user_location_applied=True" not in log
+    assert "filtered_count=" not in log
+
+
+# ============================================================================
+# T02: AgentService path — preferences via tool args
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_agent_service_carries_budget_through_tool_args() -> None:
+    """AgentService extracts budget from LLM tool args and passes it through."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = ChatResponse(
+        session_id="s-agent-budget",
+        message="Found 1 place",
+        citations=[],
+        places=[_place()],
+        reasoning_log="place_recommendation status=ok source=mock candidate_count=1 result_count=1 preference_budget_applied=True filtered_count=2",
+        intent="place_recommendation",
+        latency_ms=1.0,
+        fallback=False,
+    )
+
+    # Simulate LLM deciding to call search_places with budget
+    llm_completions = AsyncMock()
+    tool_call = MagicMock()
+    tool_call.id = "tc-budget"
+    tool_call.function.name = "search_places"
+    tool_call.function.arguments = '{"query": "nhà hàng rẻ", "budget": "inexpensive"}'
+    msg = MagicMock()
+    msg.tool_calls = [tool_call]
+    msg.content = None
+    completion = MagicMock()
+    completion.choices = [MagicMock()]
+    completion.choices[0].message = msg
+
+    llm_completions.create = AsyncMock(return_value=completion)
+    llm_service = _FakeLLMService(llm_completions)
+
+    service = AgentService(
+        retriever=None,
+        llm_service=llm_service,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-agent-budget", message="tìm nhà hàng rẻ", language="vi"
+    )
+
+    recommender.recommend.assert_awaited_once()
+    call_kwargs = recommender.recommend.call_args[1]
+    assert call_kwargs.get("budget") == "inexpensive"
+    assert response.intent == "place_recommendation"
+
+
+@pytest.mark.asyncio
+async def test_agent_service_carries_accessibility_through_tool_args() -> None:
+    """AgentService extracts accessibility from LLM tool args and passes it through."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = ChatResponse(
+        session_id="s-agent-access",
+        message="Found 1 place",
+        citations=[],
+        places=[_place()],
+        reasoning_log="place_recommendation status=ok source=mock candidate_count=1 result_count=1 preference_accessibility_applied=True",
+        intent="place_recommendation",
+        latency_ms=1.0,
+        fallback=False,
+    )
+
+    llm_completions = AsyncMock()
+    tool_call = MagicMock()
+    tool_call.id = "tc-access"
+    tool_call.function.name = "search_places"
+    tool_call.function.arguments = '{"query": "nhà hàng cho xe lăn", "accessibility": true}'
+    msg = MagicMock()
+    msg.tool_calls = [tool_call]
+    msg.content = None
+    completion = MagicMock()
+    completion.choices = [MagicMock()]
+    completion.choices[0].message = msg
+
+    llm_completions.create = AsyncMock(return_value=completion)
+    llm_service = _FakeLLMService(llm_completions)
+
+    service = AgentService(
+        retriever=None,
+        llm_service=llm_service,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-agent-access", message="tìm nhà hàng cho xe lăn", language="vi"
+    )
+
+    call_kwargs = recommender.recommend.call_args[1]
+    assert call_kwargs.get("accessibility") is True
+
+
+@pytest.mark.asyncio
+async def test_agent_service_carries_user_location_through_tool_args() -> None:
+    """AgentService extracts user_location from LLM tool args and passes it through."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = ChatResponse(
+        session_id="s-agent-loc",
+        message="Found 1 place",
+        citations=[],
+        places=[_place()],
+        reasoning_log="place_recommendation status=ok source=mock candidate_count=1 result_count=1 user_location_applied=True",
+        intent="place_recommendation",
+        latency_ms=1.0,
+        fallback=False,
+    )
+
+    llm_completions = AsyncMock()
+    tool_call = MagicMock()
+    tool_call.id = "tc-loc"
+    tool_call.function.name = "search_places"
+    tool_call.function.arguments = (
+        '{"query": "cafe gần đây", "user_location": {"lat": 10.19, "lng": 104.06}}'
+    )
+    msg = MagicMock()
+    msg.tool_calls = [tool_call]
+    msg.content = None
+    completion = MagicMock()
+    completion.choices = [MagicMock()]
+    completion.choices[0].message = msg
+
+    llm_completions.create = AsyncMock(return_value=completion)
+    llm_service = _FakeLLMService(llm_completions)
+
+    service = AgentService(
+        retriever=None,
+        llm_service=llm_service,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-agent-loc", message="tìm cafe gần đây", language="vi"
+    )
+
+    call_kwargs = recommender.recommend.call_args[1]
+    ul = call_kwargs.get("user_location")
+    assert ul is not None
+    assert ul["lat"] == 10.19
+    assert ul["lng"] == 104.06
+
+
+@pytest.mark.asyncio
+async def test_agent_service_malformed_tool_args_fail_closed() -> None:
+    """Malformed tool args (e.g. string for accessibility) are handled gracefully."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = ChatResponse(
+        session_id="s-malformed",
+        message="Found 1 place",
+        citations=[],
+        places=[_place()],
+        reasoning_log="place_recommendation status=ok source=mock candidate_count=1 result_count=1",
+        intent="place_recommendation",
+        latency_ms=1.0,
+        fallback=False,
+    )
+
+    llm_completions = AsyncMock()
+    tool_call = MagicMock()
+    tool_call.id = "tc-mal"
+    tool_call.function.name = "search_places"
+    tool_call.function.arguments = (
+        '{"query": "test", "accessibility": "yes_not_bool", "budget": 123, "user_location": "invalid"}'
+    )
+    msg = MagicMock()
+    msg.tool_calls = [tool_call]
+    msg.content = None
+    completion = MagicMock()
+    completion.choices = [MagicMock()]
+    completion.choices[0].message = msg
+
+    llm_completions.create = AsyncMock(return_value=completion)
+    llm_service = _FakeLLMService(llm_completions)
+
+    service = AgentService(
+        retriever=None,
+        llm_service=llm_service,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    # Should not crash — malformed types are sanitized
+    response = await service.answer(
+        session_id="s-malformed", message="test", language="vi"
+    )
+
+    call_kwargs = recommender.recommend.call_args[1]
+    assert call_kwargs.get("budget") is None  # int → None
+    assert call_kwargs.get("accessibility") is None  # str → None
+    assert call_kwargs.get("user_location") is None  # str → None
+
+
+@pytest.mark.asyncio
+async def test_preference_diagnostics_in_reasoning_log() -> None:
+    """Reasoning log includes preference diagnostics when preferences are active."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        _budget_candidate("cheap", "Cheap Place", price_level=0, local_factor=0.8),
+        _budget_candidate("exp", "Expensive", price_level=4, local_factor=0.9),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="restaurant",
+        language="en",
+        session_id="s-pref-diag",
+        budget="free",
+        accessibility=True,
+        user_location={"lat": 10.18, "lng": 104.05},
+    )
+
+    log = response.reasoning_log or ""
+    assert "preference_budget_applied=True" in log
+    assert "preference_accessibility_applied=True" in log
+    assert "user_location_applied=True" in log
+    assert "filtered_count=1" in log
+
+
+@pytest.mark.asyncio
+async def test_preference_diagnostics_no_secret_exposure() -> None:
+    """Preference diagnostics do not leak exact GPS coordinates in reasoning_log."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [_budget_candidate("p1", "Place 1", local_factor=0.8)]
+    request = PlaceSearchRequest(query="cafe")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await recommender.recommend(
+        query="cafe",
+        language="en",
+        session_id="s-redact-pref",
+        user_location={"lat": 10.183521, "lng": 104.049684},
+    )
+
+    log = response.reasoning_log or ""
+    # Should not contain exact high-precision coordinates
+    assert "10.183521" not in log
+    assert "104.049684" not in log

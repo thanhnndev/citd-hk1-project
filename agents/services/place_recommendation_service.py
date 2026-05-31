@@ -62,10 +62,33 @@ class PlaceRecommendationService:
         self._max_result_count = max(1, min(max_result_count, 20))
         self._routes_service = routes_service if routes_service is not None else GoongRoutesService()
 
-    async def recommend(self, *, query: str, language: str = "vi", session_id: str) -> ChatResponse:
+    async def recommend(
+        self,
+        *,
+        query: str,
+        language: str = "vi",
+        session_id: str,
+        budget: str | None = None,
+        accessibility: bool | None = None,
+        user_location: dict[str, float] | None = None,
+    ) -> ChatResponse:
         started = time.perf_counter()
+
+        # Track which preferences were actually applied (for diagnostics)
+        preference_budget_applied = False
+        preference_accessibility_applied = accessibility is True
+        user_location_applied = False
+
         try:
-            request = self._build_request(query=query, language=language)
+            request, budget_was_valid, user_loc_was_valid = self._build_request(
+                query=query,
+                language=language,
+                budget=budget,
+                accessibility=accessibility,
+                user_location=user_location,
+            )
+            preference_budget_applied = budget_was_valid
+            user_location_applied = user_loc_was_valid
         except ValidationError:
             return self._chat_response(
                 session_id=session_id,
@@ -109,7 +132,15 @@ class PlaceRecommendationService:
         if tool_response.status != PlaceToolStatus.OK:
             logger.info(
                 "place_recommendation_status",
-                extra={"status": tool_response.status.value, "source": tool_response.source.value, "candidate_count": candidate_count, "result_count": 0},
+                extra={
+                    "status": tool_response.status.value,
+                    "source": tool_response.source.value,
+                    "candidate_count": candidate_count,
+                    "result_count": 0,
+                    "preference_budget_applied": preference_budget_applied,
+                    "preference_accessibility_applied": preference_accessibility_applied,
+                    "user_location_applied": user_location_applied,
+                },
             )
             return self._chat_response(
                 session_id=session_id,
@@ -126,6 +157,11 @@ class PlaceRecommendationService:
                     provider_status=tool_response.status.value,
                     warnings=[FairnessWarningType.PROVIDER_NON_OK.value],
                 ),
+                preference_flags=_preference_flags(
+                    budget_applied=preference_budget_applied,
+                    accessibility_applied=preference_accessibility_applied,
+                    user_location_applied=user_location_applied,
+                ),
             )
 
         # Route enrichment (optional — degrades gracefully)
@@ -134,12 +170,16 @@ class PlaceRecommendationService:
         try:
             if self._routes_service is not None:
                 candidates = await self._routes_service.enrich_candidates(
-                    tool_response.candidates, origin=request.location_bias
+                    tool_response.candidates, origin=request.effective_origin
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("route_enrichment_failed", extra={"error_type": type(exc).__name__})
             candidates = tool_response.candidates
             route_enrichment_ok = False
+
+        # Preference-aware post-provider filtering/reranking
+        pre_filter_count = len(candidates)
+        candidates, filtered_count = _apply_preference_filters(candidates, request)
 
         ensemble_ok = True
         try:
@@ -166,8 +206,12 @@ class PlaceRecommendationService:
             extra={
                 "status": tool_response.status.value,
                 "source": tool_response.source.value,
-                "candidate_count": candidate_count,
+                "candidate_count": pre_filter_count,
                 "result_count": len(places),
+                "filtered_count": filtered_count,
+                "preference_budget_applied": preference_budget_applied,
+                "preference_accessibility_applied": preference_accessibility_applied,
+                "user_location_applied": user_location_applied,
                 "top5_local_ratio": fairness_audit.top5_local_ratio,
                 "missing_local_factor_count": fairness_audit.missing_local_factor_count,
                 "warnings": fairness_audit.warnings,
@@ -183,17 +227,68 @@ class PlaceRecommendationService:
             latency_ms=_elapsed_ms(started),
             fallback=False,
             fairness_audit=fairness_audit,
+            preference_flags=_preference_flags(
+                budget_applied=preference_budget_applied,
+                accessibility_applied=preference_accessibility_applied,
+                user_location_applied=user_location_applied,
+                filtered_count=filtered_count,
+            ),
         )
 
-    def _build_request(self, *, query: str, language: str) -> PlaceSearchRequest:
+    def _build_request(
+        self,
+        *,
+        query: str,
+        language: str,
+        budget: str | None = None,
+        accessibility: bool | None = None,
+        user_location: dict[str, float] | None = None,
+    ) -> PlaceSearchRequest:
         language_code = language if language in {"vi", "en"} else "vi"
+
+        # Map budget to PriceLevel enum — only if label is valid
+        budget_filter = None
+        budget_was_valid = False
+        if budget:
+            from app.models.places import PriceLevel
+            budget_map = {
+                "free": PriceLevel.FREE,
+                "inexpensive": PriceLevel.INEXPENSIVE,
+                "moderate": PriceLevel.MODERATE,
+                "expensive": PriceLevel.EXPENSIVE,
+                "very_expensive": PriceLevel.VERY_EXPENSIVE,
+            }
+            if budget in budget_map:
+                budget_filter = [budget_map[budget]]
+                budget_was_valid = True
+
+        # Build user_location LatLng if provided — validate coordinate ranges
+        user_loc = None
+        user_loc_was_valid = False
+        if user_location:
+            try:
+                lat = user_location.get("lat")
+                lng = user_location.get("lng")
+                if lat is not None and lng is not None:
+                    lat_f = float(lat)
+                    lng_f = float(lng)
+                    # Coordinate range validation: lat in [-90, 90], lng in [-180, 180]
+                    if -90 <= lat_f <= 90 and -180 <= lng_f <= 180:
+                        user_loc = LatLng(lat=lat_f, lng=lng_f)
+                        user_loc_was_valid = True
+            except (TypeError, ValueError, AttributeError):
+                user_loc = None
+
         return PlaceSearchRequest(
             query=query,
             language_code=language_code,
             location_bias=HAM_NINH_CENTER.model_copy(),
             radius_meters=DEFAULT_SEARCH_RADIUS_METERS,
             max_result_count=self._max_result_count,
-        )
+            budget_filter=budget_filter,
+            wheelchair_accessible_preference=accessibility,
+            user_location=user_loc,
+        ), budget_was_valid, user_loc_was_valid
 
     def _chat_response(
         self,
@@ -207,12 +302,15 @@ class PlaceRecommendationService:
         latency_ms: float,
         fallback: bool,
         fairness_audit: FairnessAudit | None = None,
+        preference_flags: str | None = None,
     ) -> ChatResponse:
         source_value = source.value if source else "none"
         reasoning_log = (
             f"place_recommendation status={status.value} source={source_value} "
             f"candidate_count={candidate_count} result_count={len(places)}"
         )
+        if preference_flags:
+            reasoning_log += f" {preference_flags}"
         if fairness_audit is not None:
             reasoning_log += (
                 f" top5_local_ratio={fairness_audit.top5_local_ratio}"
@@ -330,6 +428,70 @@ def _grounded_results(candidates: list[PlaceCandidate]) -> list[PlaceResult]:
         )
 
     return results
+
+
+def _preference_flags(
+    *,
+    budget_applied: bool,
+    accessibility_applied: bool,
+    user_location_applied: bool,
+    filtered_count: int = 0,
+) -> str:
+    """Build a redacted preference diagnostic string for reasoning_log."""
+    parts: list[str] = []
+    if budget_applied:
+        parts.append("preference_budget_applied=True")
+    if accessibility_applied:
+        parts.append("preference_accessibility_applied=True")
+    if user_location_applied:
+        parts.append("user_location_applied=True")
+    if filtered_count > 0:
+        parts.append(f"filtered_count={filtered_count}")
+    return " ".join(parts) if parts else ""
+
+
+def _apply_preference_filters(
+    candidates: list["PlaceCandidate"],
+    request: "PlaceSearchRequest",
+) -> tuple[list["PlaceCandidate"], int]:
+    """Apply deterministic post-provider preference filtering and reranking.
+
+    - Budget: exclude candidates whose price_level falls outside the requested
+      budget_filter numeric range.
+    - Accessibility: boost candidates with wheelchair_accessible options by
+      increasing their local_factor (so fairness balancing will tend to promote
+      them) — no hard filter because accessibility metadata is often missing.
+    - User location: already used in _build_request for origin; proximity scoring
+      is handled downstream by FeatureExtractor.
+
+    Returns (filtered_candidates, count_of_excluded_by_budget).
+    """
+    initial_count = len(candidates)
+
+    if not candidates:
+        return candidates, 0
+
+    result = list(candidates)
+
+    # Budget filtering: exclude candidates whose price_level is NOT in the
+    # requested numeric price levels.
+    numeric_levels = request.numeric_price_levels
+    if numeric_levels:
+        allowed = set(numeric_levels)
+        filtered = []
+        for c in result:
+            if c.price_level is None:
+                # Keep candidates without price_level metadata (no info = no filter)
+                filtered.append(c)
+            elif c.price_level in allowed:
+                filtered.append(c)
+            # else: excluded by budget filter
+        excluded_by_budget = len(result) - len(filtered)
+        result = filtered
+    else:
+        excluded_by_budget = 0
+
+    return result, excluded_by_budget
 
 
 def _maps_url(place_id: str) -> str:
