@@ -39,7 +39,7 @@ from agents.tools.embedding_service import EmbeddingService
 from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from agents.services.llm_answer_service import LLMAnswerService
 from agents.services.place_recommendation_service import PlaceRecommendationService
-from agents.tools.places_service import GooglePlacesService
+from agents.tools.places_service import GooglePlacesService, GoongPlacesService, DualPlacesService
 from agents.tools.routes_service import GoongRoutesService
 from agents.tools.place_cache import PlaceCache
 from agents.tools.qdrant_service import QdrantService
@@ -139,15 +139,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         place_cache = await _create_place_cache(os.environ.get("DATABASE_URL"))
         app.state.place_cache = place_cache
-        places_service = GooglePlacesService(settings=settings, place_cache=place_cache)
+        google_service = GooglePlacesService(settings=settings, place_cache=place_cache)
+        goong_service = GoongPlacesService(settings=settings)
+        dual_service = DualPlacesService(
+            google_service=google_service,
+            goong_service=goong_service,
+            settings=settings,
+            place_cache=place_cache,
+        )
         routes_service = GoongRoutesService(settings=settings)
-        app.state.places_service = places_service
+        app.state.places_service = dual_service
         app.state.place_recommendation_service = PlaceRecommendationService(
-            places_service, routes_service=routes_service
+            dual_service, routes_service=routes_service
         )
         logger.info(
             "places.recommendation_configured",
-            provider="goong_places",
+            primary_provider="google_places",
+            fallback_provider="goong_places",
+            google_key_configured=bool(settings.GOOGLE_PLACES_API_KEY.strip()),
+            goong_key_configured=bool(settings.GOONG_API_KEY.strip()),
             cache_configured=place_cache is not None,
         )
     except Exception as exc:

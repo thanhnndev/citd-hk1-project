@@ -1513,3 +1513,565 @@ async def test_no_rag_with_decision_trace_present() -> None:
     assert response.decision_trace.total_events > 0
     # Intent must be place_recommendation, not cultural_query
     assert response.intent == "place_recommendation"
+
+
+# ===================================================================
+# T03: Google-first provider with Goong fallback wiring tests
+# ===================================================================
+
+class FakeSettingsBothKeys:
+    GOOGLE_PLACES_API_KEY = "test-google-key"
+    GOONG_API_KEY = "test-goong-key"
+    DATABASE_URL = ""
+
+
+class FakeSettingsGoogleOnly:
+    GOOGLE_PLACES_API_KEY = "test-google-key"
+    GOONG_API_KEY = ""
+    DATABASE_URL = ""
+
+
+class FakeSettingsGoongOnly:
+    GOOGLE_PLACES_API_KEY = ""
+    GOONG_API_KEY = "test-goong-key"
+    DATABASE_URL = ""
+
+
+class FakeSettingsNoKeys:
+    GOOGLE_PLACES_API_KEY = ""
+    GOONG_API_KEY = ""
+    DATABASE_URL = ""
+
+
+class FakeGoogleClient:
+    """Fake Google client that returns a response-like object."""
+
+    def __init__(self, payload: Any = None, status_code: int = 200, raise_exception: Exception | None = None) -> None:
+        self._payload = payload
+        self._status_code = status_code
+        self._raise = raise_exception
+        self.post_calls: list = []
+        self.get_calls: list = []
+
+    def _make_response(self):
+        if self._raise:
+            raise self._raise
+        r = MagicMock()
+        r.status_code = self._status_code
+        r.json.return_value = self._payload
+        return r
+
+    async def post(self, path: str, *, json: dict, headers: dict):
+        self.post_calls.append((path, json, headers))
+        return self._make_response()
+
+    async def get(self, path: str, *, headers: dict, params: dict | None = None):
+        self.get_calls.append((path, headers, params))
+        return self._make_response()
+
+
+class FakeGoongClient:
+    """Fake Goong client that returns a response-like object."""
+
+    def __init__(self, payload: Any = None, status_code: int = 200, raise_exception: Exception | None = None) -> None:
+        self._payload = payload
+        self._status_code = status_code
+        self._raise = raise_exception
+        self.get_calls: list = []
+
+    def _make_response(self):
+        if self._raise:
+            raise self._raise
+        r = MagicMock()
+        r.status_code = self._status_code
+        r.json.return_value = self._payload
+        return r
+
+    async def post(self, path: str, *, json: dict, headers: dict):
+        return self._make_response()
+
+    async def get(self, path: str, *, headers: dict, params: dict | None = None):
+        self.get_calls.append((path, headers, params))
+        return self._make_response()
+
+
+def _google_ok_response(candidates: list[PlaceCandidate]) -> dict:
+    """Build a mock Google Places API response with places array."""
+    return {
+        "places": [
+            {
+                "id": c.place_id.replace("places/", ""),
+                "displayName": {"text": c.display_name},
+                "formattedAddress": c.formatted_address,
+                "location": {"lat": c.location.lat, "lng": c.location.lng} if c.location else None,
+                "types": c.types,
+                "primaryType": c.primary_type,
+                "rating": c.rating,
+                "userRatingCount": c.user_rating_count,
+                "businessStatus": c.business_status,
+            }
+            for c in candidates
+        ]
+    }
+
+
+def _goong_ok_response(candidates: list[PlaceCandidate]) -> dict:
+    """Build a mock Goong Places API response with results array."""
+    return {
+        "results": [
+            {
+                "place_id": c.place_id,
+                "name": c.display_name,
+                "formatted_address": c.formatted_address,
+                "geometry": {
+                    "location": {"lat": c.location.lat, "lng": c.location.lng}
+                } if c.location else {},
+                "types": c.types,
+                "rating": c.rating,
+            }
+            for c in candidates
+        ],
+        "status": "OK",
+    }
+
+
+# ---------------------------------------------------------------------------
+# T03.1: Google key present + Google succeeds → source=google_places
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_first_google_succeeds_source_is_google() -> None:
+    """When Google key is present and Google succeeds, source must be google_places."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/google-only",
+            display_name="Quán Google",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+            rating=4.5,
+        ),
+    ]
+    google_client = FakeGoogleClient(payload=_google_ok_response(candidates))
+    goong_client = FakeGoongClient(payload={"results": [], "status": "ZERO_RESULTS"})
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    assert result.status == PlaceToolStatus.OK
+    assert result.source == PlaceToolSource.GOOGLE_PLACES
+    assert len(result.candidates) == 1
+    assert result.candidates[0].display_name == "Quán Google"
+    # Goong should NOT have been called
+    assert len(goong_client.get_calls) == 0
+    # Metadata should show google primary
+    assert result.request_metadata.get("provider_attempted") == PlaceToolSource.GOOGLE_PLACES.value
+
+
+# ---------------------------------------------------------------------------
+# T03.2: Google failure + Goong key present → Goong fallback with metadata
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_failure_goong_fallback_source_is_goong() -> None:
+    """When Google fails and Goong key is present, source must be goong_places with fallback metadata."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    goong_candidates = [
+        PlaceCandidate(
+            place_id="places/goong-fallback",
+            display_name="Quán Goong Fallback",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+        ),
+    ]
+    # Google returns 401 (auth error)
+    google_client = FakeGoogleClient(payload={"error": {"status": "REQUEST_DENIED", "message": "Auth failed"}}, status_code=401)
+    goong_client = FakeGoongClient(payload=_goong_ok_response(goong_candidates))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    # Goong should have been called as fallback
+    assert result.source == PlaceToolSource.GOONG_PLACES
+    assert len(result.candidates) == 1
+    assert result.candidates[0].display_name == "Quán Goong Fallback"
+    # Fallback metadata must be present
+    meta = result.request_metadata
+    assert meta.get("primary_source") == PlaceToolSource.GOOGLE_PLACES.value
+    assert meta.get("fallback_source") == PlaceToolSource.GOONG_PLACES.value
+    assert meta.get("fallback_reason") is not None
+    assert "google" in meta.get("fallback_reason", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# T03.3: Google timeout → Goong fallback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_timeout_goong_fallback() -> None:
+    """When Google times out and Goong key is present, Goong is called as fallback."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    goong_candidates = [
+        PlaceCandidate(
+            place_id="places/timeout-fallback",
+            display_name="Quán Timeout",
+            types=["cafe"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+        ),
+    ]
+    google_client = FakeGoogleClient(raise_exception=httpx.TimeoutException("Google timeout"))
+    goong_client = FakeGoongClient(payload=_goong_ok_response(goong_candidates))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+
+    request = PlaceSearchRequest(query="cafe")
+    result = await dual.text_search(request)
+
+    assert result.source == PlaceToolSource.GOONG_PLACES
+    assert len(result.candidates) == 1
+    assert result.candidates[0].display_name == "Quán Timeout"
+    assert result.request_metadata.get("primary_source") == PlaceToolSource.GOOGLE_PLACES.value
+    assert result.request_metadata.get("fallback_source") == PlaceToolSource.GOONG_PLACES.value
+
+
+# ---------------------------------------------------------------------------
+# T03.4: Both providers fail → UNAVAILABLE with dual-failure metadata
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_both_providers_fail_returns_unavailable() -> None:
+    """When both Google and Goong fail, return UNAVAILABLE with dual-failure metadata."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    google_client = FakeGoogleClient(raise_exception=httpx.TimeoutException("Google timeout"))
+    goong_client = FakeGoongClient(raise_exception=httpx.TimeoutException("Goong timeout"))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    assert result.status == PlaceToolStatus.UNAVAILABLE
+    assert result.candidates == []
+    meta = result.request_metadata
+    assert meta.get("primary_source") == PlaceToolSource.GOOGLE_PLACES.value
+    assert meta.get("fallback_source") == PlaceToolSource.GOONG_PLACES.value
+    assert "Both Google and Goong" in result.warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# T03.5: Google key absent, Goong key present → Goong-only with primary_source
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_absent_goong_only_source_is_goong() -> None:
+    """When Google key is absent but Goong key is present, Goong is called directly."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    goong_candidates = [
+        PlaceCandidate(
+            place_id="places/goong-only",
+            display_name="Quán Goong Only",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+        ),
+    ]
+    google_client = FakeGoogleClient()  # Never called
+    goong_client = FakeGoongClient(payload=_goong_ok_response(goong_candidates))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsGoongOnly, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsGoongOnly, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsGoongOnly)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    assert result.status == PlaceToolStatus.OK
+    assert result.source == PlaceToolSource.GOONG_PLACES
+    assert len(result.candidates) == 1
+    assert result.candidates[0].display_name == "Quán Goong Only"
+    # Google should NOT have been called
+    assert len(google_client.post_calls) == 0
+    # Metadata should still track primary_source
+    meta = result.request_metadata
+    assert meta.get("primary_source") == PlaceToolSource.GOOGLE_PLACES.value
+    assert meta.get("fallback_reason") == "google_credential_missing"
+
+
+# ---------------------------------------------------------------------------
+# T03.6: Neither provider configured → CREDENTIALS_BLOCKED
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_neither_provider_configured_returns_credentials_blocked() -> None:
+    """When no provider keys are configured, return CREDENTIALS_BLOCKED."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    google_client = FakeGoogleClient()  # Never called
+    goong_client = FakeGoongClient()  # Never called
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsNoKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsNoKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsNoKeys)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    assert result.status == PlaceToolStatus.CREDENTIALS_BLOCKED
+    assert result.candidates == []
+    assert "No Places API credentials" in result.warnings[0]
+    # Neither provider should have been called
+    assert len(google_client.post_calls) == 0
+    assert len(goong_client.get_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# T03.7: Google success, Goong key absent → Google result (no fallback needed)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_succeeds_goong_absent_still_google() -> None:
+    """When Google succeeds, Goong key absence is irrelevant."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/google-no-goong",
+            display_name="Quán Google Success",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+        ),
+    ]
+    google_client = FakeGoogleClient(payload=_google_ok_response(candidates))
+    goong_client = FakeGoongClient()  # Never called
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsGoogleOnly, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsGoogleOnly, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsGoogleOnly)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    assert result.status == PlaceToolStatus.OK
+    assert result.source == PlaceToolSource.GOOGLE_PLACES
+    assert len(goong_client.get_calls) == 0  # Goong not called
+
+
+# ---------------------------------------------------------------------------
+# T03.8: Google failure, Goong key absent → enriched Google failure
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_fails_goong_absent_enriched_google_failure() -> None:
+    """When Google fails and Goong key is absent, return enriched Google failure."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    google_client = FakeGoogleClient(raise_exception=httpx.TimeoutException("Google timeout"))
+    goong_client = FakeGoongClient()  # Never called
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsGoogleOnly, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsGoogleOnly, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsGoogleOnly)
+
+    request = PlaceSearchRequest(query="nhà hàng")
+    result = await dual.text_search(request)
+
+    # Google failed (converted to UNAVAILABLE by cache fallback), Goong unavailable
+    assert result.status == PlaceToolStatus.UNAVAILABLE
+    assert result.source == PlaceToolSource.GOOGLE_PLACES
+    # Goong should NOT have been called
+    assert len(goong_client.get_calls) == 0
+    # Metadata should show fallback_source=none
+    meta = result.request_metadata
+    assert meta.get("primary_source") == PlaceToolSource.GOOGLE_PLACES.value
+    assert meta.get("fallback_source") == "none"
+
+
+# ---------------------------------------------------------------------------
+# T03.9: Dual service through PlaceRecommendationService → proper source
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dual_through_recommendation_service_google_path() -> None:
+    """DualPlacesService through PlaceRecommendationService with Google success."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(
+            place_id="places/dual-rec",
+            display_name="Quán Dual Rec",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+            rating=4.5,
+        ),
+    ]
+    google_client = FakeGoogleClient(payload=_google_ok_response(candidates))
+    goong_client = FakeGoongClient()
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+    recommender = PlaceRecommendationService(dual, routes_service=None)
+
+    response = await recommender.recommend(query="nhà hàng", language="vi", session_id="s-dual-rec")
+
+    assert response.citations == []
+    assert len(response.places) == 1
+    assert response.places[0].display_name == "Quán Dual Rec"
+    # Reasoning log should reference google_places source
+    assert "google_places" in response.reasoning_log
+
+
+# ---------------------------------------------------------------------------
+# T03.10: Dual through recommendation service → Goong fallback path
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dual_through_recommendation_service_goong_fallback() -> None:
+    """DualPlacesService through PlaceRecommendationService with Goong fallback."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    goong_candidates = [
+        PlaceCandidate(
+            place_id="places/dual-goong-fallback",
+            display_name="Quán Fallback Rec",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+            rating=4.0,
+        ),
+    ]
+    google_client = FakeGoogleClient(raise_exception=httpx.TimeoutException("timeout"))
+    goong_client = FakeGoongClient(payload=_goong_ok_response(goong_candidates))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+    recommender = PlaceRecommendationService(dual, routes_service=None)
+
+    response = await recommender.recommend(query="nhà hàng", language="vi", session_id="s-dual-goong")
+
+    assert response.citations == []
+    assert len(response.places) == 1
+    assert response.places[0].display_name == "Quán Fallback Rec"
+    # Reasoning log should reference goong_places as the source
+    assert "goong_places" in response.reasoning_log
+
+
+# ---------------------------------------------------------------------------
+# T03.11: Secret redaction — no API keys in dual service response
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dual_service_no_api_key_leakage() -> None:
+    """DualPlacesService responses must not expose API keys in any code path."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    google_client = FakeGoogleClient(raise_exception=httpx.TimeoutException("timeout"))
+    goong_client = FakeGoongClient(raise_exception=RuntimeError("connection refused"))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+
+    request = PlaceSearchRequest(query="test")
+    result = await dual.text_search(request)
+
+    dump = result.model_dump_json()
+    assert "test-google-key" not in dump.lower()
+    assert "test-goong-key" not in dump.lower()
+    assert "GOOGLE_PLACES_API_KEY" not in dump
+    assert "GOONG_API_KEY" not in dump
+
+
+# ---------------------------------------------------------------------------
+# T03.12: Empty Google result (ZERO_RESULTS) → no Goong fallback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_google_empty_no_goong_fallback() -> None:
+    """When Google returns EMPTY status, Goong is NOT called as fallback."""
+    from agents.tools.places_service import DualPlacesService, GooglePlacesService, GoongPlacesService
+
+    # Google returns OK with empty places → EMPTY status
+    google_client = FakeGoogleClient(payload={"places": []})
+    goong_client = FakeGoongClient(payload=_goong_ok_response([
+        PlaceCandidate(place_id="places/fallback-empty", display_name="Should Not Appear", types=["restaurant"]),
+    ]))
+
+    google_service = GooglePlacesService(
+        settings=FakeSettingsBothKeys, client=google_client, place_cache=None,
+    )
+    goong_service = GoongPlacesService(
+        settings=FakeSettingsBothKeys, client=goong_client,
+    )
+    dual = DualPlacesService(google_service=google_service, goong_service=goong_service, settings=FakeSettingsBothKeys)
+
+    request = PlaceSearchRequest(query="không tồn tại")
+    result = await dual.text_search(request)
+
+    # Google returned empty → EMPTY, no Goong fallback
+    assert result.status == PlaceToolStatus.EMPTY
+    assert result.source == PlaceToolSource.GOOGLE_PLACES
+    # Goong should NOT have been called for empty results
+    assert len(goong_client.get_calls) == 0

@@ -1,19 +1,22 @@
-"""Google Places API (New) client seam and safe normalization service.
+"""Google-first Places API service with Goong fallback.
 
-Uses Google Places API (New) endpoints:
-- Text Search: POST /v1/places:searchText
+Google Places API (New) primary provider:
+- Text Search: POST /v1/places:searchText with X-Goog-Api-Key and X-Goog-FieldMask
 - Nearby Search: POST /v1/places:searchNearby
 - Place Details: GET /v1/places/{place_id}
 
-All endpoints require X-Goog-Api-Key and X-Goog-FieldMask headers.
-Configured via GOOGLE_PLACES_API_KEY in .env.
+Goong Places fallback provider (when Google credentials unavailable or failing):
+- Text Search: GET /place/search with api_key query param
+- Nearby Search: GET /place/nearby with api_key query param
+- Place Details: GET /place/detail with api_key query param
 
-Circuit breaker: opens after consecutive failures, probes after cooldown,
-returns cached results on open/timeout/error states.
+DualPlacesService composition: Google-first with Goong fallback.
+When GOOGLE_PLACES_API_KEY is present, Google is attempted first.
+On Google failure (missing creds, auth rejected, quota, timeout, malformed, upstream error),
+Goong is called if GOONG_API_KEY is configured, with metadata tracking
+primary_source, fallback_source, fallback_reason, and credential status.
 
-Cache integration: successful OK results are upserted to Postgres cache;
-on provider failure/circuit-open, cache lookup is attempted before returning
-an honest unavailable status.
+Configured via GOOGLE_PLACES_API_KEY and GOONG_API_KEY in .env.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import logging
 import math
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from urllib.parse import urlencode
 
 import httpx
 import structlog
@@ -136,11 +140,11 @@ class PlacesHttpClient(Protocol):
 
     async def post(self, path: str, *, json: dict[str, Any], headers: dict[str, str]) -> Any: ...
 
-    async def get(self, path: str, *, headers: dict[str, str]) -> Any: ...
+    async def get(self, path: str, *, headers: dict[str, str], params: dict[str, Any] | None = None) -> Any: ...
 
 
 class HttpxPlacesClient:
-    """Thin httpx-backed client for Google Places REST endpoints."""
+    """Thin httpx-backed client for Google/Goong Places REST endpoints."""
 
     def __init__(self, *, base_url: str = PLACES_BASE_URL, timeout: float = 8.0) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
@@ -148,8 +152,8 @@ class HttpxPlacesClient:
     async def post(self, path: str, *, json: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
         return await self._client.post(path, json=json, headers=headers)
 
-    async def get(self, path: str, *, headers: dict[str, str]) -> httpx.Response:
-        return await self._client.get(path, headers=headers)
+    async def get(self, path: str, *, headers: dict[str, str], params: dict[str, Any] | None = None) -> httpx.Response:
+        return await self._client.get(path, headers=headers, params=params)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -893,3 +897,677 @@ def _haversine_meters(origin: LatLng, destination: LatLng) -> int:
     delta_lng = math.radians(destination.lng - origin.lng)
     a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
     return round(radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+
+
+# ---------------------------------------------------------------------------
+# Goong Places API fallback provider
+# ---------------------------------------------------------------------------
+
+GOONG_PLACES_BASE_URL = "https://api.goong.io"
+GOONG_TEXT_SEARCH_PATH = "/place/search"
+GOONG_NEARBY_SEARCH_PATH = "/place/nearby"
+GOONG_DETAILS_PATH = "/place/detail"
+
+
+class GoongPlacesService:
+    """Goong Places API fallback provider for text/nearby search and details.
+
+    Called only when Google Places is unavailable (missing credentials,
+    auth rejected, quota exceeded, timeout, malformed response, or upstream error)
+    AND GOONG_API_KEY is configured.
+
+    Returns the same SearchPlacesToolResult envelope as GooglePlacesService
+    with source=goong_places and metadata tracking primary_source=google_places,
+    fallback_source=goong_places, and fallback_reason.
+    """
+
+    def __init__(
+        self,
+        *,
+        settings: Settings | None = None,
+        client: PlacesHttpClient | None = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._client = client or HttpxPlacesClient(base_url=GOONG_PLACES_BASE_URL)
+
+    def _api_key(self) -> str | None:
+        key = self._settings.GOONG_API_KEY.strip()
+        return key if key else None
+
+    async def text_search(self, request: PlaceSearchRequest) -> SearchPlacesToolResult:
+        api_key = self._api_key()
+        retrieved_at = datetime.now(UTC)
+        metadata: dict[str, Any] = {
+            "endpoint": "goong_text_search",
+            "primary_source": PlaceToolSource.GOOGLE_PLACES.value,
+        }
+        if not api_key:
+            return self._credential_error(request, retrieved_at, metadata)
+
+        params: dict[str, Any] = {
+            "api_key": api_key,
+            "input": request.query,
+            "location": f"{request.location_bias.lat},{request.location_bias.lng}",
+            "radius": request.radius_meters,
+            "limit": request.max_result_count,
+        }
+        if request.language_code:
+            params["locale"] = request.language_code
+        if request.included_type:
+            params["types"] = request.included_type
+
+        return await self._execute_get_search(
+            operation="goong_text_search",
+            path=GOONG_TEXT_SEARCH_PATH,
+            params=params,
+            request=request,
+            origin=request.location_bias,
+            retrieved_at=retrieved_at,
+            metadata=metadata,
+        )
+
+    async def nearby_search(self, request: PlaceNearbyRequest) -> SearchPlacesToolResult:
+        api_key = self._api_key()
+        retrieved_at = datetime.now(UTC)
+        metadata: dict[str, Any] = {
+            "endpoint": "goong_nearby_search",
+            "primary_source": PlaceToolSource.GOOGLE_PLACES.value,
+        }
+        if not api_key:
+            return self._credential_error(request, retrieved_at, metadata)
+
+        params: dict[str, Any] = {
+            "api_key": api_key,
+            "location": f"{request.center.lat},{request.center.lng}",
+            "radius": request.radius_meters,
+            "limit": request.max_result_count,
+        }
+        if request.language_code:
+            params["locale"] = request.language_code
+        if request.included_type:
+            params["types"] = request.included_type
+
+        return await self._execute_get_search(
+            operation="goong_nearby_search",
+            path=GOONG_NEARBY_SEARCH_PATH,
+            params=params,
+            request=request,
+            origin=request.center,
+            retrieved_at=retrieved_at,
+            metadata=metadata,
+        )
+
+    async def details(self, request: PlaceDetailsRequest) -> SearchPlacesToolResult:
+        api_key = self._api_key()
+        retrieved_at = datetime.now(UTC)
+        metadata: dict[str, Any] = {"endpoint": "goong_detail", "primary_source": PlaceToolSource.GOOGLE_PLACES.value}
+        if not api_key:
+            return self._credential_error(request, retrieved_at, metadata)
+
+        place_id = request.place_id.removeprefix("places/")
+        params = {"api_key": api_key, "place_id": place_id}
+        if request.language_code:
+            params["locale"] = request.language_code
+
+        try:
+            response = await self._client.get(
+                GOONG_DETAILS_PATH,
+                headers={"Content-Type": "application/json"},
+                params=params,
+            )
+        except httpx.TimeoutException:
+            return self._safe_error(request, retrieved_at, metadata, "timeout", "Goong Places request timed out.", True)
+        except Exception:
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places request failed.", True)
+
+        status_code = getattr(response, "status_code", 200)
+        if status_code in (401, 403):
+            return self._safe_error(request, retrieved_at, metadata, "auth_error", "Goong Places rejected the configured credentials.", False)
+        if status_code == 429:
+            return self._safe_error(request, retrieved_at, metadata, "quota_exceeded", "Goong Places quota was exceeded.", True)
+        if status_code >= 400:
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places returned an error.", True)
+
+        try:
+            payload = response.json()
+        except Exception:
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned malformed data.", True)
+
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if result is None or not isinstance(result, dict):
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned an unexpected shape.", True)
+
+        candidate = _normalize_goong_place(result, origin=None)
+        if not candidate:
+            return self._response(
+                status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at,
+                metadata={**metadata, "error_code": "no_results"},
+            )
+
+        return self._response(
+            status=PlaceToolStatus.OK, request=request, retrieved_at=retrieved_at,
+            metadata=metadata, candidates=[candidate],
+            primary_source=PlaceToolSource.GOOGLE_PLACES,
+        )
+
+    async def _execute_get_search(
+        self,
+        *,
+        operation: str,
+        path: str,
+        params: dict[str, Any],
+        request: PlaceSearchRequest | PlaceNearbyRequest,
+        origin: LatLng,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+    ) -> SearchPlacesToolResult:
+        try:
+            response = await self._client.get(path, headers={"Content-Type": "application/json"}, params=params)
+        except httpx.TimeoutException:
+            return self._safe_error(request, retrieved_at, metadata, "timeout", "Goong Places request timed out.", True)
+        except Exception:
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places request failed.", True)
+
+        status_code = getattr(response, "status_code", 200)
+        if status_code in (401, 403):
+            return self._safe_error(request, retrieved_at, metadata, "auth_error", "Goong Places rejected the configured credentials.", False)
+        if status_code == 429:
+            return self._safe_error(request, retrieved_at, metadata, "quota_exceeded", "Goong Places quota was exceeded.", True)
+        if status_code >= 400:
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Goong Places returned an error.", True)
+
+        try:
+            payload = response.json()
+        except Exception:
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned malformed data.", True)
+
+        if not isinstance(payload, dict):
+            return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Goong Places returned an unexpected shape.", True)
+
+        # Goong returns status field in response
+        goong_status = payload.get("status", "")
+        if goong_status not in ("OK", "ZERO_RESULTS", ""):
+            error_msg = payload.get("error", {}).get("message", "Goong Places error")
+            return self._safe_error(request, retrieved_at, metadata, "upstream_error", f"Goong Places error: {error_msg}", True)
+
+        raw_results = payload.get("results", [])
+        if not isinstance(raw_results, list) or not raw_results:
+            return self._response(
+                status=PlaceToolStatus.EMPTY if goong_status == "ZERO_RESULTS" else PlaceToolStatus.OK,
+                request=request, retrieved_at=retrieved_at,
+                metadata={**metadata, "error_code": "no_results"},
+            )
+
+        candidates: list[PlaceCandidate] = []
+        max_count = getattr(request, "max_result_count", 10)
+        for raw_place in raw_results[:max_count]:
+            if not isinstance(raw_place, dict):
+                continue
+            candidate = _normalize_goong_place(raw_place, origin=origin)
+            if candidate:
+                candidates.append(candidate)
+
+        if not candidates:
+            return self._response(
+                status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at,
+                metadata={**metadata, "error_code": "no_results"},
+            )
+
+        return self._response(
+            status=PlaceToolStatus.OK, request=request, retrieved_at=retrieved_at,
+            metadata=metadata, candidates=candidates,
+            primary_source=PlaceToolSource.GOOGLE_PLACES,
+        )
+
+    def _credential_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any]) -> SearchPlacesToolResult:
+        return self._response(
+            status=PlaceToolStatus.CREDENTIALS_BLOCKED, request=request, retrieved_at=retrieved_at,
+            metadata={**metadata, "error_code": "missing_goong_api_key"},
+            error=PlaceToolError(code="missing_goong_api_key", message="Goong Places credentials are not configured.", retryable=False),
+            primary_source=PlaceToolSource.GOOGLE_PLACES,
+        )
+
+    def _safe_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any], code: str, message: str, retryable: bool) -> SearchPlacesToolResult:
+        return self._response(
+            status=PlaceToolStatus.UPSTREAM_ERROR, request=request, retrieved_at=retrieved_at,
+            metadata={**metadata, "error_code": code},
+            error=PlaceToolError(code=code, message=message, retryable=retryable),
+            primary_source=PlaceToolSource.GOOGLE_PLACES,
+        )
+
+    def _response(
+        self,
+        *,
+        status: PlaceToolStatus,
+        request: Any,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+        candidates: list[PlaceCandidate] | None = None,
+        error: PlaceToolError | None = None,
+        primary_source: PlaceToolSource = PlaceToolSource.GOOGLE_PLACES,
+    ) -> SearchPlacesToolResult:
+        reasoning_log: list[str] = []
+        warnings: list[str] = []
+        if error:
+            reasoning_log.append(f"goong error: {error.code} — {error.message}")
+        if status == PlaceToolStatus.OK and candidates:
+            reasoning_log.append(f"normalized {len(candidates)} candidate(s) from Goong fallback")
+        elif status == PlaceToolStatus.EMPTY:
+            reasoning_log.append("Goong fallback returned zero usable places")
+        elif status == PlaceToolStatus.CREDENTIALS_BLOCKED:
+            reasoning_log.append("Goong credentials not configured — fallback unavailable")
+
+        request_metadata: dict[str, Any] = {
+            "endpoint": metadata.get("endpoint", "unknown"),
+            "credential_status": "live" if self._api_key() else "blocked",
+            "provider_attempted": PlaceToolSource.GOONG_PLACES.value,
+            "primary_source": primary_source.value,
+            "fallback_source": PlaceToolSource.GOONG_PLACES.value,
+            "result_count": len(candidates) if candidates else 0,
+            "language_code": getattr(request, "language_code", None),
+            "max_result_count": getattr(request, "max_result_count", None),
+        }
+
+        return SearchPlacesToolResult(
+            status=status,
+            source=PlaceToolSource.GOONG_PLACES,
+            provider_status=ProviderStatus(),
+            interpreted_query=getattr(request, "query", None),
+            request_metadata=request_metadata,
+            candidates=candidates or [],
+            warnings=warnings,
+            reasoning_log=reasoning_log,
+            explanation=None,
+            place_recommendation_status=PlaceRecommendationStatus(
+                provider_places_returned=len(candidates) if candidates else 0,
+                candidates_after_normalization=len(candidates) if candidates else 0,
+                filters_applied=[f"max_result_count={getattr(request, 'max_result_count', 'N/A')}"],
+                reason="ok" if status == PlaceToolStatus.OK else str(status),
+            ),
+            audit={"endpoint": metadata.get("endpoint", "unknown"), "fallback_from": primary_source.value},
+            retrieved_at=retrieved_at,
+        )
+
+
+def _normalize_goong_place(place: dict[str, Any], *, origin: LatLng | None = None) -> PlaceCandidate | None:
+    """Normalize one Goong Places place object into a PlaceCandidate.
+
+    Goong Places response fields:
+    - place_id, name, formatted_address
+    - geometry.location.{lat, lng}
+    - rating, types[], vicinity
+    - photos[] (not mapped — provider-specific)
+    """
+    place_id = _string(place.get("place_id"))
+    if not place_id:
+        return None
+
+    display_name = _string(place.get("name")) or place_id
+
+    location = _goong_location(place.get("geometry"))
+    distance_meters: int | None = None
+    if origin and location:
+        distance_meters = _haversine_meters(origin, location)
+
+    types = [item for item in place.get("types", []) if isinstance(item, str)] if isinstance(place.get("types"), list) else []
+
+    return PlaceCandidate(
+        place_id=place_id,
+        resource_name=f"places/{place_id}",
+        display_name=display_name,
+        types=types,
+        primary_type=types[0] if types else None,
+        formatted_address=_string(place.get("formatted_address")) or _string(place.get("vicinity")),
+        short_formatted_address=None,
+        location=location,
+        rating=_float(place.get("rating")),
+        user_rating_count=_int(place.get("user_ratings_total")),
+        price_level=None,  # Goong does not provide price level
+        open_now=_goong_open_hours(place.get("opening_hours")),
+        business_status=None,
+        accessibility_options={},
+        national_phone_number=_string(place.get("international_phone_number")) or _string(place.get("formatted_phone_number")),
+        international_phone_number=_string(place.get("international_phone_number")),
+        map_uri=f"https://map.goong.io/place?pid={place_id}",
+        website_uri=_string(place.get("website")),
+        fairness_tags=["accessibility_unknown"],
+        route_context=RouteContext(origin=origin, distance_meters=distance_meters) if distance_meters is not None else None,
+    )
+
+
+def _goong_location(geometry: Any) -> LatLng | None:
+    """Extract lat/lng from Goong geometry object."""
+    if not isinstance(geometry, dict):
+        return None
+    loc = geometry.get("location")
+    if not isinstance(loc, dict):
+        return None
+    lat = loc.get("lat")
+    lng = loc.get("lng")
+    if lat is None or lng is None:
+        return None
+    try:
+        return LatLng(lat=float(lat), lng=float(lng))
+    except (TypeError, ValueError):
+        return None
+
+
+def _goong_open_hours(opening_hours: Any) -> bool | None:
+    """Extract open_now from Goong opening_hours object."""
+    if not isinstance(opening_hours, dict):
+        return None
+    open_now = opening_hours.get("open_now")
+    if isinstance(open_now, bool):
+        return open_now
+    return None
+
+
+# ---------------------------------------------------------------------------
+# DualPlacesService — Google-first with Goong fallback composition
+# ---------------------------------------------------------------------------
+
+_GOOGLE_FALLBACK_TRIGGERS = frozenset({
+    PlaceToolStatus.CREDENTIALS_BLOCKED,
+    PlaceToolStatus.UPSTREAM_ERROR,
+    PlaceToolStatus.UNAVAILABLE,
+})
+
+
+class DualPlacesService:
+    """Composition layer: Google Places API New primary with Goong fallback.
+
+    When GOOGLE_PLACES_API_KEY is present:
+        1. Call Google Places API first
+        2. On success (OK/EMPTY) → return Google result with source=google_places
+        3. On failure (credentials_blocked, upstream_error, unavailable) → try Goong
+
+    When GOOGLE_PLACES_API_KEY is absent or blank:
+        1. Skip Google, call Goong directly if GOONG_API_KEY is configured
+        2. If Goong also unavailable → return honest unavailable
+
+    Metadata tracking:
+        - primary_source: always google_places (or none if Google skipped)
+        - fallback_source: goong_places if Goong was called
+        - fallback_reason: why Google was bypassed
+        - credential_status: live/blocked/unavailable
+    """
+
+    def __init__(
+        self,
+        *,
+        google_service: GooglePlacesService | None = None,
+        goong_service: GoongPlacesService | None = None,
+        settings: Settings | None = None,
+        place_cache: Any | None = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._google = google_service or GooglePlacesService(settings=self._settings, place_cache=place_cache)
+        self._goong = goong_service or GoongPlacesService(settings=self._settings)
+        self._place_cache = place_cache
+
+    def _has_google_key(self) -> bool:
+        key = self._settings.GOOGLE_PLACES_API_KEY.strip()
+        return bool(key)
+
+    def _has_goong_key(self) -> bool:
+        key = self._settings.GOONG_API_KEY.strip()
+        return bool(key)
+
+    async def text_search(self, request: PlaceSearchRequest) -> SearchPlacesToolResult:
+        """Execute text search with Google-first + Goong fallback strategy."""
+        retrieved_at = datetime.now(UTC)
+
+        # If Google key is configured, try Google first
+        if self._has_google_key():
+            google_result = await self._google.text_search(request)
+
+            # Success path: OK or EMPTY → return Google result directly
+            if google_result.status in (PlaceToolStatus.OK, PlaceToolStatus.EMPTY):
+                return google_result
+
+            # Failure path: try Goong fallback
+            fallback_reason = self._classify_google_failure(google_result)
+            logger.info(
+                "places.google_failed",
+                status=google_result.status.value,
+                fallback_reason=fallback_reason,
+            )
+            return await self._goong_fallback(
+                operation="text_search",
+                request=request,
+                google_result=google_result,
+                fallback_reason=fallback_reason,
+                retrieved_at=retrieved_at,
+            )
+
+        # Google key absent — go directly to Goong
+        if self._has_goong_key():
+            logger.info("places.google_skipped", reason="credential_missing")
+            return await self._goong_only(
+                operation="text_search", request=request, retrieved_at=retrieved_at,
+            )
+
+        # Neither provider configured
+        return self._no_provider_response(request, retrieved_at)
+
+    async def nearby_search(self, request: PlaceNearbyRequest) -> SearchPlacesToolResult:
+        """Execute nearby search with Google-first + Goong fallback strategy."""
+        retrieved_at = datetime.now(UTC)
+
+        if self._has_google_key():
+            google_result = await self._google.nearby_search(request)
+            if google_result.status in (PlaceToolStatus.OK, PlaceToolStatus.EMPTY):
+                return google_result
+
+            fallback_reason = self._classify_google_failure(google_result)
+            return await self._goong_fallback(
+                operation="nearby_search",
+                request=request,
+                google_result=google_result,
+                fallback_reason=fallback_reason,
+                retrieved_at=retrieved_at,
+            )
+
+        if self._has_goong_key():
+            return await self._goong_only(
+                operation="nearby_search", request=request, retrieved_at=retrieved_at,
+            )
+
+        return self._no_provider_response(request, retrieved_at)
+
+    async def details(self, request: PlaceDetailsRequest) -> SearchPlacesToolResult:
+        """Execute place details with Google-first + Goong fallback strategy."""
+        retrieved_at = datetime.now(UTC)
+
+        if self._has_google_key():
+            google_result = await self._google.details(request)
+            if google_result.status in (PlaceToolStatus.OK, PlaceToolStatus.EMPTY):
+                return google_result
+
+            fallback_reason = self._classify_google_failure(google_result)
+            return await self._goong_fallback(
+                operation="details",
+                request=request,
+                google_result=google_result,
+                fallback_reason=fallback_reason,
+                retrieved_at=retrieved_at,
+            )
+
+        if self._has_goong_key():
+            return await self._goong_only(
+                operation="details", request=request, retrieved_at=retrieved_at,
+            )
+
+        return self._no_provider_response(request, retrieved_at)
+
+    def _classify_google_failure(self, result: SearchPlacesToolResult) -> str:
+        """Classify Google failure for fallback_reason metadata."""
+        if result.status == PlaceToolStatus.CREDENTIALS_BLOCKED:
+            return "google_credentials_blocked"
+        if result.status == PlaceToolStatus.UPSTREAM_ERROR:
+            error_code = result.audit.get("error_code", result.request_metadata.get("error_code", "unknown"))
+            return f"google_upstream_error:{error_code}"
+        if result.status == PlaceToolStatus.UNAVAILABLE:
+            fallback_reason = result.audit.get("fallback_reason", "unknown")
+            return f"google_unavailable:{fallback_reason}"
+        return f"google_status_{result.status.value}"
+
+    async def _goong_fallback(
+        self,
+        *,
+        operation: str,
+        request: Any,
+        google_result: SearchPlacesToolResult,
+        fallback_reason: str,
+        retrieved_at: datetime,
+    ) -> SearchPlacesToolResult:
+        """Try Goong as fallback after Google failure. Enriches metadata."""
+        if not self._has_goong_key():
+            logger.info("places.goong_unavailable", reason="credential_missing")
+            return self._enrich_google_failure(google_result, fallback_reason, retrieved_at)
+
+        logger.info("places.goong_fallback", reason=fallback_reason)
+
+        try:
+            if operation == "text_search":
+                goong_result = await self._goong.text_search(request)
+            elif operation == "nearby_search":
+                goong_result = await self._goong.nearby_search(request)
+            else:
+                goong_result = await self._goong.details(request)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("places.goong_fallback_error", error_type=type(exc).__name__)
+            return self._enrich_google_failure(google_result, fallback_reason, retrieved_at)
+
+        # Enrich Goong result with fallback metadata
+        if goong_result.status in (PlaceToolStatus.OK, PlaceToolStatus.EMPTY):
+            return self._enrich_fallback_success(goong_result, fallback_reason)
+
+        # Goong also failed — return enriched Google failure
+        return self._enrich_dual_failure(goong_result, fallback_reason, retrieved_at)
+
+    async def _goong_only(
+        self,
+        *,
+        operation: str,
+        request: Any,
+        retrieved_at: datetime,
+    ) -> SearchPlacesToolResult:
+        """Call Goong directly when Google key is absent. Enrich metadata."""
+        try:
+            if operation == "text_search":
+                result = await self._goong.text_search(request)
+            elif operation == "nearby_search":
+                result = await self._goong.nearby_search(request)
+            else:
+                result = await self._goong.details(request)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("places.goong_only_error", error_type=type(exc).__name__)
+            return self._no_provider_response(request, retrieved_at)
+
+        # Enrich with primary_source metadata even for Goong-only path
+        return self._enrich_fallback_success(result, "google_credential_missing")
+
+    def _enrich_fallback_success(
+        self,
+        result: SearchPlacesToolResult,
+        fallback_reason: str,
+    ) -> SearchPlacesToolResult:
+        """Enrich a successful Goong result with primary/fallback metadata."""
+        result.request_metadata["primary_source"] = PlaceToolSource.GOOGLE_PLACES.value
+        result.request_metadata["fallback_source"] = PlaceToolSource.GOONG_PLACES.value
+        result.request_metadata["fallback_reason"] = fallback_reason
+        result.request_metadata["provider_attempted"] = f"{PlaceToolSource.GOOGLE_PLACES.value}->{PlaceToolSource.GOONG_PLACES.value}"
+        result.audit["primary_source"] = PlaceToolSource.GOOGLE_PLACES.value
+        result.audit["fallback_source"] = PlaceToolSource.GOONG_PLACES.value
+        result.audit["fallback_reason"] = fallback_reason
+        return result
+
+    def _enrich_google_failure(
+        self,
+        google_result: SearchPlacesToolResult,
+        fallback_reason: str,
+        retrieved_at: datetime,
+    ) -> SearchPlacesToolResult:
+        """Enrich Google failure when Goong is unavailable."""
+        google_result.request_metadata["primary_source"] = PlaceToolSource.GOOGLE_PLACES.value
+        google_result.request_metadata["fallback_source"] = "none"
+        google_result.request_metadata["fallback_reason"] = fallback_reason
+        google_result.audit["primary_source"] = PlaceToolSource.GOOGLE_PLACES.value
+        google_result.audit["fallback_source"] = "none"
+        google_result.audit["fallback_reason"] = fallback_reason
+        return google_result
+
+    def _enrich_dual_failure(
+        self,
+        goong_result: SearchPlacesToolResult,
+        fallback_reason: str,
+        retrieved_at: datetime,
+    ) -> SearchPlacesToolResult:
+        """Both providers failed — return honest UNAVAILABLE with dual-failure metadata."""
+        return SearchPlacesToolResult(
+            status=PlaceToolStatus.UNAVAILABLE,
+            source=PlaceToolSource.GOOGLE_PLACES,
+            provider_status=ProviderStatus(),
+            interpreted_query=getattr(goong_result, "interpreted_query", None),
+            request_metadata={
+                "primary_source": PlaceToolSource.GOOGLE_PLACES.value,
+                "fallback_source": PlaceToolSource.GOONG_PLACES.value,
+                "fallback_reason": fallback_reason,
+                "provider_attempted": f"{PlaceToolSource.GOOGLE_PLACES.value}->{PlaceToolSource.GOONG_PLACES.value}",
+                "credential_status": "unavailable",
+                "result_count": 0,
+            },
+            candidates=[],
+            warnings=["Both Google and Goong places providers are unavailable."],
+            reasoning_log=[
+                f"google failed: {fallback_reason}",
+                f"goong fallback also failed: {goong_result.status.value}",
+            ],
+            explanation=None,
+            place_recommendation_status=PlaceRecommendationStatus(
+                provider_places_returned=0,
+                candidates_after_normalization=0,
+                filters_applied=[],
+                reason=f"dual_provider_failure: google={fallback_reason}, goong={goong_result.status.value}",
+            ),
+            audit={
+                "primary_source": PlaceToolSource.GOOGLE_PLACES.value,
+                "fallback_source": PlaceToolSource.GOONG_PLACES.value,
+                "fallback_reason": fallback_reason,
+                "google_status": goong_result.status.value,
+            },
+            retrieved_at=retrieved_at,
+        )
+
+    def _no_provider_response(self, request: Any, retrieved_at: datetime) -> SearchPlacesToolResult:
+        """Neither Google nor Goong credentials configured."""
+        return SearchPlacesToolResult(
+            status=PlaceToolStatus.CREDENTIALS_BLOCKED,
+            source=PlaceToolSource.GOOGLE_PLACES,
+            provider_status=ProviderStatus(),
+            interpreted_query=getattr(request, "query", None),
+            request_metadata={
+                "primary_source": PlaceToolSource.GOOGLE_PLACES.value,
+                "fallback_source": "none",
+                "fallback_reason": "no_provider_configured",
+                "credential_status": "blocked",
+                "result_count": 0,
+            },
+            candidates=[],
+            warnings=["No Places API credentials configured (Google or Goong)."],
+            reasoning_log=["Google API key not configured and Goong API key not configured."],
+            explanation=None,
+            place_recommendation_status=PlaceRecommendationStatus(
+                provider_places_returned=0,
+                candidates_after_normalization=0,
+                filters_applied=[],
+                reason="no_provider_configured",
+            ),
+            audit={
+                "primary_source": PlaceToolSource.GOOGLE_PLACES.value,
+                "fallback_source": "none",
+                "fallback_reason": "no_provider_configured",
+            },
+            retrieved_at=retrieved_at,
+        )
