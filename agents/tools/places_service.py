@@ -496,6 +496,7 @@ class GooglePlacesService:
         """Try the Postgres cache before returning an honest unavailable response.
 
         No RAG fallback or document citations are introduced here.
+        Stale cache entries are served as degraded results with a staleness warning.
         """
         # Only text/nearby searches use PlaceSearchRequest which the cache supports
         if self._place_cache is None or not isinstance(request, PlaceSearchRequest):
@@ -519,6 +520,8 @@ class GooglePlacesService:
                 warning=f"cache lookup failed: {type(exc).__name__}",
             )
 
+        cache_status = diagnostics.result if diagnostics else "no_cache"
+
         if diagnostics.cache_hit and candidates:
             logger.info(
                 "cache_fallback_hit",
@@ -533,9 +536,28 @@ class GooglePlacesService:
                 candidates=candidates,
             )
 
-        # Cache miss or stale — return honest unavailable
-        cache_status = diagnostics.result if diagnostics else "no_cache"
-        # Extract specific error type from metadata if available
+        # Stale cache — serve as degraded results with staleness warning
+        if diagnostics.cache_stale and candidates:
+            staleness = diagnostics.get("staleness_seconds", "unknown")
+            logger.info(
+                "cache_fallback_stale",
+                cache_key=diagnostics.get("cache_key", "unknown")[:8],
+                candidate_count=len(candidates),
+                staleness_seconds=staleness,
+            )
+            return self._response(
+                status=PlaceToolStatus.OK,
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata={
+                    **metadata,
+                    "fallback_source": "cache_stale",
+                    "staleness_seconds": staleness,
+                },
+                candidates=candidates,
+            )
+
+        # Cache miss or stale with no data — return honest unavailable
         specific_reason = reason
         provider_error_code = metadata.get("provider_error")
         if provider_error_code:
@@ -602,6 +624,16 @@ class GooglePlacesService:
             warnings.append(warning)
             reasoning_log.append(warning)
 
+        audit: dict[str, Any] = {
+                "endpoint": metadata.get("endpoint", "unknown"),
+                "field_mask": GOOGLE_PLACES_FIELD_MASK,
+                "fallback_reason": reason,
+            }
+        if "cache_result" in metadata:
+            audit["cache_result"] = metadata["cache_result"]
+        if "circuit_state" in metadata:
+            audit["circuit_state"] = metadata["circuit_state"]
+
         return SearchPlacesToolResult(
             status=PlaceToolStatus.UNAVAILABLE,
             source=PlaceToolSource.GOOGLE_PLACES,
@@ -623,11 +655,7 @@ class GooglePlacesService:
                 filters_applied=[],
                 reason=reason,
             ),
-            audit={
-                "endpoint": metadata.get("endpoint", "unknown"),
-                "field_mask": GOOGLE_PLACES_FIELD_MASK,
-                "fallback_reason": reason,
-            },
+            audit=audit,
             retrieved_at=retrieved_at,
         )
 
@@ -643,6 +671,7 @@ class GooglePlacesService:
     ) -> SearchPlacesToolResult:
         reasoning_log: list[str] = []
         warnings: list[str] = []
+        fallback_source = metadata.get("fallback_source")
         if error:
             reasoning_log.append(f"error: {error.code} — {error.message}")
         if status == PlaceToolStatus.EMPTY:
@@ -650,14 +679,33 @@ class GooglePlacesService:
         elif status == PlaceToolStatus.CREDENTIALS_BLOCKED:
             reasoning_log.append("credentials not configured — no outbound request made")
         elif status == PlaceToolStatus.OK and candidates:
-            reasoning_log.append(f"normalized {len(candidates)} candidate(s) from provider response")
-        if metadata.get("fallback_source") == "cache":
-            reasoning_log.append("results served from durable cache after provider failure")
-            warnings.append("provider unavailable; showing cached results")
+            if fallback_source == "cache_stale":
+                staleness = metadata.get("staleness_seconds", "unknown")
+                reasoning_log.append(f"served {len(candidates)} candidate(s) from stale cache ({staleness}s old)")
+                warnings.append("provider unavailable; showing stale cached results")
+            elif fallback_source == "cache":
+                reasoning_log.append(f"served {len(candidates)} candidate(s) from durable cache after provider failure")
+                warnings.append("provider unavailable; showing cached results")
+            else:
+                reasoning_log.append(f"normalized {len(candidates)} candidate(s) from provider response")
+
+        # Build audit trail
+        audit: dict[str, Any] = {
+            "endpoint": metadata.get("endpoint", "unknown"),
+            "field_mask": GOOGLE_PLACES_FIELD_MASK,
+        }
+        if "fallback_reason" in metadata:
+            audit["fallback_reason"] = metadata["fallback_reason"]
+        if fallback_source in ("cache", "cache_stale"):
+            audit["fallback_source"] = fallback_source
+        if "staleness_seconds" in metadata:
+            audit["staleness_seconds"] = metadata["staleness_seconds"]
+        if "circuit_state" in metadata:
+            audit["circuit_state"] = metadata["circuit_state"]
 
         return SearchPlacesToolResult(
             status=status,
-            source=PlaceToolSource.CACHE if metadata.get("fallback_source") == "cache" else PlaceToolSource.GOOGLE_PLACES,
+            source=PlaceToolSource.CACHE if fallback_source in ("cache", "cache_stale") else PlaceToolSource.GOOGLE_PLACES,
             provider_status=ProviderStatus(),
             interpreted_query=getattr(request, "query", None),
             request_metadata={
@@ -676,10 +724,7 @@ class GooglePlacesService:
                 filters_applied=[f"max_result_count={getattr(request, 'max_result_count', 'N/A')}"],
                 reason="ok" if status == PlaceToolStatus.OK else str(status),
             ),
-            audit={
-                "endpoint": metadata.get("endpoint", "unknown"),
-                "field_mask": GOOGLE_PLACES_FIELD_MASK,
-            },
+            audit=audit,
             retrieved_at=retrieved_at,
         )
 

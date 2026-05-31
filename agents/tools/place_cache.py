@@ -236,12 +236,58 @@ class PlaceCache:
             expires_at = expires_at.replace(tzinfo=UTC)
 
         if now > expires_at:
-            logger.info("place_cache.stale", cache_key=cache_key[:8])
-            return None, CacheDiagnostics(
+            # Stale entry — return candidates anyway so the service can serve
+            # degraded results with a staleness warning.
+            cached_at = row["cached_at"]
+            staleness_seconds = (now - expires_at).total_seconds()
+            try:
+                raw_candidates = row["candidates"]
+                if isinstance(raw_candidates, str):
+                    raw_candidates = json.loads(raw_candidates)
+                candidates = [
+                    PlaceCandidate.model_validate(c)
+                    for c in raw_candidates
+                    if isinstance(c, dict)
+                ]
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "place_cache.malformed_stale",
+                    cache_key=cache_key[:8],
+                    reason="invalid_json",
+                )
+                return None, CacheDiagnostics(
+                    result="stale",
+                    cache_key=cache_key[:8],
+                    reason="malformed_cache_data",
+                    cached_at=cached_at,
+                    expires_at=expires_at,
+                    staleness_seconds=round(staleness_seconds, 1),
+                )
+
+            if not candidates:
+                return None, CacheDiagnostics(
+                    result="stale",
+                    cache_key=cache_key[:8],
+                    reason="empty_candidates",
+                    cached_at=cached_at,
+                    expires_at=expires_at,
+                    staleness_seconds=round(staleness_seconds, 1),
+                )
+
+            logger.info(
+                "place_cache.stale",
+                cache_key=cache_key[:8],
+                candidate_count=len(candidates),
+                staleness_seconds=round(staleness_seconds, 1),
+            )
+            return candidates, CacheDiagnostics(
                 result="stale",
                 cache_key=cache_key[:8],
-                cached_at=row["cached_at"],
+                candidate_count=len(candidates),
+                cached_at=cached_at,
                 expires_at=expires_at,
+                staleness_seconds=round(staleness_seconds, 1),
+                source=row.get("source", "unknown"),
             )
 
         # Parse candidates from JSONB

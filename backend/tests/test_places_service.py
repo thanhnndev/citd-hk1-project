@@ -97,10 +97,13 @@ class FakePlaceCache:
 
     def __init__(self) -> None:
         self._store: dict[str, list[dict]] = {}
+        self._stale_store: dict[str, list[dict]] = {}
         self.lookup_calls: list[PlaceSearchRequest] = []
         self.upsert_calls: list[tuple[PlaceSearchRequest, list[PlaceCandidate]]] = []
         self.raise_on_lookup: Exception | None = None
         self.raise_on_upsert: Exception | None = None
+        self.force_stale: bool = False  # if True, lookups return stale even for hits
+        self.force_malformed: bool = False  # if True, lookups return malformed result
 
     async def lookup(self, request: PlaceSearchRequest, *, ttl_seconds: int = 900):
         self.lookup_calls.append(request)
@@ -108,6 +111,24 @@ class FakePlaceCache:
             raise self.raise_on_lookup
         from agents.tools.place_cache import PlaceCache
         key = PlaceCache._cache_key(request)
+
+        # Malformed path
+        if self.force_malformed:
+            return None, FakeCacheDiagnostics(result="miss", cache_key=key[:8], reason="malformed_cache_data")
+
+        # Stale path
+        if self.force_stale:
+            # Check stale_store first, then fall back to _store for convenience
+            stale_candidates = self._stale_store.get(key) or self._store.get(key)
+            if stale_candidates:
+                parsed = [PlaceCandidate.model_validate(c) for c in stale_candidates]
+                return parsed, FakeCacheDiagnostics(
+                    result="stale", cache_key=key[:8], candidate_count=len(parsed),
+                    staleness_seconds=3600.0,
+                )
+            return None, FakeCacheDiagnostics(result="stale", cache_key=key[:8], reason="empty_candidates")
+
+        # Normal hit/miss path
         candidates = self._store.get(key)
         if candidates is None:
             return None, FakeCacheDiagnostics(result="miss", cache_key=key[:8])
@@ -681,3 +702,249 @@ class TestExistingBehaviorPreserved:
         assert response.interpreted_query == "test"
         assert response.request_metadata["field_mask"] == GOOGLE_PLACES_FIELD_MASK
         assert response.request_metadata["max_result_count"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Stale cache fallback — degraded results with staleness warning
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestStaleCacheFallback:
+    """Stale cache entries are served as degraded results with a warning."""
+
+    async def test_stale_cache_hit_serves_degraded_results(self):
+        """Provider timeout → stale cache → degraded results with staleness warning."""
+        cache = FakePlaceCache()
+        req = make_request("stale seafood")
+        candidates = [PlaceCandidate(place_id="stale_1", display_name="Stale Seafood", types=["restaurant"])]
+        await cache.upsert(req, candidates)
+        cache.force_stale = True
+
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
+        assert len(response.candidates) == 1
+        assert response.candidates[0].place_id == "stale_1"
+        assert any("stale" in w.lower() for w in response.warnings)
+        assert any("stale" in entry.lower() for entry in response.reasoning_log)
+        assert response.audit.get("fallback_source") == "cache_stale"
+        assert response.audit.get("staleness_seconds") == 3600.0
+
+    async def test_stale_cache_empty_returns_unavailable(self):
+        """Stale cache with no data → honest unavailable."""
+        cache = FakePlaceCache()
+        cache.force_stale = True
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("nothing"))
+
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+        assert "stale" in response.audit.get("cache_result", "")
+
+
+# ---------------------------------------------------------------------------
+# Malformed cache data → treated as miss
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestMalformedCacheBehavior:
+    """Malformed cache rows behave as cache misses."""
+
+    async def test_malformed_cache_returns_unavailable(self):
+        """Provider error + malformed cache → unavailable (malformed treated as miss)."""
+        cache = FakePlaceCache()
+        cache.force_malformed = True
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("test"))
+
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+        # Should indicate miss behavior, not serve broken data
+        assert response.audit.get("cache_result") in ("miss", "no_cache")
+
+
+# ---------------------------------------------------------------------------
+# Provider error types → cache fallback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestProviderErrorTypesFallback:
+    """Different provider error types all trigger cache fallback before unavailable."""
+
+    async def test_auth_error_triggers_cache_fallback(self):
+        """403 auth error → circuit failure → cache fallback."""
+        cache = FakePlaceCache()
+        req = make_request("auth test")
+        await cache.upsert(req, [PlaceCandidate(place_id="auth_cached", display_name="Auth Cached", types=["restaurant"])])
+
+        client = FakeClient(FakeResponse(status_code=403))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
+        assert response.candidates[0].place_id == "auth_cached"
+
+    async def test_quota_exceeded_triggers_cache_fallback(self):
+        """429 rate limit → circuit failure → cache fallback."""
+        cache = FakePlaceCache()
+        req = make_request("quota test")
+        await cache.upsert(req, [PlaceCandidate(place_id="quota_cached", display_name="Quota Cached", types=["cafe"])])
+
+        client = FakeClient(FakeResponse(status_code=429))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
+
+
+# ---------------------------------------------------------------------------
+# Details endpoint failure paths
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestDetailsFailurePaths:
+    """Details endpoint handles circuit-open and cache fallback."""
+
+    async def test_details_circuit_open_uses_cache(self):
+        """Details + circuit open → skip provider → cache fallback."""
+        cache = FakePlaceCache()
+        circuit = CircuitState(failure_threshold=1)
+        circuit.record_failure()
+        client = FakeClient(FakeResponse(payload={"id": "details_place", "displayName": {"text": "Should Not Be Called"}}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache, circuit=circuit)
+
+        req = PlaceDetailsRequest(place_id="places/any_id")
+        response = await service.details(req)
+
+        # Provider should NOT have been called (circuit open)
+        assert len(client.get_calls) == 0
+        # Details requests use PlaceDetailsRequest, not PlaceSearchRequest,
+        # so cache is not supported → unavailable
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+
+    async def test_details_timeout_returns_upstream_error_then_unavailable(self):
+        """Details timeout → cache not supported (not PlaceSearchRequest) → unavailable."""
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        req = PlaceDetailsRequest(place_id="places/any_id")
+        response = await service.details(req)
+
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+
+
+# ---------------------------------------------------------------------------
+# DB error returns safe diagnostics
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestCacheDBErrorDiagnostics:
+    """DB errors in cache return safe diagnostics, not raw exceptions."""
+
+    async def test_cache_db_error_does_not_propagate(self):
+        """Provider timeout + cache DB error → unavailable with safe warning."""
+        cache = FakePlaceCache()
+        cache.raise_on_lookup = RuntimeError("connection refused: port 5432")
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        # Should not raise — returns unavailable with safe warning
+        response = await service.text_search(make_request("test"))
+
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+        assert any("cache" in w.lower() for w in response.warnings)
+        # No raw error message or stack trace in response
+        dump = response.model_dump_json()
+        assert "connection refused" not in dump
+        assert "port 5432" not in dump
+
+    async def test_cache_upsert_db_error_does_not_break_response(self):
+        """Cache upsert DB error should not break successful provider response."""
+        cache = FakePlaceCache()
+        cache.raise_on_upsert = RuntimeError("disk full")
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("seafood"))
+
+        assert response.status == PlaceToolStatus.OK
+        assert response.candidates[0].place_id == "google_ham_ninh"
+
+
+# ---------------------------------------------------------------------------
+# request_metadata preserves field_mask
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestRequestMetadataPreserved:
+    """request_metadata always includes field_mask, even in failure paths."""
+
+    async def test_cache_hit_preserves_field_mask(self):
+        cache = FakePlaceCache()
+        req = make_request("metadata test")
+        await cache.upsert(req, [PlaceCandidate(place_id="p1", display_name="P1", types=["restaurant"])])
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        assert response.request_metadata["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+
+    async def test_unavailable_preserves_field_mask(self):
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("test"))
+
+        assert response.request_metadata["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+
+
+# ---------------------------------------------------------------------------
+# No RAG fallback / no citations in any failure path
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestNoRagFallback:
+    """No RAG fallback or document citations are ever introduced in failure paths."""
+
+    async def test_no_citations_in_unavailable(self):
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("test"))
+
+        dump = response.model_dump_json()
+        assert "citation" not in dump.lower()
+        assert "rag" not in dump.lower()
+        assert "document" not in dump.lower() or "no documents" in dump.lower()
+
+    async def test_no_citations_in_cache_hit(self):
+        cache = FakePlaceCache()
+        req = make_request("local restaurant")
+        await cache.upsert(req, [PlaceCandidate(place_id="p1", display_name="P1", types=["restaurant"])])
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        dump = response.model_dump_json()
+        assert "citation" not in dump.lower()
+        assert "rag" not in dump.lower()
