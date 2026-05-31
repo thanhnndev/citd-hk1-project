@@ -42,6 +42,7 @@ BACKEND = ROOT / "backend"
 
 MODEL_TESTS = "backend/tests/test_places_models.py"
 AGENT_TESTS = "backend/tests/test_agent_place_recommendations.py"
+S04_CONTRACT_TESTS = "backend/tests/test_m013_s04_preferences_cultural_context.py"
 
 # T01 keyword: preference contract tests in model file
 T01_KEYWORDS = (
@@ -61,13 +62,16 @@ T02_KEYWORDS = (
     "preference_diagnostics"
 )
 
-# T03 keyword: cultural context tests in agent file
+# T03 keyword: cultural context, safety, and diagnostic tests.
 T03_KEYWORDS = (
     "commercial_ok_message or cultural_preface or "
-    "non_commercial or empty_results_no_cultural or "
-    "credentials_blocked_no_cultural or upstream_error_no_cultural or "
-    "no_invented_place or no_document_citations or "
-    "unusual_punctuation or is_commercial_query"
+    "non_commercial or empty_results_no_cultural or empty_results_no_cultural_preface or "
+    "credentials_blocked_no_cultural or credentials_blocked_no_cultural_preface or "
+    "upstream_error_no_cultural or upstream_error_no_cultural_preface or "
+    "no_invented_place or no_document_citations or place_discovery_paths_return_empty_citations or "
+    "unusual_punctuation or injection_like or malformed_display_name or minimal_display_name or "
+    "missing_local_factor or none_local_factor or fairness_audit_present or "
+    "cache_hit_status or reasoning_log_contains_preference_flags or is_commercial_query"
 )
 
 # S02 fairness regression subset
@@ -209,7 +213,7 @@ def check_t02_preference_wiring() -> tuple:
 def check_t03_cultural_context() -> tuple:
     """Check 4: T03 cultural context tests (Ham Ninh prefaces, no citations, no invented names)."""
     return check_pytest_suite(
-        [AGENT_TESTS],
+        [AGENT_TESTS, S04_CONTRACT_TESTS],
         label="T03 cultural context (commercial prefaces, no citations, no invented names)",
         keyword_filter=T03_KEYWORDS,
     )
