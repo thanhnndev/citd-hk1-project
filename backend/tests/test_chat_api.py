@@ -425,27 +425,24 @@ class TestChatEndpointIntent:
         })
         assert r.json()["intent"] == "cultural_query"
 
-    def test_gibberish_maps_to_cultural_query(self, client):
-        """Gibberish >= 3 chars defaults to cultural_query (not unknown)."""
+    def test_gibberish_maps_to_conversational(self, client):
+        """Gibberish that doesn't match place/knowledge terms defaults to conversational."""
         r = client.post("/chat", json={
             "session_id": "s-intent-06",
             "message": "xyzabc123",
             "language": "vi",
         })
-        assert r.json()["intent"] == "cultural_query"
+        assert r.json()["intent"] == "conversational"
 
-    def test_short_query_unknown_intent_in_service(self, client):
-        """Very short queries (< 3 chars) are classified as 'unknown' in the service.
-        This tests the detect_intent function directly via the response."""
-        # Even through the API, the service classifies short queries
+    def test_short_query_maps_to_conversational(self, client):
+        """Very short queries (< 8 chars) that are not greetings are classified as conversational via _fallback_action -> direct."""
         r = client.post("/chat", json={
             "session_id": "s-intent-07",
             "message": "ab",
             "language": "vi",
         })
         body = r.json()
-        # The API-level test still gets an intent from the service
-        assert body["intent"] == "unknown"
+        assert body["intent"] == "conversational"
 
 
 # ---------------------------------------------------------------------------

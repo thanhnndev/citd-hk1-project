@@ -137,6 +137,45 @@ class PlaceToolResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict, max_length=20)
 
 
+# -- Fairness audit contract (M013/S02) --
+
+class FairnessWarningType(StrEnum):
+    """Standardized warning vocabulary for fairness audit diagnostics."""
+
+    INSUFFICIENT_LOCAL_CANDIDATES = "insufficient_local_candidates"
+    MISSING_LOCAL_FACTOR_METADATA = "missing_local_factor_metadata"
+    PROVIDER_NON_OK = "provider_non_ok"
+    ROUTE_ENRICHMENT_FALLBACK = "route_enrichment_fallback"
+    ENSEMBLE_FALLBACK = "ensemble_fallback"
+
+
+class FairnessAudit(BaseModel):
+    """Structured fairness audit snapshot attached to every recommendation call.
+
+    Captures: candidate/result counts, top-5 local representation ratio,
+    missing metadata count, provider status, and user-safe warnings.
+    Redaction guarantee: no API keys, raw provider payloads, or user PII.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_count: int = Field(default=0, ge=0, description="Total candidate pool size.")
+    result_count: int = Field(default=0, ge=0, description="Number of results returned.")
+    top5_local_ratio: float = Field(default=0.0, ge=0.0, le=1.0, description="Fraction of top-5 results with local_factor >= 0.5.")
+    missing_local_factor_count: int = Field(default=0, ge=0, description="Candidates missing local_factor metadata.")
+    provider_status: str = Field(default="unknown", max_length=64, description="Safe provider status value (e.g. ok, empty, upstream_error).")
+    warnings: list[str] = Field(default_factory=list, max_length=10, description="User-safe fairness warning messages.")
+
+    @field_validator("warnings")
+    @classmethod
+    def validate_warnings(cls, value: list[str]) -> list[str]:
+        allowed = {w.value for w in FairnessWarningType}
+        for w in value:
+            if w not in allowed:
+                raise ValueError(f"Unknown fairness warning: {w}. Allowed: {sorted(allowed)}")
+        return value
+
+
 # -- Google Places API (New) typed contract --
 
 GOOGLE_PLACES_FIELD_MASK = (

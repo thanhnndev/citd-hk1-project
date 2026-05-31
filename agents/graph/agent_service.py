@@ -267,10 +267,15 @@ class AgentService:
             "reasoning_log": None,
             "intent": None,
             "response_text": "",
+            "places_response_ready": False,
         }
 
     async def _run_tool_loop(self, state: AgentState) -> AgentState:
         for _ in range(3):
+            # Place tool may have already produced a deterministic response;
+            # skip the LLM to avoid overwriting response_text.
+            if state.get("places_response_ready"):
+                return state
             state = await asyncio.wait_for(self._llm_call_node(state), timeout=NODE_TIMEOUT_LLM)
             if self._should_continue(state) == END:
                 return state
@@ -281,6 +286,9 @@ class AgentService:
 
     async def _run_streaming_tool_loop(self, state: AgentState) -> AsyncGenerator[str | AgentState, None]:
         for _ in range(3):
+            if state.get("places_response_ready"):
+                yield state
+                return
             state = await asyncio.wait_for(self._llm_call_node(state), timeout=NODE_TIMEOUT_LLM)
             if self._should_continue(state) == END:
                 yield state
@@ -329,6 +337,8 @@ class AgentService:
         return state
 
     def _should_continue(self, state: AgentState) -> Literal["tool_node", "__end__"]:
+        if state.get("places_response_ready"):
+            return END
         return "tool_node" if state.get("tool_calls") else END
 
     async def _deterministic_decide_and_run(self, state: AgentState) -> AgentState:
@@ -377,6 +387,8 @@ class AgentService:
         state["places"] = response.places
         state["reasoning_log"] = response.reasoning_log
         state["response_text"] = response.message
+        state["fairness_audit"] = response.fairness_audit
+        state["places_response_ready"] = True
         return json.dumps({"status": "ok", "message": response.message, "places": [p.model_dump() for p in response.places[:5]]}, ensure_ascii=False)
 
     def _response_from_state(self, state: AgentState, started: float) -> ChatResponse:
@@ -390,6 +402,7 @@ class AgentService:
             langfuse_trace_id=state.get("langfuse_trace_id"),
             latency_ms=round((time.perf_counter() - started) * 1000, 3),
             fallback=False,
+            fairness_audit=state.get("fairness_audit"),
         )
 
     async def _save_turn(self, session_id: str, message: str, answer: str) -> None:

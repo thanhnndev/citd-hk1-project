@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.places import FairnessAudit
 from app.models.request import LatLng
 
 
@@ -398,4 +399,8 @@ class ChatResponse(BaseModel):
     guardrail_reason: str | None = Field(
         default=None,
         description="Human-readable reason for the guardrail verdict.",
+    )
+    fairness_audit: FairnessAudit | None = Field(
+        default=None,
+        description="Structured fairness audit snapshot for place recommendation calls.",
     )

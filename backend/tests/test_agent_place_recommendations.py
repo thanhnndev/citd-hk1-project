@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -292,3 +292,690 @@ async def test_recommendation_service_negative_statuses_return_empty_places(stat
 
     assert response.places == []
     assert f"status={status}" in (response.reasoning_log or "")
+
+
+# ============================================================================
+# T02: Deterministic /chat place output — no citations, no RAG, no LLM override
+# ============================================================================
+
+class _FakeLLMClient:
+    """Non-mock LLM client wrapper so _real_client does not detect it as a mock."""
+
+    def __init__(self, completions_mock: AsyncMock) -> None:
+        self.chat = MagicMock()
+        self.chat.completions = completions_mock
+
+
+class _FakeLLMService:
+    """Non-mock LLM service so _real_client follows the real path."""
+
+    def __init__(self, completions_mock: AsyncMock, model: str = "gpt-4o-mini") -> None:
+        self._client = _FakeLLMClient(completions_mock)
+        self.model = model
+
+
+@pytest.mark.asyncio
+async def test_place_intent_with_llm_bypasses_llm_composition() -> None:
+    """When LLM client is available, place tool result sets places_response_ready
+    so _should_continue returns END immediately — LLM does not overwrite response_text."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response()
+
+    # LLM mock: first call returns tool_calls=[search_places], second call (if reached)
+    # would return text content — but places_response_ready prevents it.
+    llm_completions = AsyncMock()
+    call_count = 0
+
+    def _llm_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First call: LLM decides to call search_places
+            tool_call = MagicMock()
+            tool_call.id = "tc-1"
+            tool_call.function.name = "search_places"
+            tool_call.function.arguments = '{"query": "tìm nhà hàng hải sản"}'
+            msg = MagicMock()
+            msg.tool_calls = [tool_call]
+            msg.content = None
+        else:
+            # Second call (should NOT be reached): LLM would compose its own answer
+            msg = MagicMock()
+            msg.tool_calls = []
+            msg.content = "LLM composed: I found many amazing restaurants!"
+        completion = MagicMock()
+        completion.choices = [MagicMock()]
+        completion.choices[0].message = msg
+        return completion
+
+    llm_completions.create = AsyncMock(side_effect=_llm_side_effect)
+
+    llm_service = _FakeLLMService(llm_completions)
+
+    service = AgentService(
+        retriever=None,
+        llm_service=llm_service,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-bypass", message="tìm nhà hàng hải sản", language="vi"
+    )
+
+    # LLM was called exactly once (tool decision). NOT a second time for composition.
+    assert call_count == 1
+    # Message is the deterministic one from PlaceRecommendationService
+    assert response.message == "I found 1 local place option(s) in Ho Chi Minh City from Goong Places."
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    assert len(response.places) == 1
+
+
+@pytest.mark.asyncio
+async def test_place_intent_never_calls_search_knowledge() -> None:
+    """Place intent must never call the RAG/search_knowledge path."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response()
+    hybrid_retriever = AsyncMock()
+
+    service = AgentService(
+        retriever=None,
+        hybrid_retriever=hybrid_retriever,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-no-rag", message="tìm nhà hàng gần đây", language="vi"
+    )
+
+    hybrid_retriever.search_with_citations.assert_not_called()
+    assert response.citations == []
+
+
+@pytest.mark.asyncio
+async def test_place_intent_citations_always_empty() -> None:
+    """Place recommendation path always returns citations=[], even with results."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response()
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-cite", message="tìm quán cafe gần đây", language="vi"
+    )
+
+    assert response.citations == []
+
+
+@pytest.mark.asyncio
+async def test_stream_place_intent_no_citations_event() -> None:
+    """SSE stream for place intent must NOT emit a [CITATIONS] event."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response("s-stream-cite")
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    events = [
+        event async for event in service.answer_stream(
+            session_id="s-stream-cite", message="tìm nhà hàng", language="vi"
+        )
+    ]
+
+    citation_events = [e for e in events if e.startswith("[CITATIONS]")]
+    assert citation_events == [], f"Expected no [CITATIONS] events, got: {citation_events}"
+    assert any(e.startswith("[PLACES]") for e in events), "Expected [PLACES] event"
+
+
+@pytest.mark.asyncio
+async def test_empty_candidates_returns_honest_empty_text_no_rag() -> None:
+    """When provider returns empty results, message is honest unavailable text,
+    citations=[], places=[], and no RAG fallback occurs."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    request = PlaceSearchRequest(query="nonexistent")
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.EMPTY,
+        source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=[],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-empty", message="tìm quán không tồn tại", language="vi"
+    )
+
+    assert response.places == []
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    # Note: "tìm nơi không tồn tại" → "places" (has "tìm" action term)
+
+
+@pytest.mark.asyncio
+async def test_credential_blocked_returns_honest_text_no_rag() -> None:
+    """When credentials are blocked, message is honest unavailable text,
+    citations=[], places=[], and no RAG fallback occurs."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    request = PlaceSearchRequest(query="seafood")
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.CREDENTIALS_BLOCKED,
+        source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=[],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-cred", message="tìm nhà hàng hải sản", language="vi"
+    )
+
+    assert response.places == []
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    assert "thiếu cấu hình" in response.message  # honest credential-blocked text
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_returns_honest_text_no_rag() -> None:
+    """When provider returns upstream error, message is honest error text,
+    citations=[], places=[], and no RAG fallback occurs."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    request = PlaceSearchRequest(query="seafood")
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.UPSTREAM_ERROR,
+        source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=[],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-error", message="tìm nhà hàng", language="vi"
+    )
+
+    assert response.places == []
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    assert "tạm lỗi" in response.message  # honest error text
+
+
+@pytest.mark.asyncio
+async def test_no_hallucinated_place_names() -> None:
+    """Response message must not contain any place name not in the tool result."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response()
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-hallucinate",
+        message="tìm quán gần chợ Dương Đông",  # user mentions different location
+        language="vi",
+    )
+
+    # Message text is from _message_for_status, no invented place names
+    for forbidden in ("Dương Đông", "chợ Dương Đông"):
+        assert forbidden not in response.message, f"Message should not contain '{forbidden}'"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_log_exposed_for_place_results() -> None:
+    """Place recommendation responses must include reasoning_log with provider status."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response()
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-reasoning", message="tìm nhà hàng", language="vi"
+    )
+
+    assert response.reasoning_log is not None
+    assert "place_recommendation" in response.reasoning_log
+    assert "status=ok" in response.reasoning_log
+    # Fixture uses goong_places source
+    assert "source=goong_places" in response.reasoning_log
+
+
+@pytest.mark.asyncio
+async def test_places_response_ready_bypasses_second_llm_call() -> None:
+    """After _search_places_tool sets places_response_ready, _should_continue returns END.
+    The LLM call node is called exactly once (for tool decision), never again."""
+    recommender = AsyncMock()
+    recommender.recommend.return_value = _place_response()
+
+    llm_completions = AsyncMock()
+    call_count = 0
+
+    def _llm_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            tool_call = MagicMock()
+            tool_call.id = "tc-1"
+            tool_call.function.name = "search_places"
+            tool_call.function.arguments = '{"query": "tìm hải sản"}'
+            msg = MagicMock()
+            msg.tool_calls = [tool_call]
+            msg.content = None
+        else:
+            msg = MagicMock()
+            msg.tool_calls = []
+            msg.content = "LLM answer"
+        completion = MagicMock()
+        completion.choices = [MagicMock()]
+        completion.choices[0].message = msg
+        return completion
+
+    llm_completions.create = AsyncMock(side_effect=_llm_side_effect)
+
+    llm_service = _FakeLLMService(llm_completions)
+
+    service = AgentService(
+        retriever=None,
+        llm_service=llm_service,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    await service.answer(session_id="s-ready", message="tìm hải sản", language="vi")
+
+    # Only 1 LLM call (the decision call), no second call to compose answer
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deterministic_message_from_display_names() -> None:
+    """Message text is composed from _message_for_status, not from LLM.
+    It references the result count derived from actual candidates."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="Quán A", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Quán B", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="Quán C", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+
+    service = AgentService(
+        retriever=None,
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(session_id="s-count", message="tìm hải sản", language="vi")
+
+    assert response.places
+    assert len(response.places) == 3
+    # Message mentions count matching actual results
+    assert "3" in response.message
+    # Message is deterministic (from _message_for_status), not LLM-generated
+    assert "Mình tìm được" in response.message
+    assert response.citations == []
+
+
+# ============================================================================
+# Fairness audit integration tests (M013/S02 — T01)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_emitted_on_ok_response() -> None:
+    """Every OK recommendation response must include a FairnessAudit."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="Local A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Local B", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="Chain C", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-ok", message="tìm hải sản", language="vi")
+
+    assert response.fairness_audit is not None
+    assert response.fairness_audit.candidate_count == 3
+    assert response.fairness_audit.result_count == 3
+    assert response.fairness_audit.provider_status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_top5_local_ratio_40_percent_target() -> None:
+    """Mixed candidate pool where ≥2 local candidates exist must reach ≥40% top-5 local ratio."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # 5 candidates: 3 local (factor >= 0.5), 2 non-local
+    candidates = [
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l3", display_name="Local 3", local_factor=0.7, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n2", display_name="Chain 2", local_factor=0.05, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-40", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    # At least 2 of top-5 must be local (40% of 5)
+    assert audit.top5_local_ratio >= 0.4, f"top5_local_ratio {audit.top5_local_ratio} < 0.4"
+    assert "insufficient_local_candidates" not in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_insufficient_local_candidates_warning() -> None:
+    """When local candidate supply cannot meet 40% target, warning is emitted."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # 6 candidates but only 1 local — cannot meet 40% of top-5 (need 2)
+    candidates = [
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n2", display_name="Chain 2", local_factor=0.05, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n3", display_name="Chain 3", local_factor=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n4", display_name="Chain 4", local_factor=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n5", display_name="Chain 5", local_factor=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-insufficient", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert "insufficient_local_candidates" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_missing_local_factor_warning() -> None:
+    """Missing local_factor metadata increments missing count and emits warning."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # Some candidates with local_factor=None
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="B", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="C", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-missing", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.missing_local_factor_count >= 2
+    assert "missing_local_factor_metadata" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_empty_candidates_zero_counts() -> None:
+    """Empty candidate pool reports zero counts and no division error."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    request = PlaceSearchRequest(query="nonexistent")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.EMPTY,
+        source=PlaceToolSource.MOCK,
+        candidates=[],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-empty", message="tìm quán không tồn tại", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.candidate_count == 0
+    assert audit.result_count == 0
+    assert audit.top5_local_ratio == 0.0
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_non_ok_provider_warning() -> None:
+    """Non-OK provider status emits provider_non_ok warning."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.UPSTREAM_ERROR,
+        source=PlaceToolSource.GOOGLE_PLACES,
+        candidates=[
+            PlaceCandidate(place_id="places/x", display_name="X", location=LatLng(lat=10.18, lng=104.05)),
+        ],
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-error", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.provider_status == "upstream_error"
+    assert "provider_non_ok" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_route_enrichment_fallback_warning() -> None:
+    """Route enrichment failure emits route_enrichment_fallback warning."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus, RouteContext
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="Local A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Local B", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="Chain C", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+
+    # Routes service that always fails
+    failing_routes = AsyncMock()
+    failing_routes.enrich_candidates.side_effect = RuntimeError("routes service unavailable")
+
+    recommender = PlaceRecommendationService(places_tool, routes_service=failing_routes)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-route", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert "route_enrichment_fallback" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_reasoning_log_contains_status() -> None:
+    """Reasoning log must surface place_recommendation status for audit trail."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-log", message="tìm hải sản", language="vi")
+
+    assert response.reasoning_log is not None
+    assert "place_recommendation" in response.reasoning_log
+    assert "candidate_count=" in response.reasoning_log
+    assert "result_count=" in response.reasoning_log
+
+
+@pytest.mark.asyncio
+async def test_fairness_audit_no_secret_exposure() -> None:
+    """Audit fields must never contain API keys, raw payloads, or PII."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-fair-redact", message="tìm hải sản", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    dump = audit.model_dump_json()
+    assert "api_key" not in dump.lower()
+    assert "secret" not in dump.lower()
+    assert "raw" not in dump.lower()
+    assert "payload" not in dump.lower()

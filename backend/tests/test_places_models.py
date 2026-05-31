@@ -289,3 +289,257 @@ class TestBackwardCompatibility:
                 retrieved_at=datetime.now(UTC),
                 raw_payload={},
             )
+
+
+# ============================================================================
+# FairnessAudit model tests (M013/S02 — T01)
+# ============================================================================
+
+from app.models.places import (
+    FairnessAudit,
+    FairnessWarningType,
+)
+
+
+class TestFairnessWarningType:
+    def test_all_warning_values_exist(self):
+        expected = {
+            "insufficient_local_candidates",
+            "missing_local_factor_metadata",
+            "provider_non_ok",
+            "route_enrichment_fallback",
+            "ensemble_fallback",
+        }
+        actual = {w.value for w in FairnessWarningType}
+        assert actual == expected
+
+    def test_warning_values_are_stable(self):
+        """Warning vocabulary must not change without a migration plan."""
+        assert FairnessWarningType.INSUFFICIENT_LOCAL_CANDIDATES == "insufficient_local_candidates"
+        assert FairnessWarningType.MISSING_LOCAL_FACTOR_METADATA == "missing_local_factor_metadata"
+        assert FairnessWarningType.PROVIDER_NON_OK == "provider_non_ok"
+        assert FairnessWarningType.ROUTE_ENRICHMENT_FALLBACK == "route_enrichment_fallback"
+        assert FairnessWarningType.ENSEMBLE_FALLBACK == "ensemble_fallback"
+
+
+class TestFairnessAuditModel:
+    def test_defaults(self):
+        audit = FairnessAudit()
+        assert audit.candidate_count == 0
+        assert audit.result_count == 0
+        assert audit.top5_local_ratio == 0.0
+        assert audit.missing_local_factor_count == 0
+        assert audit.provider_status == "unknown"
+        assert audit.warnings == []
+
+    def test_accepts_full_envelope(self):
+        audit = FairnessAudit(
+            candidate_count=10,
+            result_count=5,
+            top5_local_ratio=0.6,
+            missing_local_factor_count=2,
+            provider_status="ok",
+            warnings=["insufficient_local_candidates"],
+        )
+        assert audit.candidate_count == 10
+        assert audit.result_count == 5
+        assert audit.top5_local_ratio == 0.6
+        assert audit.missing_local_factor_count == 2
+        assert audit.provider_status == "ok"
+        assert "insufficient_local_candidates" in audit.warnings
+
+    def test_forbids_extra_fields(self):
+        with pytest.raises(ValidationError):
+            FairnessAudit(raw_provider_payload={"secret": True})
+
+    def test_rejects_negative_counts(self):
+        with pytest.raises(ValidationError):
+            FairnessAudit(candidate_count=-1)
+
+        with pytest.raises(ValidationError):
+            FairnessAudit(result_count=-1)
+
+        with pytest.raises(ValidationError):
+            FairnessAudit(missing_local_factor_count=-1)
+
+    def test_top5_local_ratio_bounds(self):
+        with pytest.raises(ValidationError):
+            FairnessAudit(top5_local_ratio=-0.1)
+
+        with pytest.raises(ValidationError):
+            FairnessAudit(top5_local_ratio=1.1)
+
+        # Boundary values are accepted
+        FairnessAudit(top5_local_ratio=0.0)
+        FairnessAudit(top5_local_ratio=1.0)
+
+    def test_unknown_warning_rejected(self):
+        with pytest.raises(ValidationError):
+            FairnessAudit(warnings=["made_up_warning"])
+
+    def test_all_warning_types_accepted(self):
+        warnings = [w.value for w in FairnessWarningType]
+        audit = FairnessAudit(warnings=warnings)
+        assert len(audit.warnings) == len(warnings)
+
+    def test_no_secret_leakage_in_serialization(self):
+        audit = FairnessAudit(
+            candidate_count=5,
+            result_count=3,
+            top5_local_ratio=0.4,
+            provider_status="ok",
+        )
+        dump = audit.model_dump_json()
+        assert "api_key" not in dump.lower()
+        assert "secret" not in dump.lower()
+        assert "payload" not in dump.lower()
+
+    def test_provider_status_constrained_length(self):
+        with pytest.raises(ValidationError):
+            FairnessAudit(provider_status="x" * 65)
+
+    def test_warnings_constrained_length(self):
+        with pytest.raises(ValidationError):
+            FairnessAudit(warnings=[w.value for w in FairnessWarningType] * 3)
+
+    def test_round_trips(self):
+        audit = FairnessAudit(
+            candidate_count=8,
+            result_count=5,
+            top5_local_ratio=0.4,
+            missing_local_factor_count=1,
+            provider_status="ok",
+            warnings=["missing_local_factor_metadata"],
+        )
+        dump = audit.model_dump()
+        restored = FairnessAudit(**dump)
+        assert restored.candidate_count == 8
+        assert restored.result_count == 5
+        assert restored.top5_local_ratio == 0.4
+        assert restored.missing_local_factor_count == 1
+        assert restored.provider_status == "ok"
+        assert restored.warnings == ["missing_local_factor_metadata"]
+
+
+class TestFairnessAuditEdgeCases:
+    """Negative tests: malformed/missing data must not crash."""
+
+    def test_empty_candidate_list_reports_zeroes(self):
+        """Empty candidate lists should report zero counts and no division error."""
+        audit = FairnessAudit(
+            candidate_count=0,
+            result_count=0,
+            top5_local_ratio=0.0,
+            missing_local_factor_count=0,
+            provider_status="ok",
+        )
+        assert audit.candidate_count == 0
+        assert audit.result_count == 0
+        assert audit.top5_local_ratio == 0.0
+        assert audit.warnings == []
+
+    def test_fewer_than_five_candidates(self):
+        """Fewer than five candidates — ratio still computes safely."""
+        audit = FairnessAudit(
+            candidate_count=3,
+            result_count=3,
+            top5_local_ratio=0.6667,
+            missing_local_factor_count=0,
+            provider_status="ok",
+        )
+        assert audit.top5_local_ratio > 0.5
+
+    def test_exactly_one_local_candidate(self):
+        """One local candidate in a small pool."""
+        audit = FairnessAudit(
+            candidate_count=5,
+            result_count=5,
+            top5_local_ratio=0.2,
+            missing_local_factor_count=0,
+            provider_status="ok",
+            warnings=["insufficient_local_candidates"],
+        )
+        assert audit.top5_local_ratio == 0.2
+
+    def test_provider_non_ok_status(self):
+        """Provider response with status other than ok."""
+        audit = FairnessAudit(
+            candidate_count=0,
+            result_count=0,
+            provider_status="upstream_error",
+            warnings=["provider_non_ok"],
+        )
+        assert audit.provider_status == "upstream_error"
+        assert "provider_non_ok" in audit.warnings
+
+    def test_local_factor_none_counted_as_missing(self):
+        """Candidates with local_factor=None increment missing count."""
+        audit = FairnessAudit(
+            candidate_count=5,
+            result_count=5,
+            top5_local_ratio=0.0,
+            missing_local_factor_count=5,
+            provider_status="ok",
+            warnings=["missing_local_factor_metadata"],
+        )
+        assert audit.missing_local_factor_count == 5
+        assert "missing_local_factor_metadata" in audit.warnings
+
+
+class TestChatResponseFairnessAudit:
+    """ChatResponse carries the fairness_audit field."""
+
+    from app.models.response import ChatResponse
+
+    def test_chat_response_has_fairness_audit_field(self):
+        """ChatResponse must expose fairness_audit."""
+        from app.models.response import ChatResponse
+        assert hasattr(ChatResponse.model_fields, "fairness_audit") or "fairness_audit" in ChatResponse.model_fields
+
+    def test_chat_response_accepts_fairness_audit(self):
+        """ChatResponse must accept a FairnessAudit instance."""
+        from app.models.response import ChatResponse
+        audit = FairnessAudit(
+            candidate_count=5,
+            result_count=3,
+            top5_local_ratio=0.6,
+            provider_status="ok",
+        )
+        resp = ChatResponse(
+            session_id="test",
+            message="ok",
+            latency_ms=10.0,
+            fairness_audit=audit,
+        )
+        assert resp.fairness_audit is not None
+        assert resp.fairness_audit.candidate_count == 5
+
+    def test_chat_response_defaults_fairness_audit_to_none(self):
+        from app.models.response import ChatResponse
+        resp = ChatResponse(
+            session_id="test",
+            message="ok",
+            latency_ms=10.0,
+        )
+        assert resp.fairness_audit is None
+
+    def test_chat_response_serializes_fairness_audit(self):
+        from app.models.response import ChatResponse
+        audit = FairnessAudit(
+            candidate_count=10,
+            result_count=5,
+            top5_local_ratio=0.4,
+            missing_local_factor_count=2,
+            provider_status="ok",
+            warnings=["missing_local_factor_metadata"],
+        )
+        resp = ChatResponse(
+            session_id="test",
+            message="ok",
+            latency_ms=10.0,
+            fairness_audit=audit,
+        )
+        dump = resp.model_dump()
+        assert "fairness_audit" in dump
+        assert dump["fairness_audit"]["candidate_count"] == 10
+        assert dump["fairness_audit"]["top5_local_ratio"] == 0.4

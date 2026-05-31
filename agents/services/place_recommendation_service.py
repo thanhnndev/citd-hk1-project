@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from app.models.places import (
     DEFAULT_SEARCH_RADIUS_METERS,
     HAM_NINH_CENTER,
+    FairnessAudit,
+    FairnessWarningType,
     PlaceCandidate,
     PlaceSearchRequest,
     PlaceToolResponse,
@@ -74,6 +76,12 @@ class PlaceRecommendationService:
                 places=[],
                 latency_ms=_elapsed_ms(started),
                 fallback=True,
+                fairness_audit=FairnessAudit(
+                    candidate_count=0,
+                    result_count=0,
+                    provider_status=PlaceToolStatus.INVALID_REQUEST.value,
+                    warnings=[FairnessWarningType.PROVIDER_NON_OK.value],
+                ),
             )
 
         try:
@@ -89,6 +97,12 @@ class PlaceRecommendationService:
                 places=[],
                 latency_ms=_elapsed_ms(started),
                 fallback=True,
+                fairness_audit=FairnessAudit(
+                    candidate_count=0,
+                    result_count=0,
+                    provider_status=PlaceToolStatus.UPSTREAM_ERROR.value,
+                    warnings=[FairnessWarningType.PROVIDER_NON_OK.value],
+                ),
             )
 
         candidate_count = len(tool_response.candidates)
@@ -106,10 +120,17 @@ class PlaceRecommendationService:
                 places=[],
                 latency_ms=_elapsed_ms(started),
                 fallback=tool_response.status != PlaceToolStatus.EMPTY,
+                fairness_audit=FairnessAudit(
+                    candidate_count=candidate_count,
+                    result_count=0,
+                    provider_status=tool_response.status.value,
+                    warnings=[FairnessWarningType.PROVIDER_NON_OK.value],
+                ),
             )
 
         # Route enrichment (optional — degrades gracefully)
         candidates = tool_response.candidates
+        route_enrichment_ok = True
         try:
             if self._routes_service is not None:
                 candidates = await self._routes_service.enrich_candidates(
@@ -118,12 +139,23 @@ class PlaceRecommendationService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("route_enrichment_failed", extra={"error_type": type(exc).__name__})
             candidates = tool_response.candidates
+            route_enrichment_ok = False
 
+        ensemble_ok = True
         try:
             places = _reranked_results(candidates, request.query)
         except Exception as exc:  # noqa: BLE001 - ensemble pipeline fails closed.
             logger.warning("ensemble_reranking_failed", extra={"error_type": type(exc).__name__})
             places = _grounded_results(candidates)
+            ensemble_ok = False
+
+        fairness_audit = _compute_fairness_audit(
+            candidates=candidates,
+            results=places,
+            provider_status=tool_response.status,
+            route_enrichment_ok=route_enrichment_ok,
+            ensemble_ok=ensemble_ok,
+        )
 
         logger.info(
             "place_recommendation_status",
@@ -138,6 +170,7 @@ class PlaceRecommendationService:
             places=places,
             latency_ms=_elapsed_ms(started),
             fallback=False,
+            fairness_audit=fairness_audit,
         )
 
     def _build_request(self, *, query: str, language: str) -> PlaceSearchRequest:
@@ -161,6 +194,7 @@ class PlaceRecommendationService:
         places: list[PlaceResult],
         latency_ms: float,
         fallback: bool,
+        fairness_audit: FairnessAudit | None = None,
     ) -> ChatResponse:
         source_value = source.value if source else "none"
         reasoning_log = f"place_recommendation status={status.value} source={source_value} candidate_count={candidate_count} result_count={len(places)}"
@@ -173,6 +207,7 @@ class PlaceRecommendationService:
             intent=PLACE_RECOMMENDATION_INTENT,
             latency_ms=latency_ms,
             fallback=fallback,
+            fairness_audit=fairness_audit,
         )
 
 
@@ -299,3 +334,66 @@ def _elapsed_ms(started: float) -> float:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+FAIRNESS_LOCAL_THRESHOLD = 0.5  # local_factor >= this counts as "local"
+FAIRNESS_TOP_K = 5  # top-K window for local representation target
+
+
+def _compute_fairness_audit(
+    candidates: list[PlaceCandidate],
+    results: list[PlaceResult],
+    provider_status: PlaceToolStatus,
+    route_enrichment_ok: bool = True,
+    ensemble_ok: bool = True,
+) -> FairnessAudit:
+    """Compute a structured fairness audit snapshot from candidate/result data.
+
+    Returns a FairnessAudit with safe, redacted diagnostics — no API keys,
+    raw provider payloads, or user PII.
+    """
+    candidate_count = len(candidates)
+    result_count = len(results)
+
+    # Count candidates missing local_factor metadata
+    missing_local_factor_count = sum(
+        1 for c in candidates if c.local_factor is None
+    )
+
+    # Compute top-5 local ratio
+    top_k = results[:FAIRNESS_TOP_K]
+    if top_k:
+        local_in_top5 = sum(
+            1 for r in top_k if (r.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+        )
+        top5_local_ratio = local_in_top5 / len(top_k)
+    else:
+        top5_local_ratio = 0.0
+
+    # Build warning list
+    warnings: list[str] = []
+    if provider_status != PlaceToolStatus.OK:
+        warnings.append(FairnessWarningType.PROVIDER_NON_OK.value)
+    if not route_enrichment_ok:
+        warnings.append(FairnessWarningType.ROUTE_ENRICHMENT_FALLBACK.value)
+    if not ensemble_ok:
+        warnings.append(FairnessWarningType.ENSEMBLE_FALLBACK.value)
+    if missing_local_factor_count > 0:
+        warnings.append(FairnessWarningType.MISSING_LOCAL_FACTOR_METADATA.value)
+
+    # Check if supply limits fair representation
+    local_candidates = sum(
+        1 for c in candidates if (c.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+    )
+    top5_target = max(1, int(FAIRNESS_TOP_K * 0.4))  # 40% of top-5 ≈ 2
+    if local_candidates < top5_target and candidate_count >= FAIRNESS_TOP_K:
+        warnings.append(FairnessWarningType.INSUFFICIENT_LOCAL_CANDIDATES.value)
+
+    return FairnessAudit(
+        candidate_count=candidate_count,
+        result_count=result_count,
+        top5_local_ratio=round(top5_local_ratio, 4),
+        missing_local_factor_count=missing_local_factor_count,
+        provider_status=provider_status.value,
+        warnings=warnings,
+    )
