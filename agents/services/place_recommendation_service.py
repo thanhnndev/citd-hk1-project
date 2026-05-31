@@ -149,6 +149,10 @@ class PlaceRecommendationService:
             places = _grounded_results(candidates)
             ensemble_ok = False
 
+        # Fairness balancing: reorder results so top-K local representation
+        # meets the 40% target when enough local candidates exist.
+        places = _balance_fairness(places)
+
         fairness_audit = _compute_fairness_audit(
             candidates=candidates,
             results=places,
@@ -159,7 +163,15 @@ class PlaceRecommendationService:
 
         logger.info(
             "place_recommendation_status",
-            extra={"status": tool_response.status.value, "source": tool_response.source.value, "candidate_count": candidate_count, "result_count": len(places)},
+            extra={
+                "status": tool_response.status.value,
+                "source": tool_response.source.value,
+                "candidate_count": candidate_count,
+                "result_count": len(places),
+                "top5_local_ratio": fairness_audit.top5_local_ratio,
+                "missing_local_factor_count": fairness_audit.missing_local_factor_count,
+                "warnings": fairness_audit.warnings,
+            },
         )
         return self._chat_response(
             session_id=session_id,
@@ -197,7 +209,17 @@ class PlaceRecommendationService:
         fairness_audit: FairnessAudit | None = None,
     ) -> ChatResponse:
         source_value = source.value if source else "none"
-        reasoning_log = f"place_recommendation status={status.value} source={source_value} candidate_count={candidate_count} result_count={len(places)}"
+        reasoning_log = (
+            f"place_recommendation status={status.value} source={source_value} "
+            f"candidate_count={candidate_count} result_count={len(places)}"
+        )
+        if fairness_audit is not None:
+            reasoning_log += (
+                f" top5_local_ratio={fairness_audit.top5_local_ratio}"
+                f" missing_local_factor={fairness_audit.missing_local_factor_count}"
+            )
+            if fairness_audit.warnings:
+                reasoning_log += f" warnings={','.join(fairness_audit.warnings)}"
         return ChatResponse(
             session_id=session_id,
             message=message,
@@ -336,8 +358,75 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-FAIRNESS_LOCAL_THRESHOLD = 0.5  # local_factor >= this counts as "local"
+FAIRNESS_LOCAL_THRESHOLD = 0.6  # local_factor >= this counts as "local"
 FAIRNESS_TOP_K = 5  # top-K window for local representation target
+FAIRNESS_TOP5_TARGET_RATIO = 0.4  # target local fraction in top-K
+
+
+def _is_local(result: PlaceResult) -> bool:
+    """Return True when result carries a local_factor meeting the documented threshold."""
+    return (result.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+
+
+def _balance_fairness(
+    results: list[PlaceResult],
+    *,
+    target_ratio: float = FAIRNESS_TOP5_TARGET_RATIO,
+    top_k: int = FAIRNESS_TOP_K,
+) -> list[PlaceResult]:
+    """Reorder results so top-K local representation meets the target ratio.
+
+    Strategy: promote the highest-scoring local candidates from below the top-K
+    window into positions just outside the non-local top-K candidates, preserving
+    relative ordering as much as possible. Only candidates already in the list are
+    promoted (no invented entries).
+
+    Returns a reordered list with the same elements — only ordering changes.
+    """
+    if not results:
+        return results
+
+    top_k_window = results[:top_k]
+    remaining = results[top_k:]
+
+    # Separate top-K into local and non-local
+    top_local = [r for r in top_k_window if _is_local(r)]
+    top_non_local = [r for r in top_k_window if not _is_local(r)]
+
+    # Locals below the top-K window that could be promoted
+    below_local = [r for r in remaining if _is_local(r)]
+    below_non_local = [r for r in remaining if not _is_local(r)]
+
+    # Calculate how many locals we need in top-K
+    needed_locals = max(0, int(top_k * target_ratio) - len(top_local))
+    available_locals = len(below_local)
+
+    if needed_locals == 0 or available_locals == 0:
+        # Already compliant or no locals to promote — no reordering needed
+        return results
+
+    # Promote the first `needed_locals` locals from below the window
+    promote_count = min(needed_locals, available_locals)
+    to_promote = below_local[:promote_count]
+    below_local = below_local[promote_count:]
+
+    # Build new top-K: keep existing locals first, then add promoted locals,
+    # then fill with non-locals that were displaced.
+    displaced_non_local = top_non_local[len(top_local):len(top_local) + len(to_promote)]
+    new_top_k = top_local + to_promote + [r for r in top_non_local if r not in displaced_non_local]
+
+    # Ensure exactly top_k items in new_top_k
+    new_top_k = new_top_k[:top_k]
+
+    # Reassemble: new top-K + promoted-remaining locals + displaced non-locals + rest
+    new_remaining = below_local + displaced_non_local + below_non_local
+
+    return new_top_k + new_remaining
+
+
+def _is_candidate_local(candidate: PlaceCandidate) -> bool:
+    """Return True when candidate carries a local_factor meeting the threshold."""
+    return (candidate.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
 
 
 def _compute_fairness_audit(

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown
+from app.models.request import LatLng
 from agents.graph.agent_service import AgentService
 
 
@@ -979,3 +980,578 @@ async def test_fairness_audit_no_secret_exposure() -> None:
     assert "secret" not in dump.lower()
     assert "raw" not in dump.lower()
     assert "payload" not in dump.lower()
+
+
+# ============================================================================
+# T02: Fairness balancing — _balance_fairness unit tests
+# ============================================================================
+
+def _make_result(place_id: str, local_factor: float | None, final_score: float = 0.5) -> PlaceResult:
+    """Helper to build minimal PlaceResult for fairness balancer tests."""
+    return PlaceResult(
+        place_id=place_id,
+        display_name=place_id,
+        formatted_address="Test Address",
+        location=LatLng(lat=10.18, lng=104.05),
+        types=["restaurant"],
+        local_factor=local_factor if local_factor is not None else 0.5,
+        final_score=final_score,
+        score_breakdown=ScoreBreakdown(
+            tree1_locality=0.5,
+            tree2_proximity=0.5,
+            tree3_quality=0.5,
+            s_bag=0.5,
+            delta1_fairness=0.0,
+            delta2_access=0.0,
+            final_score=final_score,
+            rank=1,
+        ),
+        accessibility_score=None,
+        map_uri="https://maps.example/placeholder",
+    )
+
+
+class TestBalanceFairness:
+    """Unit tests for the _balance_fairness function in place_recommendation_service."""
+
+    def _balance(self, results):
+        from agents.services.place_recommendation_service import _balance_fairness
+        return _balance_fairness(results)
+
+    def test_empty_results_returns_empty(self):
+        assert self._balance([]) == []
+
+    def test_single_result_returns_unchanged(self):
+        results = [_make_result("p1", local_factor=0.1)]
+        assert self._balance(results) == results
+
+    def test_fewer_than_top_k_returns_unchanged(self):
+        """Fewer than 5 results — no top-K window to balance."""
+        results = [
+            _make_result("p1", local_factor=0.1, final_score=0.9),
+            _make_result("p2", local_factor=0.1, final_score=0.8),
+            _make_result("p3", local_factor=0.8, final_score=0.7),
+        ]
+        balanced = self._balance(results)
+        # Same elements, same order
+        assert [r.place_id for r in balanced] == ["p1", "p2", "p3"]
+
+    def test_already_compliant_no_reordering(self):
+        """Top-5 already has 40%+ local — no reordering needed."""
+        results = [
+            _make_result("local1", local_factor=0.9, final_score=0.95),
+            _make_result("local2", local_factor=0.8, final_score=0.90),
+            _make_result("chain1", local_factor=0.1, final_score=0.85),
+            _make_result("chain2", local_factor=0.1, final_score=0.80),
+            _make_result("chain3", local_factor=0.1, final_score=0.75),
+        ]
+        balanced = self._balance(results)
+        # Already has 2/5 = 40% local — no change
+        assert [r.place_id for r in balanced] == ["local1", "local2", "chain1", "chain2", "chain3"]
+
+    def test_promotes_local_from_below_top5(self):
+        """Only 1 local in top-5, but more available below — promotes to hit 40%."""
+        results = [
+            _make_result("chain1", local_factor=0.1, final_score=0.95),
+            _make_result("chain2", local_factor=0.1, final_score=0.90),
+            _make_result("chain3", local_factor=0.1, final_score=0.85),
+            _make_result("chain4", local_factor=0.1, final_score=0.80),
+            _make_result("chain5", local_factor=0.1, final_score=0.75),  # NOT local (0.1 < 0.6)
+            _make_result("local1", local_factor=0.9, final_score=0.70),  # local
+            _make_result("local2", local_factor=0.8, final_score=0.65),  # local
+        ]
+        balanced = self._balance(results)
+        top5_ids = [r.place_id for r in balanced[:5]]
+        local_in_top5 = sum(1 for r in balanced[:5] if (r.local_factor or 0.0) >= 0.6)
+        assert local_in_top5 >= 2, f"Expected >= 2 local in top-5, got {local_in_top5}. top5: {top5_ids}"
+        # Both locals should be promoted into top-5
+        assert "local1" in top5_ids
+        assert "local2" in top5_ids
+
+    def test_all_local_no_reordering(self):
+        """All results are local — already 100% compliant."""
+        results = [
+            _make_result("l1", local_factor=0.9, final_score=0.95),
+            _make_result("l2", local_factor=0.8, final_score=0.90),
+            _make_result("l3", local_factor=0.7, final_score=0.85),
+            _make_result("l4", local_factor=0.6, final_score=0.80),
+            _make_result("l5", local_factor=0.8, final_score=0.75),
+        ]
+        balanced = self._balance(results)
+        assert [r.place_id for r in balanced] == ["l1", "l2", "l3", "l4", "l5"]
+
+    def test_all_nonlocal_no_reordering(self):
+        """No local candidates at all — nothing to promote."""
+        results = [
+            _make_result("c1", local_factor=0.1, final_score=0.95),
+            _make_result("c2", local_factor=0.2, final_score=0.90),
+            _make_result("c3", local_factor=0.3, final_score=0.85),
+            _make_result("c4", local_factor=0.4, final_score=0.80),
+            _make_result("c5", local_factor=0.5, final_score=0.75),
+        ]
+        balanced = self._balance(results)
+        assert [r.place_id for r in balanced] == ["c1", "c2", "c3", "c4", "c5"]
+
+    def test_preserves_element_set(self):
+        """Balancing must not add or remove elements — only reorder."""
+        results = [
+            _make_result("c1", local_factor=0.1, final_score=0.95),
+            _make_result("c2", local_factor=0.1, final_score=0.90),
+            _make_result("c3", local_factor=0.1, final_score=0.85),
+            _make_result("c4", local_factor=0.1, final_score=0.80),
+            _make_result("c5", local_factor=0.1, final_score=0.75),
+            _make_result("l1", local_factor=0.9, final_score=0.70),
+            _make_result("l2", local_factor=0.8, final_score=0.65),
+        ]
+        balanced = self._balance(results)
+        original_ids = {r.place_id for r in results}
+        balanced_ids = {r.place_id for r in balanced}
+        assert original_ids == balanced_ids
+        assert len(balanced) == len(results)
+
+    def test_exactly_at_threshold_counts_as_local(self):
+        """local_factor exactly 0.6 (the threshold) counts as local."""
+        results = [
+            _make_result("c1", local_factor=0.1, final_score=0.95),
+            _make_result("c2", local_factor=0.1, final_score=0.90),
+            _make_result("c3", local_factor=0.1, final_score=0.85),
+            _make_result("c4", local_factor=0.1, final_score=0.80),
+            _make_result("c5", local_factor=0.1, final_score=0.75),
+            _make_result("border", local_factor=0.6, final_score=0.70),
+        ]
+        balanced = self._balance(results)
+        top5_ids = [r.place_id for r in balanced[:5]]
+        # border (0.6) should be promoted
+        assert "border" in top5_ids
+
+    def test_just_below_threshold_not_local(self):
+        """local_factor = 0.59 does NOT count as local."""
+        from agents.services.place_recommendation_service import _is_local
+        r = _make_result("x", local_factor=0.59)
+        assert not _is_local(r)
+
+    def test_local_factor_none_not_local(self):
+        """local_factor = None does NOT count as local."""
+        from agents.services.place_recommendation_service import _is_local
+        r = _make_result("x", local_factor=0.5)  # 0.5 < 0.6 threshold
+        assert not _is_local(r)
+
+    def test_seven_candidates_two_need_promotion(self):
+        """7 candidates, 0 local in top-5, 3 local below — promote 2 to hit 40%."""
+        results = [
+            _make_result("c1", local_factor=0.1, final_score=0.95),
+            _make_result("c2", local_factor=0.1, final_score=0.90),
+            _make_result("c3", local_factor=0.1, final_score=0.85),
+            _make_result("c4", local_factor=0.1, final_score=0.80),
+            _make_result("c5", local_factor=0.1, final_score=0.75),
+            _make_result("l1", local_factor=0.9, final_score=0.70),
+            _make_result("l2", local_factor=0.8, final_score=0.65),
+            _make_result("l3", local_factor=0.7, final_score=0.60),
+        ]
+        balanced = self._balance(results)
+        top5 = balanced[:5]
+        local_in_top5 = sum(1 for r in top5 if (r.local_factor or 0.0) >= 0.6)
+        assert local_in_top5 >= 2
+        assert len(balanced) == 8  # no elements lost
+
+
+# ============================================================================
+# T02: Integration tests — fairness balancing in the recommendation service
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_promotes_local_in_mixed_pool() -> None:
+    """Mixed pool with 0 local in top-5 but local candidates available below — balancing promotes them."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    # 7 candidates: top 5 by score are all non-local, 2 locals ranked lower
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-balance", message="tìm nhà hàng", language="vi")
+
+    top5 = response.places[:5]
+    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    assert local_in_top5 >= 2, f"Expected >= 2 local in top-5 after balancing, got {local_in_top5}"
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_no_local_candidates() -> None:
+    """When no candidates are local, balancing is a no-op and no reordering occurs."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-no-local", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.top5_local_ratio == 0.0
+    assert "insufficient_local_candidates" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_insufficient_local_candidates() -> None:
+    """Only 1 local candidate available — cannot reach 40% of top-5, warning emitted."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-insufficient", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.top5_local_ratio >= 0.2  # 1 out of 5 promoted
+    assert "insufficient_local_candidates" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_missing_local_factor_metadata() -> None:
+    """Candidates with local_factor=None count as missing metadata, warning emitted."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-missing-meta", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.missing_local_factor_count >= 2
+    assert "missing_local_factor_metadata" in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_top5_already_compliant() -> None:
+    """When top-5 already meets 40% local target, no reordering occurs."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-compliant", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert audit.top5_local_ratio >= 0.4
+    assert "insufficient_local_candidates" not in audit.warnings
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_fallback_grounded_results() -> None:
+    """When ensemble reranking fails and grounded results are used, fairness balancing still applies."""
+    from datetime import UTC, datetime
+    from unittest.mock import patch
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    # Force ensemble reranking to fail
+    with patch("agents.services.place_recommendation_service._reranked_results", side_effect=RuntimeError("ensemble broken")):
+        response = await service.answer(session_id="s-grounded", message="tìm nhà hàng", language="vi")
+
+    # Fairness balancing should still have run on grounded results
+    audit = response.fairness_audit
+    assert audit is not None
+    assert "ensemble_fallback" in audit.warnings
+    top5 = response.places[:5]
+    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    assert local_in_top5 >= 2, f"Expected >= 2 local in top-5 after balancing grounded results, got {local_in_top5}"
+
+
+@pytest.mark.asyncio
+async def test_fairness_balancing_route_enrichment_fallback() -> None:
+    """When route enrichment fails, fairness balancing still applies over original candidates."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    failing_routes = AsyncMock()
+    failing_routes.enrich_candidates.side_effect = RuntimeError("routes unavailable")
+
+    recommender = PlaceRecommendationService(places_tool, routes_service=failing_routes)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-route-fallback", message="tìm nhà hàng", language="vi")
+
+    audit = response.fairness_audit
+    assert audit is not None
+    assert "route_enrichment_fallback" in audit.warnings
+    top5 = response.places[:5]
+    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    assert local_in_top5 >= 2
+
+
+@pytest.mark.asyncio
+async def test_reasoning_log_contains_fairness_diagnostics() -> None:
+    """reasoning_log must include top5_local_ratio, missing_local_factor count, and warnings."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="restaurant")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-reasoning-fair", message="tìm nhà hàng", language="vi")
+
+    log = response.reasoning_log or ""
+    assert "top5_local_ratio=" in log, f"reasoning_log missing top5_local_ratio: {log}"
+    assert "missing_local_factor=" in log, f"reasoning_log missing missing_local_factor: {log}"
+    assert "warnings=" in log, f"reasoning_log missing warnings: {log}"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_log_no_secret_exposure() -> None:
+    """reasoning_log must not leak API keys, raw payloads, or PII."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-redact", message="tìm hải sản", language="vi")
+
+    log = response.reasoning_log or ""
+    assert "api_key" not in log.lower()
+    assert "secret" not in log.lower()
+    assert "token" not in log.lower()
+
+
+@pytest.mark.asyncio
+async def test_display_name_grounded_in_results() -> None:
+    """Every result's display_name must come from actual candidate data, never invented."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="Quán Biển Xanh", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Nhà Hàng Hải Sản", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-grounded-name", message="tìm hải sản", language="vi")
+
+    result_names = {p.display_name for p in response.places}
+    candidate_names = {c.display_name for c in candidates}
+    assert result_names.issubset(candidate_names), f"Found non-grounded display_names: {result_names - candidate_names}"
+
+
+@pytest.mark.asyncio
+async def test_s01_no_rag_no_citation_behavior_preserved() -> None:
+    """Existing S01 behavior: place recommendations must never use RAG/citations."""
+    from datetime import UTC, datetime
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    candidates = [
+        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="B", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+    ]
+    request = PlaceSearchRequest(query="seafood")
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=candidates,
+        request=request,
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    service = AgentService(
+        retriever=AsyncMock(),
+        place_recommendation_service=recommender,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(session_id="s-no-rag-t02", message="tìm hải sản", language="vi")
+
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    assert len(response.places) == 2
