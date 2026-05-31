@@ -518,6 +518,120 @@ class TestFairnessAuditEdgeCases:
         assert "missing_local_factor_metadata" in audit.warnings
 
 
+class TestFairnessAuditProviderStatusSafety:
+    """provider_status must accept only safe, bounded text values."""
+
+    def test_accepts_all_place_tool_status_values(self):
+        """Every PlaceToolStatus value must be acceptable as provider_status."""
+        for status in PlaceToolStatus:
+            audit = FairnessAudit(provider_status=status.value)
+            assert audit.provider_status == status.value
+
+    def test_accepts_arbitrary_safe_text(self):
+        """provider_status is free-form safe text, not enum-locked."""
+        audit = FairnessAudit(provider_status="degraded_mode")
+        assert audit.provider_status == "degraded_mode"
+
+    def test_rejects_non_string_provider_status(self):
+        """provider_status must be a string, not int or dict."""
+        with pytest.raises(ValidationError):
+            FairnessAudit(provider_status=200)
+
+        with pytest.raises(ValidationError):
+            FairnessAudit(provider_status={"status": "ok"})
+
+    def test_provider_status_max_length_enforced(self):
+        """provider_status capped at 64 characters."""
+        FairnessAudit(provider_status="x" * 64)  # exactly at limit
+        with pytest.raises(ValidationError):
+            FairnessAudit(provider_status="x" * 65)
+
+
+class TestFairnessAuditSerializationCompleteness:
+    """Serialization must expose exactly the contracted fields — no more, no less."""
+
+    def test_model_dump_contains_exactly_contracted_fields(self):
+        audit = FairnessAudit(
+            candidate_count=5,
+            result_count=3,
+            top5_local_ratio=0.6,
+            missing_local_factor_count=1,
+            provider_status="ok",
+            warnings=["insufficient_local_candidates"],
+        )
+        dump = audit.model_dump()
+        expected_keys = {
+            "candidate_count",
+            "result_count",
+            "top5_local_ratio",
+            "missing_local_factor_count",
+            "provider_status",
+            "warnings",
+        }
+        assert set(dump.keys()) == expected_keys
+
+    def test_model_dump_json_contains_exactly_contracted_fields(self):
+        audit = FairnessAudit(
+            candidate_count=10,
+            result_count=5,
+            top5_local_ratio=0.4,
+            provider_status="ok",
+            warnings=[],
+        )
+        import json
+        parsed = json.loads(audit.model_dump_json())
+        expected_keys = {
+            "candidate_count",
+            "result_count",
+            "top5_local_ratio",
+            "missing_local_factor_count",
+            "provider_status",
+            "warnings",
+        }
+        assert set(parsed.keys()) == expected_keys
+
+    def test_model_dump_mode_json_contains_no_secrets(self):
+        """mode='json' serialization must also be clean."""
+        audit = FairnessAudit(
+            candidate_count=3,
+            result_count=3,
+            top5_local_ratio=1.0,
+            provider_status="ok",
+        )
+        dump = audit.model_dump(mode="json")
+        dump_str = str(dump).lower()
+        assert "api_key" not in dump_str
+        assert "secret" not in dump_str
+        assert "password" not in dump_str
+        assert "token" not in dump_str
+        assert "payload" not in dump_str
+
+    def test_model_copy_deep_produces_independent_instance(self):
+        """model_copy(deep=True) must not share mutable state."""
+        original = FairnessAudit(
+            candidate_count=5,
+            warnings=["insufficient_local_candidates"],
+        )
+        copy = original.model_copy(deep=True)
+        copy.warnings.append("provider_non_ok")
+        assert len(original.warnings) == 1
+        assert len(copy.warnings) == 2
+
+    def test_model_validate_json_round_trips(self):
+        """JSON validation must reconstruct the exact same model."""
+        audit = FairnessAudit(
+            candidate_count=7,
+            result_count=5,
+            top5_local_ratio=0.4,
+            missing_local_factor_count=2,
+            provider_status="ok",
+            warnings=["missing_local_factor_metadata", "ensemble_fallback"],
+        )
+        json_str = audit.model_dump_json()
+        restored = FairnessAudit.model_validate_json(json_str)
+        assert restored == audit
+
+
 class TestChatResponseFairnessAudit:
     """ChatResponse carries the fairness_audit field."""
 
