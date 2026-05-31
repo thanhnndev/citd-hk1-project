@@ -347,8 +347,7 @@ class TestFieldMaskCoverage:
     def test_field_mask_contains_rich_fields(self) -> None:
         """Rich fields consumed by normalize_place() and needed for S03/S04.
 
-        This test documents the full field coverage contract for S03/S04.
-        Some fields may be added in T02; this test tracks the gap.
+        T02 expanded the mask to cover every field consumed by normalize_place().
         """
         rich = [
             "places.rating",
@@ -357,6 +356,7 @@ class TestFieldMaskCoverage:
             "places.primaryType",
             "places.types",
             "places.currentOpeningHours",
+            "places.regularOpeningHours",
             "places.businessStatus",
             "places.accessibilityOptions",
             "places.nationalPhoneNumber",
@@ -365,17 +365,8 @@ class TestFieldMaskCoverage:
             "places.websiteUri",
             "places.shortFormattedAddress",
         ]
-        missing = [f for f in rich if f not in _DEFAULT_FIELD_MASK]
-        # Document the gap — S02/T02 is expected to expand the mask.
-        # For now, verify that at least the core rich fields are present.
-        core_rich = [
-            "places.rating",
-            "places.priceLevel",
-            "places.businessStatus",
-            "places.accessibilityOptions",
-        ]
-        for field in core_rich:
-            assert field in _DEFAULT_FIELD_MASK, f"Missing core rich field: {field}"
+        for field in rich:
+            assert field in _DEFAULT_FIELD_MASK, f"Missing rich field: {field}"
 
     @pytest.mark.asyncio
     async def test_request_metadata_exposes_field_mask(self) -> None:
@@ -984,6 +975,79 @@ class TestRequestMetadata:
         result = await service.nearby_search(req)
 
         assert result.request_metadata["endpoint"] == "google_nearby_search"
+
+    @pytest.mark.asyncio
+    async def test_ok_response_has_provider_contract_version(self) -> None:
+        """OK response must include stable provider contract version."""
+        payload = {"places": [_google_place()]}
+        client = FakeHttpClient([_fake_response(payload=payload)])
+        service = GooglePlacesService(settings=_settings(), client=client)
+
+        result = await service.text_search(_make_request("test"))
+
+        assert "provider_contract_version" in result.request_metadata
+        assert result.request_metadata["provider_contract_version"] == "v1"
+
+    @pytest.mark.asyncio
+    async def test_ok_response_has_credential_status_live(self) -> None:
+        """With a valid key, credential_status must be 'live'."""
+        payload = {"places": [_google_place()]}
+        client = FakeHttpClient([_fake_response(payload=payload)])
+        service = GooglePlacesService(settings=_settings(), client=client)
+
+        result = await service.text_search(_make_request("test"))
+
+        assert result.request_metadata["credential_status"] == "live"
+
+    @pytest.mark.asyncio
+    async def test_credential_blocked_has_credential_status_blocked(self) -> None:
+        """Missing key → credential_status='blocked' in request_metadata."""
+        client = FakeHttpClient([])
+        service = GooglePlacesService(settings=_no_key_settings(), client=client)
+
+        result = await service.text_search(_make_request("test"))
+
+        assert result.request_metadata["credential_status"] == "blocked"
+
+    @pytest.mark.asyncio
+    async def test_ok_response_has_provider_attempted(self) -> None:
+        """OK response must identify which provider was attempted."""
+        payload = {"places": [_google_place()]}
+        client = FakeHttpClient([_fake_response(payload=payload)])
+        service = GooglePlacesService(settings=_settings(), client=client)
+
+        result = await service.text_search(_make_request("test"))
+
+        assert result.request_metadata["provider_attempted"] == "google_places"
+
+    @pytest.mark.asyncio
+    async def test_ok_response_has_result_count(self) -> None:
+        """OK response must include result_count matching candidates."""
+        payload = {"places": [_google_place(), _google_place(id="second")]}
+        client = FakeHttpClient([_fake_response(payload=payload)])
+        service = GooglePlacesService(settings=_settings(), client=client)
+
+        result = await service.text_search(_make_request("test"))
+
+        assert result.request_metadata["result_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_unavailable_response_has_full_metadata(self) -> None:
+        """UNAVAILABLE responses must include all enriched diagnostic keys."""
+        cache = FakeCache(candidates=None, result="miss")
+        client = FakeHttpClient([httpx.TimeoutException("timeout")])
+        service = GooglePlacesService(settings=_settings(), client=client, place_cache=cache)
+
+        result = await service.text_search(_make_request("test"))
+
+        meta = result.request_metadata
+        assert "field_mask" in meta
+        assert "credential_status" in meta
+        assert "provider_attempted" in meta
+        assert "fallback_reason" in meta
+        assert "result_count" in meta
+        assert meta["result_count"] == 0
+        assert "provider_contract_version" in meta
 
 
 # ===========================================================================

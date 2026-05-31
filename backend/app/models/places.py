@@ -389,10 +389,20 @@ class PlaceDecisionTrace(BaseModel):
 
 # -- Google Places API (New) typed contract --
 
+# Provider contract version — bump when field mask or normalization semantics change.
+GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION = "v1"
+
+# Field mask covering every rich field consumed by normalize_place().
+# Google Places API (New) requires explicit field masks for billing — fields not
+# listed here are omitted from the response and cannot be normalized.
 GOOGLE_PLACES_FIELD_MASK = (
-    "places.id,places.displayName,places.formattedAddress,places.location,"
-    "places.rating,places.priceLevel,places.accessibilityOptions,"
-    "places.businessStatus"
+    "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,"
+    "places.location,places.types,places.primaryType,"
+    "places.rating,places.userRatingCount,places.priceLevel,"
+    "places.regularOpeningHours,places.currentOpeningHours,"
+    "places.businessStatus,places.accessibilityOptions,"
+    "places.nationalPhoneNumber,places.internationalPhoneNumber,"
+    "places.googleMapsUri,places.websiteUri"
 )
 
 

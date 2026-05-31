@@ -30,6 +30,7 @@ from app.core.config import Settings, get_settings
 from app.models.places import (
     DEFAULT_SEARCH_RADIUS_METERS,
     GOOGLE_PLACES_FIELD_MASK,
+    GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION,
     HAM_NINH_CENTER,
     PlaceCandidate,
     PlaceDetailsRequest,
@@ -634,17 +635,27 @@ class GooglePlacesService:
         if "circuit_state" in metadata:
             audit["circuit_state"] = metadata["circuit_state"]
 
+        # Build enriched request_metadata with full diagnostic keys
+        request_metadata: dict[str, Any] = {
+            "endpoint": metadata.get("endpoint", "unknown"),
+            "field_mask": GOOGLE_PLACES_FIELD_MASK,
+            "credential_status": "live",  # key was present but provider failed
+            "provider_attempted": PlaceToolSource.GOOGLE_PLACES.value,
+            "fallback_reason": reason,
+            "result_count": 0,
+            "provider_contract_version": GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION,
+            "language_code": getattr(request, "language_code", None),
+            "max_result_count": getattr(request, "max_result_count", None),
+        }
+        if metadata.get("fallback_source"):
+            request_metadata["fallback_source"] = metadata["fallback_source"]
+
         return SearchPlacesToolResult(
             status=PlaceToolStatus.UNAVAILABLE,
             source=PlaceToolSource.GOOGLE_PLACES,
             provider_status=ProviderStatus(),
             interpreted_query=getattr(request, "query", None),
-            request_metadata={
-                "endpoint": metadata.get("endpoint", "unknown"),
-                "field_mask": GOOGLE_PLACES_FIELD_MASK,
-                "language_code": getattr(request, "language_code", None),
-                "max_result_count": getattr(request, "max_result_count", None),
-            },
+            request_metadata=request_metadata,
             candidates=[],
             warnings=warnings,
             reasoning_log=reasoning_log,
@@ -703,17 +714,32 @@ class GooglePlacesService:
         if "circuit_state" in metadata:
             audit["circuit_state"] = metadata["circuit_state"]
 
+        # Determine credential status for diagnostics
+        api_key = self._api_key()
+        credential_status = "live" if api_key else "blocked"
+
+        # Build enriched request_metadata with full diagnostic keys
+        request_metadata: dict[str, Any] = {
+            "endpoint": metadata.get("endpoint", "unknown"),
+            "field_mask": GOOGLE_PLACES_FIELD_MASK,
+            "credential_status": credential_status,
+            "provider_attempted": PlaceToolSource.GOOGLE_PLACES.value,
+            "result_count": len(candidates) if candidates else 0,
+            "provider_contract_version": GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION,
+            "language_code": getattr(request, "language_code", None),
+            "max_result_count": getattr(request, "max_result_count", None),
+        }
+        if fallback_source:
+            request_metadata["fallback_source"] = fallback_source
+        if "fallback_reason" in metadata:
+            request_metadata["fallback_reason"] = metadata["fallback_reason"]
+
         return SearchPlacesToolResult(
             status=status,
             source=PlaceToolSource.CACHE if fallback_source in ("cache", "cache_stale") else PlaceToolSource.GOOGLE_PLACES,
             provider_status=ProviderStatus(),
             interpreted_query=getattr(request, "query", None),
-            request_metadata={
-                "endpoint": metadata.get("endpoint", "unknown"),
-                "field_mask": GOOGLE_PLACES_FIELD_MASK,
-                "language_code": getattr(request, "language_code", None),
-                "max_result_count": getattr(request, "max_result_count", None),
-            },
+            request_metadata=request_metadata,
             candidates=candidates or [],
             warnings=warnings,
             reasoning_log=reasoning_log,
