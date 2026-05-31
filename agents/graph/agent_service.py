@@ -388,6 +388,7 @@ class AgentService:
         state["reasoning_log"] = response.reasoning_log
         state["response_text"] = response.message
         state["fairness_audit"] = response.fairness_audit
+        state["fallback"] = response.fallback
         state["places_response_ready"] = True
         return json.dumps({"status": "ok", "message": response.message, "places": [p.model_dump() for p in response.places[:5]]}, ensure_ascii=False)
 
@@ -401,7 +402,7 @@ class AgentService:
             intent=state.get("intent"),
             langfuse_trace_id=state.get("langfuse_trace_id"),
             latency_ms=round((time.perf_counter() - started) * 1000, 3),
-            fallback=False,
+            fallback=state.get("fallback", False),
             fairness_audit=state.get("fairness_audit"),
         )
 

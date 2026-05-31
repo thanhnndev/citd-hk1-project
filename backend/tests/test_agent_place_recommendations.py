@@ -1555,3 +1555,113 @@ async def test_s01_no_rag_no_citation_behavior_preserved() -> None:
     assert response.citations == []
     assert response.intent == "place_recommendation"
     assert len(response.places) == 2
+
+
+# ============================================================================
+# T03: Cache integration through AgentService — provider failure + cache path
+# ============================================================================
+
+class _FakeCacheDiagnostics(dict):
+    @property
+    def result(self) -> str:
+        return self.get("result", "unknown")
+
+    @property
+    def cache_hit(self) -> bool:
+        return self.result == "hit"
+
+
+class _FakePlaceCache:
+    """Minimal fake cache for AgentService integration tests."""
+
+    def __init__(self, candidates: list | None = None, result: str = "hit") -> None:
+        self._candidates = candidates
+        self._result = result
+        self.lookup_calls: list = []
+
+    async def lookup(self, request, *, ttl_seconds: int = 900):
+        self.lookup_calls.append(request)
+        if self._result == "hit" and self._candidates:
+            return self._candidates, _FakeCacheDiagnostics(
+                result="hit", cache_key="fake[:8]", candidate_count=len(self._candidates)
+            )
+        return None, _FakeCacheDiagnostics(result=self._result, cache_key="fake[:8]")
+
+    async def upsert(self, request, candidates, *, ttl_seconds: int = 900, source: str = "goong_places"):
+        return _FakeCacheDiagnostics(result="write_ok", cache_key="fake[:8]")
+
+    async def ensure_table(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_t03_cache_hit_on_provider_timeout_returns_places_through_agent() -> None:
+    """Provider timeout + cache hit → AgentService returns ChatResponse with cached places."""
+    from app.models.places import PlaceCandidate, PlaceToolSource, PlaceToolStatus
+    from app.models.request import LatLng
+    from agents.tools.places_service import GooglePlacesService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    cached_candidates = [
+        PlaceCandidate(
+            place_id="places/agent-cache-hit",
+            display_name="Quán Agent Cache",
+            types=["restaurant"],
+            location=LatLng(lat=10.18, lng=104.05),
+            rating=4.5,
+            user_rating_count=100,
+        ),
+    ]
+    cache = _FakePlaceCache(candidates=cached_candidates, result="hit")
+    # Fake settings with a key so the service doesn't return credentials_blocked
+    settings = type("FakeSettings", (), {"GOOGLE_PLACES_API_KEY": "test-key"})()
+    # Fake client that always times out
+    fake_client = _FakeTimeoutClient()
+    places_service = GooglePlacesService(settings=settings, client=fake_client, place_cache=cache)
+    recommender = PlaceRecommendationService(places_service, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-t03-cache-hit", message="tìm nhà hàng", language="vi")
+
+    assert response.intent == "place_recommendation"
+    assert response.citations == []
+    assert len(response.places) >= 1
+    assert response.places[0].place_id == "places/agent-cache-hit"
+
+
+@pytest.mark.asyncio
+async def test_t03_cache_miss_on_provider_timeout_returns_unavailable() -> None:
+    """Provider timeout + cache miss → AgentService returns honest unavailable, no places."""
+    from app.models.places import PlaceToolSource
+    from agents.tools.places_service import GooglePlacesService
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    cache = _FakePlaceCache(candidates=None, result="miss")
+    settings = type("FakeSettings", (), {"GOOGLE_PLACES_API_KEY": "test-key"})()
+    fake_client = _FakeTimeoutClient()
+    places_service = GooglePlacesService(settings=settings, client=fake_client, place_cache=cache)
+    recommender = PlaceRecommendationService(places_service, routes_service=None)
+    service = AgentService(retriever=None, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-t03-cache-miss", message="tìm nhà hàng", language="vi")
+
+    assert response.intent == "place_recommendation"
+    assert response.citations == []
+    assert response.places == []
+    assert response.fallback is True
+    assert "không khả dụng" in response.message
+
+
+class _FakeTimeoutClient:
+    """Fake HTTP client that always raises TimeoutException."""
+
+    async def post(self, path: str, *, json: dict, headers: dict):
+        import httpx
+        raise httpx.TimeoutException("simulated timeout")
+
+    async def get(self, path: str, *, headers: dict):
+        import httpx
+        raise httpx.TimeoutException("simulated timeout")
