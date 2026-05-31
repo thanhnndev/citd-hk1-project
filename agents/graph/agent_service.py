@@ -37,6 +37,217 @@ logger = structlog.get_logger(__name__)
 NODE_TIMEOUT_LLM = 20
 NODE_TIMEOUT_TOOL = 15
 
+# ---------------------------------------------------------------------------
+# Structured follow-up context contract (R052)
+# ---------------------------------------------------------------------------
+
+FollowUpDecision = Literal[
+    "structured_context",
+    "history_context",
+    "clarification_needed",
+    "insufficient_context",
+]
+
+
+@dataclass
+class FollowUpContext:
+    """Structured metadata from the most recent assistant response.
+
+    Persisted alongside plain-text history so that unseen follow-ups can
+    resolve references to prior places, score breakdowns, explanations,
+    provider trace/status, and prior assistant content without RAG fallback.
+
+    Redaction guarantee: no API keys, DSNs, raw provider payloads, exact
+    user GPS, or full conversation content beyond bounded assistant
+    summaries already visible to the user.
+    """
+
+    session_id: str = ""
+    intent: str | None = None
+    place_ids: list[str] = field(default_factory=list)
+    place_display_names: list[str] = field(default_factory=list)
+    has_citations: bool = False
+    citation_sources: list[str] = field(default_factory=list)
+    reasoning_log_summary: str | None = None
+    score_breakdown_keys: list[str] = field(default_factory=list)
+    provider_source: str | None = None
+    provider_status: str | None = None
+    fallback: bool = False
+    explanation_keys: list[str] = field(default_factory=list)
+    _version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "intent": self.intent,
+            "place_ids": self.place_ids,
+            "place_display_names": self.place_display_names,
+            "has_citations": self.has_citations,
+            "citation_sources": self.citation_sources,
+            "reasoning_log_summary": self.reasoning_log_summary,
+            "score_breakdown_keys": self.score_breakdown_keys,
+            "provider_source": self.provider_source,
+            "provider_status": self.provider_status,
+            "fallback": self.fallback,
+            "explanation_keys": self.explanation_keys,
+            "_version": self._version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "FollowUpContext | None":
+        if not isinstance(data, dict):
+            return None
+        def _safe_list(val: Any) -> list[str]:
+            if isinstance(val, list):
+                return [str(v) for v in val if v]
+            return []
+        try:
+            return cls(
+                session_id=data.get("session_id", ""),
+                intent=data.get("intent"),
+                place_ids=_safe_list(data.get("place_ids")),
+                place_display_names=_safe_list(data.get("place_display_names")),
+                has_citations=bool(data.get("has_citations")),
+                citation_sources=_safe_list(data.get("citation_sources")),
+                reasoning_log_summary=data.get("reasoning_log_summary"),
+                score_breakdown_keys=_safe_list(data.get("score_breakdown_keys")),
+                provider_source=data.get("provider_source"),
+                provider_status=data.get("provider_status"),
+                fallback=bool(data.get("fallback")),
+                explanation_keys=_safe_list(data.get("explanation_keys")),
+                _version=data.get("_version", 1),
+            )
+        except (TypeError, AttributeError):
+            return None
+
+    @property
+    def is_populated(self) -> bool:
+        return bool(
+            self.place_ids
+            or self.place_display_names
+            or self.intent
+            or self.citation_sources
+            or self.reasoning_log_summary
+        )
+
+
+def resolve_followup_decision(
+    message: str,
+    context: FollowUpContext | None,
+    history: list[dict[str, str]] | None = None,
+) -> FollowUpDecision:
+    """Classify a follow-up message into a decision label.
+
+    Priority order:
+    1. structured_context — message references entities in the prior structured context
+    2. history_context — message is answerable from conversation history alone
+    3. clarification_needed — ambiguous pronoun or underspecified follow-up
+    4. insufficient_context — no prior context or history to resolve from
+
+    Returns a label that callers can use to route the follow-up appropriately
+    (answer from context, ask clarification, or trigger RAG).
+    """
+    text = _norm(message)
+    if not text:
+        return "insufficient_context"
+
+    # 1. Try structured context first
+    if context and context.is_populated:
+        if _matches_structured_context(text, context):
+            return "structured_context"
+
+    # 2. Fall back to history-only heuristics
+    if history and _is_followup(text, history):
+        return "history_context"
+
+    # 3. Ambiguous pronouns that could reference missing context
+    if _is_ambiguous_pronoun_followup(text):
+        return "clarification_needed"
+
+    # 4. No context to resolve from
+    if not context or not context.is_populated:
+        return "insufficient_context"
+
+    return "clarification_needed"
+
+
+def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
+    """Check if the follow-up message references entities in the structured context."""
+    # Direct place name references (token-level, ignoring single-char tokens)
+    for name in context.place_display_names:
+        normalized = _norm(name)
+        if not normalized:
+            continue
+        for token in normalized.split():
+            if len(token) > 1 and token in text:
+                return True
+
+    # References to scoring/ranking
+    if context.score_breakdown_keys and any(
+        term in text for term in ("vì sao", "tại sao", "sao", "xếp", "rank", "score", "điểm", "cao", "thấp", "why", "ranked")
+    ):
+        return True
+
+    # References to citations/sources
+    if context.has_citations and any(
+        term in text for term in ("nguồn", "source", "trích", "cite", "tài liệu", "document")
+    ):
+        return True
+
+    # References to provider/source
+    if context.provider_source and any(
+        term in text for term in ("provider", "nguồn dữ liệu", "data source")
+    ):
+        return True
+
+    # References to recommendations (places intent with populated context)
+    if context.intent == PLACE_RECOMMENDATION_INTENT and any(
+        term in text for term in ("quán", "địa điểm", "này", "kia", "đó", "place", "venue", "recommend", "gợi ý")
+    ):
+        return True
+
+    return False
+
+
+def _is_ambiguous_pronoun_followup(text: str) -> bool:
+    """Detect follow-ups that use pronouns without clear referents."""
+    text = _norm(text)
+    # Strip trailing/leading punctuation for pronoun matching
+    text = text.strip("?.,!;:").strip()
+    ambiguous = {"nó", "chúng", "chúng nó", "đó", "kia", "ấy", "that", "those", "they", "them"}
+    words = set(text.split())
+    return bool(words & ambiguous) and len(text.split()) <= 4
+
+
+def _build_followup_context(response: ChatResponse) -> FollowUpContext:
+    """Extract structured context from a ChatResponse for follow-up resolution."""
+    place_ids = [p.place_id for p in response.places[:10]]
+    place_names = [p.display_name for p in response.places[:10]]
+    citation_sources = [c.source for c in response.citations[:5]]
+
+    score_keys: list[str] = []
+    explanation_keys: list[str] = []
+    for p in response.places[:5]:
+        if p.score_breakdown:
+            score_keys.extend(str(k) for k in p.score_breakdown.model_dump().keys() if k not in score_keys)
+        if p.explanation:
+            explanation_keys.extend(str(k) for k in p.explanation.model_dump().keys() if k not in explanation_keys)
+
+    return FollowUpContext(
+        session_id=response.session_id,
+        intent=response.intent,
+        place_ids=place_ids,
+        place_display_names=place_names,
+        has_citations=bool(response.citations),
+        citation_sources=citation_sources,
+        reasoning_log_summary=(response.reasoning_log or "")[:500] if response.reasoning_log else None,
+        score_breakdown_keys=score_keys[:10],
+        provider_source=getattr(response.decision_trace, "provider_source", None) if response.decision_trace else None,
+        provider_status=getattr(response.decision_trace, "credential_status", None) if response.decision_trace else None,
+        fallback=response.fallback,
+        explanation_keys=explanation_keys[:10],
+    )
+
 ToolName = Literal["search_knowledge", "search_places"]
 
 _TOOLS = [
@@ -127,6 +338,7 @@ class AgentState(TypedDict, total=False):
 @dataclass
 class InMemoryAgentCheckpointer:
     _store: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    _context_store: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     async def load_history(self, session_id: str) -> list[dict[str, str]]:
         return list(self._store.get(session_id, []))
@@ -135,6 +347,15 @@ class InMemoryAgentCheckpointer:
         history = self._store.setdefault(session_id, [])
         history.extend([{"role": "user", "content": user}, {"role": "assistant", "content": assistant}])
         del history[:-8]
+
+    # -- Structured follow-up context (backward-compatible extension) --
+
+    async def load_context(self, session_id: str) -> FollowUpContext | None:
+        raw = self._context_store.get(session_id)
+        return FollowUpContext.from_dict(raw)
+
+    async def save_context(self, session_id: str, ctx: FollowUpContext) -> None:
+        self._context_store[session_id] = ctx.to_dict()
 
 class PostgresAgentCheckpointer:
     def __init__(self, pool: asyncpg.Pool) -> None:
@@ -167,6 +388,19 @@ class PostgresAgentCheckpointer:
                 """CREATE INDEX IF NOT EXISTS idx_agent_session_messages_session_order
                 ON agent_session_messages (session_id, id)"""
             )
+            # Structured follow-up context table (R052)
+            await conn.execute(
+                """CREATE TABLE IF NOT EXISTS agent_session_followup_context (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    context_json JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )"""
+            )
+            await conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_agent_session_followup_context_session
+                ON agent_session_followup_context (session_id, id)"""
+            )
 
     async def load_history(self, session_id: str) -> list[dict[str, str]]:
         async with self._pool.acquire() as conn:
@@ -185,6 +419,34 @@ class PostgresAgentCheckpointer:
                 """INSERT INTO agent_session_messages (session_id, role, content)
                 VALUES ($1, $2, $3)""",
                 [(session_id, "user", user), (session_id, "assistant", assistant)],
+            )
+
+    # -- Structured follow-up context (backward-compatible extension) --
+
+    async def load_context(self, session_id: str) -> FollowUpContext | None:
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchval(
+                    "SELECT context_json FROM agent_session_followup_context WHERE session_id = $1 ORDER BY id DESC LIMIT 1",
+                    session_id,
+                )
+        except Exception:
+            return None
+        if row is None:
+            return None
+        try:
+            data = json.loads(row) if isinstance(row, str) else row
+            return FollowUpContext.from_dict(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    async def save_context(self, session_id: str, ctx: FollowUpContext) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO agent_session_followup_context (session_id, context_json)
+                VALUES ($1, $2)""",
+                session_id,
+                json.dumps(ctx.to_dict(), ensure_ascii=False),
             )
 
 async def create_agent_checkpointer(database_url: str | None = None) -> tuple[Any, str]:
