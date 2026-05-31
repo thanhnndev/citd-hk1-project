@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
-import { ArrowDown, ArrowUp, Compass, Loader2, RotateCcw, ShieldCheck, Trash2, Waves } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, MessageSquare, RotateCcw, ShieldCheck, Trash2, Waves } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -18,6 +18,8 @@ interface Message {
   cacheHit?: boolean;
   status?: MessageStatus;
   streamStatus?: ChatStreamStatus | null;
+  /** Bounded history of operational phases seen during streaming. */
+  statusHistory?: ChatStreamStatus[];
 }
 
 interface ChatInterfaceProps {
@@ -135,6 +137,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         citations: [],
         status: "submitted",
         streamStatus: "understanding",
+        statusHistory: ["understanding"],
       };
       setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
       setInput("");
@@ -165,6 +168,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           cacheHit: response.cache_hit,
           status: "complete",
           streamStatus: null,
+          statusHistory: message.statusHistory && message.statusHistory.length > 0
+            ? message.statusHistory
+            : ["composing"],
         }));
       };
 
@@ -174,7 +180,12 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
         await streamChat(messageText, sessionId, language, {
           onOpen: () => updateLastAssistant((message) => ({ ...message, status: "streaming" })),
-          onStatus: (streamStatus) => updateLastAssistant((message) => ({ ...message, streamStatus, status: "streaming" })),
+          onStatus: (streamStatus) => updateLastAssistant((message) => {
+            const prev = message.statusHistory ?? [];
+            const last = prev[prev.length - 1];
+            const history = last === streamStatus ? prev : [...prev, streamStatus];
+            return { ...message, streamStatus, status: "streaming", statusHistory: history };
+          }),
           onToken: (token) => updateLastAssistant((message) => ({
             ...message,
             content: message.content + token,
@@ -296,15 +307,16 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         </div>
       </header>
 
+      {/* Full-height scroll region — mobile-first with safe-area bottom padding for the composer */}
       <div
         ref={scrollRef}
-        className="relative z-10 flex-1 overflow-y-auto px-3 py-5 md:px-6"
+        className="relative z-10 flex-1 overflow-y-auto px-2 pb-[env(safe-area-inset-bottom)] py-3 sm:px-3 sm:py-4 md:px-6"
         role="log"
         aria-live="polite"
         aria-label={translations.title}
         onScroll={handleScroll}
       >
-        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-5">
+        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-4 sm:gap-5">
           {messages.length === 0 && !error && (
             <WelcomeScreen
               onPromptClick={handlePromptClick}
@@ -332,7 +344,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               langfuseTraceId={msg.langfuseTraceId}
               cacheHit={msg.cacheHit}
               status={msg.status}
+              statusHistory={msg.statusHistory}
               streamStatusLabel={msg.streamStatus ? STATUS_LABELS[language][msg.streamStatus] : undefined}
+              streamStatusLabels={STATUS_LABELS[language]}
               typingLabel={translations.typing}
               assistantLabel={language === "vi" ? "Trợ lý Hàm Ninh" : "Ham Ninh Assistant"}
               userLabel={language === "vi" ? "Bạn" : "You"}
@@ -359,10 +373,27 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           ))}
 
           {error && (
-            <div className="flex justify-center">
-              <div className="max-w-md rounded-2xl border border-destructive/20 bg-white/85 px-4 py-3 text-center shadow-lg shadow-destructive/5">
-                <p className="text-sm text-destructive">{error}</p>
-                <Button variant="outline" size="sm" className="mt-3 rounded-full" onClick={handleRetry} disabled={loading}>
+            <div className="flex gap-3 animate-slideUp">
+              <div
+                className="mt-1 grid size-8 shrink-0 place-items-center rounded-full bg-[#fffaf0] text-[#0b5f63] ring-1 ring-[#0b5f63]/15 shadow-sm"
+                aria-hidden="true"
+              >
+                <AlertCircle className="size-4" />
+              </div>
+              <div className="min-w-0 max-w-[86%] items-start md:max-w-[74%]">
+                <div className="mb-1 flex items-center gap-2 text-[0.72rem] text-[#b45a5a]">
+                  <span className="font-semibold">{language === "vi" ? "Lỗi kết nối" : "Connection error"}</span>
+                </div>
+                <div className="group relative rounded-[1.45rem] rounded-tl-md border border-destructive/20 bg-white/85 px-4 py-3 shadow-lg shadow-destructive/5">
+                  <p className="text-sm text-destructive">{error}</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 rounded-full border-destructive/20 text-destructive hover:bg-destructive/5"
+                  onClick={handleRetry}
+                  disabled={loading}
+                >
                   <RotateCcw className="h-3.5 w-3.5 mr-1" />
                   {translations.retry}
                 </Button>
@@ -387,16 +418,17 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         </Button>
       )}
 
-      <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/82 px-3 py-3 backdrop-blur-xl md:px-4">
+      {/* Sticky bottom composer — mobile-first with safe-area padding */}
+      <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/82 px-2 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] backdrop-blur-xl sm:px-3 sm:py-3 md:px-4">
         <div className="mx-auto max-w-4xl">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.72rem] text-[#5d7373]">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
               {activeStatus && loading && <Loader2 className="size-3 animate-spin" />}
               {activeStatus && <span>{activeStatus}</span>}
             </div>
             <span className="hidden sm:inline">{labels.inputHint}</span>
           </div>
-          <div className="flex items-end gap-2 rounded-[1.45rem] border border-white/90 bg-white/90 p-2 shadow-2xl shadow-[#0b5f63]/10 ring-1 ring-[#0b5f63]/8">
+          <div className="flex items-end gap-1.5 rounded-[1.45rem] border border-white/90 bg-white/90 p-1.5 shadow-2xl shadow-[#0b5f63]/10 ring-1 ring-[#0b5f63]/8 sm:gap-2 sm:p-2">
             <textarea
               ref={textareaRef}
               value={input}
@@ -405,14 +437,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               placeholder={translations.placeholder}
               disabled={loading}
               rows={1}
-              className="max-h-36 min-h-11 flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2.5 text-sm leading-6 text-[#123436] placeholder:text-[#6f8584] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50"
+              className="max-h-36 min-h-10 flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#123436] placeholder:text-[#6f8584] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:text-sm sm:leading-6 sm:px-3 sm:py-2.5"
               aria-label={translations.placeholder}
             />
             {messages.length > 0 && (
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11 shrink-0 rounded-2xl text-[#6f8584] hover:bg-destructive/10 hover:text-destructive"
+                className="h-10 w-10 shrink-0 rounded-2xl text-[#6f8584] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
                 onClick={handleClearConversation}
                 disabled={loading}
                 aria-label={translations.newConversation ?? "New conversation"}
@@ -425,7 +457,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               onClick={() => handleSubmit()}
               disabled={loading || !input.trim()}
               size="icon"
-              className="h-11 w-11 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50]"
+              className="h-10 w-10 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50] sm:h-11 sm:w-11"
               aria-label={translations.send}
               title={translations.send}
             >
