@@ -598,3 +598,97 @@ async def test_cache_error_returns_unavailable() -> None:
 
     assert result.status == PlaceToolStatus.UNAVAILABLE
     assert result.candidates == []
+
+
+# ---------------------------------------------------------------------------
+# T02: Decision trace tests through runtime wiring
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_decision_trace_through_cache_hit_path() -> None:
+    """Cache-hit path through PlaceRecommendationService produces decision_trace."""
+    cached_candidates = [
+        PlaceCandidate(
+            place_id="places/cache-trace",
+            display_name="Quán Cache Trace",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+        ),
+    ]
+    cache = FakePlaceCache(candidates=cached_candidates, result="hit")
+    places_service = GooglePlacesService(
+        settings=FakeSettings,
+        client=FakeClient(),
+        place_cache=cache,
+    )
+    recommender = PlaceRecommendationService(places_service, routes_service=None)
+
+    response = await recommender.recommend(
+        query="cache trace test", language="vi", session_id="s-cache-trace"
+    )
+
+    assert response.decision_trace is not None
+    assert response.decision_trace.credential_status == "live"
+    event_names = [e.event for e in response.decision_trace.events]
+    # Cache hit path: request built, provider called, cache hit, compose
+    assert "request_built" in event_names
+    assert "provider_called" in event_names
+    assert "cache_hit" in event_names
+
+
+@pytest.mark.asyncio
+async def test_decision_trace_through_cache_miss_path() -> None:
+    """Cache-miss on provider failure produces decision_trace with credential_status=unavailable."""
+    cache = FakePlaceCache(candidates=None, result="miss")
+    places_service = GooglePlacesService(
+        settings=FakeSettings,
+        client=FakeClient(),
+        place_cache=cache,
+    )
+    recommender = PlaceRecommendationService(places_service, routes_service=None)
+
+    response = await recommender.recommend(
+        query="miss trace test", language="vi", session_id="s-miss-trace"
+    )
+
+    assert response.decision_trace is not None
+    assert response.decision_trace.credential_status == "unavailable"
+    event_names = [e.event for e in response.decision_trace.events]
+    assert "request_built" in event_names
+    # Provider failed AND cache missed → provider_unavailable event
+    assert "provider_unavailable" in event_names
+
+
+@pytest.mark.asyncio
+async def test_decision_trace_through_circuit_open_path() -> None:
+    """Circuit-open path produces decision_trace with honest audit events."""
+    cached_candidates = [
+        PlaceCandidate(
+            place_id="places/circuit-trace",
+            display_name="Quán Circuit",
+            types=["restaurant"],
+            location=LatLng(lat=10.1794, lng=104.0491),
+        ),
+    ]
+    cache = FakePlaceCache(candidates=cached_candidates, result="hit")
+    circuit = CircuitState(failure_threshold=1)
+    circuit.record_failure()
+
+    service = GooglePlacesService(
+        settings=FakeSettings,
+        client=FakeClient(),
+        place_cache=cache,
+        circuit=circuit,
+    )
+    recommender = PlaceRecommendationService(service, routes_service=None)
+
+    response = await recommender.recommend(
+        query="circuit trace test", language="vi", session_id="s-circuit-trace"
+    )
+
+    assert response.decision_trace is not None
+    # Circuit-open with cache hit should still produce live credential status
+    # (data came from cache but is valid)
+    assert response.decision_trace.credential_status == "live"
+    event_names = [e.event for e in response.decision_trace.events]
+    assert "request_built" in event_names

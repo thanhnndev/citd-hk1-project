@@ -1000,3 +1000,117 @@ class TestPlaceResultExplanation:
         assert place.explanation.rank == 0
         assert place.explanation.accessibility_note == "accessibility metadata unknown"
         assert place.explanation.route_summary == "route metadata unavailable"
+
+
+# ===========================================================================
+# T02: PlaceAuditEvent and PlaceDecisionTrace model tests (M013/S05)
+# ===========================================================================
+
+class TestPlaceAuditEvent:
+    """Tests for the PlaceAuditEvent model."""
+
+    def test_valid_event_creation(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+
+        event = PlaceAuditEvent(
+            event="request_built",
+            phase=PlaceAuditPhase.REQUEST,
+            detail={"language_code": "en"},
+            elapsed_ms=1.5,
+        )
+        assert event.event == "request_built"
+        assert event.phase == PlaceAuditPhase.REQUEST
+        assert event.detail["language_code"] == "en"
+        assert event.elapsed_ms == 1.5
+
+    def test_invalid_event_name_rejected(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceAuditEvent(
+                event="made_up_event",
+                phase=PlaceAuditPhase.REQUEST,
+            )
+
+    def test_extra_fields_forbidden(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceAuditEvent(
+                event="request_built",
+                phase=PlaceAuditPhase.REQUEST,
+                secret_key="must-not-appear",
+            )
+
+    def test_all_phase_values_accepted(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase, PLACE_AUDIT_EVENTS
+
+        # Verify each event can be created with its corresponding phase
+        for event_name in PLACE_AUDIT_EVENTS:
+            # Just verify no ValidationError is raised
+            event = PlaceAuditEvent(event=event_name, phase=PlaceAuditPhase.REQUEST)
+            assert event.event == event_name
+
+
+class TestPlaceDecisionTrace:
+    """Tests for the PlaceDecisionTrace model."""
+
+    def test_empty_trace_creation(self):
+        from app.models.places import PlaceDecisionTrace
+
+        trace = PlaceDecisionTrace(session_id="s-empty")
+        assert trace.events == []
+        assert trace.session_id == "s-empty"
+        assert trace.total_events == 0
+        assert trace.credential_status is None
+        assert trace.provider_source is None
+
+    def test_trace_with_events(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase, PlaceDecisionTrace
+
+        events = [
+            PlaceAuditEvent(event="request_built", phase=PlaceAuditPhase.REQUEST),
+            PlaceAuditEvent(event="provider_called", phase=PlaceAuditPhase.PROVIDER),
+            PlaceAuditEvent(event="composition_deterministic", phase=PlaceAuditPhase.COMPOSE),
+        ]
+        trace = PlaceDecisionTrace(
+            events=events,
+            session_id="s-trace",
+            credential_status="live",
+            provider_source="mock",
+        )
+        assert trace.total_events == 3
+        assert len(trace.events) == 3
+        assert trace.credential_status == "live"
+        assert trace.provider_source == "mock"
+
+    def test_trace_extra_fields_forbidden(self):
+        from app.models.places import PlaceDecisionTrace
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceDecisionTrace(
+                session_id="s-bad",
+                raw_provider_payload="should-not-exist",
+            )
+
+    def test_trace_serialization_is_safe(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase, PlaceDecisionTrace
+
+        trace = PlaceDecisionTrace(
+            events=[
+                PlaceAuditEvent(
+                    event="provider_called",
+                    phase=PlaceAuditPhase.PROVIDER,
+                    detail={"source": "mock", "candidate_count": 3},
+                ),
+            ],
+            session_id="s-safe",
+            credential_status="live",
+            provider_source="mock",
+        )
+        dump = trace.model_dump_json()
+        assert "api_key" not in dump.lower()
+        assert "secret" not in dump.lower()

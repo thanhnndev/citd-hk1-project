@@ -432,6 +432,7 @@ class AgentService:
         state["response_text"] = response.message
         state["fairness_audit"] = response.fairness_audit
         state["fallback"] = response.fallback
+        state["decision_trace"] = response.decision_trace
         state["places_response_ready"] = True
         return json.dumps({"status": "ok", "message": response.message, "places": [p.model_dump() for p in response.places[:5]]}, ensure_ascii=False)
 
@@ -447,6 +448,7 @@ class AgentService:
             latency_ms=round((time.perf_counter() - started) * 1000, 3),
             fallback=state.get("fallback", False),
             fairness_audit=state.get("fairness_audit"),
+            decision_trace=state.get("decision_trace"),
         )
 
     async def _save_turn(self, session_id: str, message: str, answer: str) -> None:

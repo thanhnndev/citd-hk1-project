@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.places import FairnessAudit
+from app.models.places import FairnessAudit, PlaceDecisionTrace
 from app.models.request import LatLng
 
 
@@ -424,4 +424,8 @@ class ChatResponse(BaseModel):
     fairness_audit: FairnessAudit | None = Field(
         default=None,
         description="Structured fairness audit snapshot for place recommendation calls.",
+    )
+    decision_trace: PlaceDecisionTrace | None = Field(
+        default=None,
+        description="R046 structured decision trace for the full search_places path.",
     )

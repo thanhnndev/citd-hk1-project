@@ -15,7 +15,10 @@ from app.models.places import (
     HAM_NINH_CENTER,
     FairnessAudit,
     FairnessWarningType,
+    PlaceAuditEvent,
+    PlaceAuditPhase,
     PlaceCandidate,
+    PlaceDecisionTrace,
     PlaceSearchRequest,
     PlaceToolResponse,
     PlaceToolSource,
@@ -32,6 +35,56 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESULTS = 10
 PLACE_RECOMMENDATION_INTENT = "place_recommendation"
+
+
+class PlaceDecisionTracer:
+    """Bounded, redacted audit event builder for the search_places decision path.
+
+    Collects PlaceAuditEvent instances across recommendation phases and produces
+    a PlaceDecisionTrace at the end. O(1) per phase; no network calls.
+    """
+
+    def __init__(self, *, session_id: str, started: float) -> None:
+        self._session_id = session_id
+        self._started = started
+        self._events: list[PlaceAuditEvent] = []
+        self._credential_status: str | None = None
+        self._provider_source: str | None = None
+
+    # -- public API --
+
+    def emit(
+        self,
+        event: str,
+        phase: PlaceAuditPhase,
+        *,
+        detail: dict | None = None,
+    ) -> None:
+        """Record a single audit event with elapsed time since request start."""
+        self._events.append(PlaceAuditEvent(
+            event=event,
+            phase=phase,
+            detail=detail or {},
+            elapsed_ms=_elapsed_ms(self._started),
+        ))
+
+    def set_credential_status(self, status: str) -> None:
+        """Set the final credential status label."""
+        self._credential_status = status
+
+    def set_provider_source(self, source: str) -> None:
+        """Set the final provider/source label."""
+        self._provider_source = source
+
+    def build(self) -> PlaceDecisionTrace:
+        """Produce the immutable decision trace with all collected events."""
+        trace = PlaceDecisionTrace(
+            events=list(self._events),
+            session_id=self._session_id,
+            credential_status=self._credential_status,
+            provider_source=self._provider_source,
+        )
+        return trace
 
 
 class TextSearchPlacesTool(Protocol):
@@ -73,6 +126,7 @@ class PlaceRecommendationService:
         user_location: dict[str, float] | None = None,
     ) -> ChatResponse:
         started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id=session_id, started=started)
 
         # Track which preferences were actually applied (for diagnostics)
         preference_budget_applied = False
@@ -89,7 +143,17 @@ class PlaceRecommendationService:
             )
             preference_budget_applied = budget_was_valid
             user_location_applied = user_loc_was_valid
+            tracer.emit("request_built", PlaceAuditPhase.REQUEST, detail={
+                "language_code": request.language_code,
+                "budget_valid": budget_was_valid,
+                "user_location_valid": user_loc_was_valid,
+                "max_result_count": request.max_result_count,
+            })
         except ValidationError:
+            tracer.emit("invalid_request", PlaceAuditPhase.REQUEST, detail={
+                "query_length": len(query) if query else 0,
+            })
+            tracer.set_credential_status("unknown")
             return self._chat_response(
                 session_id=session_id,
                 message=_message_for_status(PlaceToolStatus.INVALID_REQUEST),
@@ -105,12 +169,18 @@ class PlaceRecommendationService:
                     provider_status=PlaceToolStatus.INVALID_REQUEST.value,
                     warnings=[FairnessWarningType.PROVIDER_NON_OK.value],
                 ),
+                decision_trace=tracer.build(),
             )
 
         try:
             tool_response = await self._places_tool.text_search(request)
         except Exception as exc:  # noqa: BLE001 - service boundary must fail closed and sanitize.
             logger.warning("place_recommendation_tool_error", extra={"error_type": type(exc).__name__})
+            tracer.emit("provider_error", PlaceAuditPhase.PROVIDER, detail={
+                "error_type": type(exc).__name__,
+            })
+            tracer.set_credential_status("unavailable")
+            tracer.set_provider_source("none")
             return self._chat_response(
                 session_id=session_id,
                 message=_message_for_status(PlaceToolStatus.UPSTREAM_ERROR),
@@ -126,10 +196,35 @@ class PlaceRecommendationService:
                     provider_status=PlaceToolStatus.UPSTREAM_ERROR.value,
                     warnings=[FairnessWarningType.PROVIDER_NON_OK.value],
                 ),
+                decision_trace=tracer.build(),
             )
 
         candidate_count = len(tool_response.candidates)
         if tool_response.status != PlaceToolStatus.OK:
+            # Provider returned non-OK status — record credential/status info
+            if tool_response.status == PlaceToolStatus.CREDENTIALS_BLOCKED:
+                tracer.emit("provider_credentials_blocked", PlaceAuditPhase.CREDENTIAL, detail={
+                    "source": tool_response.source.value,
+                })
+                tracer.set_credential_status("blocked")
+            elif tool_response.status == PlaceToolStatus.UNAVAILABLE:
+                tracer.emit("provider_unavailable", PlaceAuditPhase.CREDENTIAL, detail={
+                    "source": tool_response.source.value,
+                })
+                tracer.set_credential_status("unavailable")
+            elif tool_response.status == PlaceToolStatus.UPSTREAM_ERROR:
+                tracer.emit("provider_error", PlaceAuditPhase.PROVIDER, detail={
+                    "status": tool_response.status.value,
+                })
+                tracer.set_credential_status("unavailable")
+            else:
+                tracer.emit("provider_ok", PlaceAuditPhase.PROVIDER, detail={
+                    "status": tool_response.status.value,
+                    "candidate_count": candidate_count,
+                })
+                tracer.set_credential_status("live")
+
+            tracer.set_provider_source(tool_response.source.value)
             logger.info(
                 "place_recommendation_status",
                 extra={
@@ -162,7 +257,23 @@ class PlaceRecommendationService:
                     accessibility_applied=preference_accessibility_applied,
                     user_location_applied=user_location_applied,
                 ),
+                decision_trace=tracer.build(),
             )
+
+        # Provider returned OK — record provider event
+        tracer.emit("provider_called", PlaceAuditPhase.PROVIDER, detail={
+            "status": tool_response.status.value,
+            "source": tool_response.source.value,
+            "candidate_count": candidate_count,
+        })
+        tracer.set_provider_source(tool_response.source.value)
+        if tool_response.source == PlaceToolSource.CACHE:
+            tracer.emit("cache_hit", PlaceAuditPhase.CACHE, detail={
+                "candidate_count": candidate_count,
+            })
+            tracer.set_credential_status("live")
+        else:
+            tracer.set_credential_status("live")
 
         # Route enrichment (optional — degrades gracefully)
         candidates = tool_response.candidates
@@ -172,26 +283,55 @@ class PlaceRecommendationService:
                 candidates = await self._routes_service.enrich_candidates(
                     tool_response.candidates, origin=request.effective_origin
                 )
+                tracer.emit("route_enrichment_ok", PlaceAuditPhase.ROUTE, detail={
+                    "candidate_count": len(candidates),
+                })
         except Exception as exc:  # noqa: BLE001
             logger.warning("route_enrichment_failed", extra={"error_type": type(exc).__name__})
             candidates = tool_response.candidates
             route_enrichment_ok = False
+            tracer.emit("route_enrichment_fallback", PlaceAuditPhase.ROUTE, detail={
+                "error_type": type(exc).__name__,
+            })
 
         # Preference-aware post-provider filtering/reranking
         pre_filter_count = len(candidates)
         candidates, filtered_count = _apply_preference_filters(candidates, request)
 
+        if filtered_count > 0 or preference_budget_applied or preference_accessibility_applied:
+            tracer.emit("preference_filter_applied", PlaceAuditPhase.FILTER, detail={
+                "pre_filter_count": pre_filter_count,
+                "post_filter_count": len(candidates),
+                "filtered_count": filtered_count,
+                "budget_applied": preference_budget_applied,
+                "accessibility_applied": preference_accessibility_applied,
+            })
+        else:
+            tracer.emit("preference_filter_skipped", PlaceAuditPhase.FILTER)
+
         ensemble_ok = True
         try:
             places = _reranked_results(candidates, request.query)
+            tracer.emit("reranking_ensemble", PlaceAuditPhase.RERANK, detail={
+                "candidate_count": len(candidates),
+                "result_count": len(places),
+            })
         except Exception as exc:  # noqa: BLE001 - ensemble pipeline fails closed.
             logger.warning("ensemble_reranking_failed", extra={"error_type": type(exc).__name__})
             places = _grounded_results(candidates)
             ensemble_ok = False
+            tracer.emit("reranking_fallback", PlaceAuditPhase.RERANK, detail={
+                "error_type": type(exc).__name__,
+                "candidate_count": len(candidates),
+            })
 
         # Fairness balancing: reorder results so top-K local representation
         # meets the 40% target when enough local candidates exist.
         places = _balance_fairness(places)
+        if places:
+            tracer.emit("fairness_balanced", PlaceAuditPhase.FAIRNESS, detail={
+                "result_count": len(places),
+            })
 
         fairness_audit = _compute_fairness_audit(
             candidates=candidates,
@@ -200,6 +340,12 @@ class PlaceRecommendationService:
             route_enrichment_ok=route_enrichment_ok,
             ensemble_ok=ensemble_ok,
         )
+
+        # Composition: deterministic result assembly
+        tracer.emit("composition_deterministic", PlaceAuditPhase.COMPOSE, detail={
+            "result_count": len(places),
+            "candidate_count": len(candidates),
+        })
 
         logger.info(
             "place_recommendation_status",
@@ -238,6 +384,7 @@ class PlaceRecommendationService:
                 user_location_applied=user_location_applied,
                 filtered_count=filtered_count,
             ),
+            decision_trace=tracer.build(),
         )
 
     def _build_request(
@@ -308,6 +455,7 @@ class PlaceRecommendationService:
         fallback: bool,
         fairness_audit: FairnessAudit | None = None,
         preference_flags: str | None = None,
+        decision_trace: PlaceDecisionTrace | None = None,
     ) -> ChatResponse:
         source_value = source.value if source else "none"
         reasoning_log = (
@@ -323,6 +471,11 @@ class PlaceRecommendationService:
             )
             if fairness_audit.warnings:
                 reasoning_log += f" warnings={','.join(fairness_audit.warnings)}"
+        if decision_trace is not None:
+            reasoning_log += (
+                f" audit_events={decision_trace.total_events}"
+                f" credential_status={decision_trace.credential_status}"
+            )
         return ChatResponse(
             session_id=session_id,
             message=message,
@@ -333,6 +486,7 @@ class PlaceRecommendationService:
             latency_ms=latency_ms,
             fallback=fallback,
             fairness_audit=fairness_audit,
+            decision_trace=decision_trace,
         )
 
 

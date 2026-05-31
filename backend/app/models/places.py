@@ -267,6 +267,124 @@ class FairnessAudit(BaseModel):
         return value
 
 
+# -- R046 decision trace / audit event vocabulary (M013/S05-T02) --
+
+class PlaceAuditPhase(StrEnum):
+    """Canonical phase labels for search_places decision trace events."""
+
+    REQUEST = "request"
+    PROVIDER = "provider"
+    CACHE = "cache"
+    ROUTE = "route"
+    FILTER = "filter"
+    RERANK = "rerank"
+    FAIRNESS = "fairness"
+    COMPOSE = "compose"
+    CREDENTIAL = "credential"
+
+
+# Compact event names — machine-readable, consistent across all paths.
+PLACE_AUDIT_EVENTS = frozenset({
+    # Request phase
+    "request_built",
+    "invalid_request",
+    # Provider phase
+    "provider_called",
+    "provider_ok",
+    "provider_error",
+    "provider_credentials_blocked",
+    "provider_unavailable",
+    # Cache phase
+    "cache_hit",
+    "cache_miss",
+    "cache_stale",
+    "cache_error",
+    "cache_skip",
+    # Route phase
+    "route_enrichment_ok",
+    "route_enrichment_fallback",
+    # Filter phase
+    "preference_filter_applied",
+    "preference_filter_skipped",
+    # Rerank phase
+    "reranking_ensemble",
+    "reranking_fallback",
+    # Fairness phase
+    "fairness_balanced",
+    # Compose phase
+    "composition_deterministic",
+    # Credential phase
+    "credential_live",
+    "credential_blocked",
+    "credential_unavailable",
+})
+
+
+class PlaceAuditEvent(BaseModel):
+    """Single redacted audit event in the search_places decision trace.
+
+    Compact, bounded, and machine-readable. No API keys, raw provider JSON,
+    exact user_location, phone numbers, or document citations.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: str = Field(..., max_length=64, description="Canonical event name from PLACE_AUDIT_EVENTS.")
+    phase: PlaceAuditPhase = Field(..., description="Phase of the decision path where this event occurred.")
+    detail: dict[str, Any] = Field(
+        default_factory=dict,
+        max_length=10,
+        description="Compact, redacted context for this event (no secrets).",
+    )
+    elapsed_ms: float | None = Field(
+        default=None,
+        description="Milliseconds since request start when this event fired.",
+    )
+
+    @field_validator("event")
+    @classmethod
+    def validate_event(cls, value: str) -> str:
+        if value not in PLACE_AUDIT_EVENTS:
+            raise ValueError(
+                f"Unknown audit event: {value}. "
+                f"Allowed: {sorted(PLACE_AUDIT_EVENTS)}"
+            )
+        return value
+
+
+class PlaceDecisionTrace(BaseModel):
+    """Structured audit trace for a single search_places decision path.
+
+    Attached to ChatResponse so a future agent can determine which phases ran,
+    which degraded, and whether live provider, cache fallback, or
+    credential-blocked path produced the response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    events: list[PlaceAuditEvent] = Field(
+        default_factory=list,
+        max_length=30,
+        description="Ordered audit events from the decision path.",
+    )
+    session_id: str = Field(default="", max_length=128, description="Session correlation ID.")
+    credential_status: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Final credential status: live, blocked, unavailable, or unknown.",
+    )
+    provider_source: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Final provider/source label: google_places, goong_places, cache, mock, none.",
+    )
+
+    @property
+    def total_events(self) -> int:
+        """Count of events (computed from the events list)."""
+        return len(self.events)
+
+
 # -- Google Places API (New) typed contract --
 
 GOOGLE_PLACES_FIELD_MASK = (
