@@ -269,6 +269,11 @@ class AgentService:
                     yield event
                 else:
                     state = event
+                    # When the LLM answers directly (e.g. greeting), stream
+                    # the composed response_text so the SSE client sees it.
+                    if state.get("response_text"):
+                        yield _status_for_state(state)
+                        yield state["response_text"]
         response = self._response_from_state(state, started)
         await self._save_turn(session_id, message, response.message)
         if response.places:
@@ -335,8 +340,7 @@ class AgentService:
             messages=state["messages"],
             tools=_TOOLS,
             tool_choice="auto",
-            temperature=0.1,
-            max_tokens=520,
+            max_completion_tokens=520,
         )
         message = completion.choices[0].message
         tool_calls = list(message.tool_calls or [])

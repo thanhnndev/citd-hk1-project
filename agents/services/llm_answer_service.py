@@ -148,8 +148,7 @@ class LLMAnswerService:
         completion = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.2,
-            max_tokens=512,
+            max_completion_tokens=512,
         )
 
         elapsed = time.perf_counter() - t0
@@ -202,8 +201,7 @@ class LLMAnswerService:
         stream = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.2,
-            max_tokens=512,
+            max_completion_tokens=512,
             stream=True,
         )
 

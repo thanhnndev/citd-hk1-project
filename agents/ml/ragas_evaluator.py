@@ -281,8 +281,7 @@ class RAGASEvaluator:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.3,
-                    max_tokens=500,
+                    max_completion_tokens=500,
                 )
                 response_text = resp.choices[0].message.content or ""
             except Exception:

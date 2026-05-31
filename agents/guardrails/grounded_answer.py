@@ -166,8 +166,7 @@ async def classify_intent(
                     messages=[
                         {"role": "system", "content": system_prompt},
                     ],
-                    temperature=0,
-                    max_tokens=20,
+                    max_completion_tokens=20,
                 ),
                 timeout=3.0,
             )
