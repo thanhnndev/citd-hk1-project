@@ -173,15 +173,38 @@ def resolve_followup_decision(
 
 
 def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
-    """Check if the follow-up message references entities in the structured context."""
-    # Direct place name references (token-level, ignoring single-char tokens)
+    """Check if the follow-up message references entities in the structured context.
+
+    Ignores common Vietnamese descriptor words (quán, nhà hàng, hải sản, etc.)
+    so that new place requests like "tìm quán cà phê" don't falsely match
+    prior context. A place name must have at least one distinctive token
+    remaining after filtering.
+    """
+    # Common descriptor words that appear in many place names but don't
+    # uniquely identify a specific venue. Kept conservative — only words that
+    # are nearly always generic (not distinctive like "hải sản" or "ngọc lan").
+    _skip_tokens = frozenset({
+        "quán", "nhà", "hàng", "khách", "sạn",
+        "homestay", "hotel", "restaurant",
+        "ăn", "uống", "nghỉ", "dưỡng", "resort",
+    })
+
+    # Direct place name references (token-level, ignoring single-char tokens
+    # and common descriptor words). At least one distinctive token must match.
     for name in context.place_display_names:
         normalized = _norm(name)
         if not normalized:
             continue
-        for token in normalized.split():
-            if len(token) > 1 and token in text:
+        tokens = [t for t in normalized.split() if len(t) > 1 and t not in _skip_tokens]
+        if not tokens:
+            # All tokens are skip words — only match if the full normalized
+            # name appears as a substring (for names like "Quán Hải Sản" where
+            # every token is a skip word)
+            if normalized in text:
                 return True
+            continue
+        if any(token in text for token in tokens):
+            return True
 
     # References to scoring/ranking
     if context.score_breakdown_keys and any(
@@ -202,8 +225,10 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
         return True
 
     # References to recommendations (places intent with populated context)
+    # Use demonstratives and specific terms — NOT generic "quán" which appears
+    # in new place requests
     if context.intent == PLACE_RECOMMENDATION_INTENT and any(
-        term in text for term in ("quán", "địa điểm", "này", "kia", "đó", "place", "venue", "recommend", "gợi ý")
+        term in text for term in ("địa điểm", "này", "kia", "đó", "place", "venue", "recommend", "gợi ý")
     ):
         return True
 
@@ -504,6 +529,13 @@ class AgentService:
     async def answer(self, *, session_id: str, message: str, language: str = "vi") -> ChatResponse:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
+        # Resolve contextual follow-ups before tool routing (R052 / T03)
+        resolved = _resolve_followup_before_tool_routing(state)
+        if resolved is not None:
+            response = self._response_from_state(resolved, started)
+            await self._save_followup_context(session_id, response)
+            await self._save_turn(session_id, message, response.message)
+            return response
         if self._should_route_places_deterministically(message, state.get("history", [])):
             await self._search_places_tool(state, message)
             if not state.get("response_text"):
@@ -521,6 +553,22 @@ class AgentService:
     async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
+        # Resolve contextual follow-ups before tool routing (R052 / T03)
+        resolved = _resolve_followup_before_tool_routing(state)
+        if resolved is not None:
+            # Emit status for observability
+            decision = state.get("followup_decision")
+            if decision == "structured_context":
+                yield "[STATUS] using_context"
+            elif decision == "history_context":
+                yield "[STATUS] using_history"
+            else:
+                yield "[STATUS] clarifying"
+            yield resolved.get("response_text", "")
+            response = self._response_from_state(resolved, started)
+            await self._save_followup_context(session_id, response)
+            await self._save_turn(session_id, message, response.message)
+            return
         # Expose context source in streaming for observability (R052)
         if state.get("context_source") == "structured_context":
             yield "[STATUS] using_context"
@@ -898,6 +946,168 @@ def _status_for_tool_calls(tool_calls: list[Any]) -> str:
     if "search_knowledge" in names:
         return "[STATUS] searching_knowledge"
     return "[STATUS] composing"
+
+def _compose_followup_answer(
+    message: str,
+    context: FollowUpContext,
+    language: str,
+) -> str:
+    """Compose a contextual follow-up answer from structured last-response context.
+
+    Uses pattern-matching guardrails (not hardcoded example strings) to detect
+    the type of follow-up and compose an appropriate answer. Never invents
+    facts — when context lacks details, provides a bounded acknowledgment.
+    """
+    text = _norm(message)
+
+    # Place name reference → give what we know about that place
+    for name in context.place_display_names:
+        normalized = _norm(name)
+        if not normalized:
+            continue
+        for token in normalized.split():
+            if len(token) > 1 and token in text:
+                if language == "vi":
+                    return (
+                        f"Về {name}: mình đã gợi ý địa điểm này trước đó. "
+                        f"Bạn cần thông tin cụ thể nào (giờ mở cửa, đánh giá, đường đi)?"
+                    )
+                return (
+                    f"About {name}: I recommended this venue earlier. "
+                    f"What specific info do you need (hours, reviews, directions)?"
+                )
+
+    # Score / ranking reference
+    if context.score_breakdown_keys and any(
+        term in text for term in ("vì sao", "tại sao", "sao", "xếp", "rank", "score", "điểm", "cao", "thấp", "why")
+    ):
+        keys = ", ".join(context.score_breakdown_keys[:3])
+        if language == "vi":
+            return (
+                f"Địa điểm được xếp hạng dựa trên các tiêu chí: {keys}. "
+                f"Yếu tố địa phương (local_factor) và chất lượng đóng vai trò chính."
+            )
+        return (
+            f"Places were ranked using: {keys}. "
+            f"Local factor and quality scores are the main drivers."
+        )
+
+    # Citation / source reference
+    if context.has_citations and any(
+        term in text for term in ("nguồn", "source", "trích", "cite", "tài liệu", "document")
+    ):
+        sources = ", ".join(context.citation_sources[:2]) if context.citation_sources else "các nguồn đã tham khảo"
+        if language == "vi":
+            return f"Thông tin trước đó được tham khảo từ: {sources}. Bạn cần kiểm tra nguồn cụ thể nào?"
+        return f"Previous info was sourced from: {sources}. Which source would you like to check?"
+
+    # Provider / data source reference
+    if context.provider_source and any(
+        term in text for term in ("provider", "nguồn dữ liệu", "data source")
+    ):
+        src = context.provider_source
+        status = context.provider_status or "unknown"
+        if language == "vi":
+            return f"Dữ liệu địa điểm lấy từ {src} (trạng thái: {status})."
+        return f"Place data comes from {src} (status: {status})."
+
+    # General recommendation follow-up
+    if context.intent == PLACE_RECOMMENDATION_INTENT and any(
+        term in text for term in ("quán", "địa điểm", "này", "kia", "đó", "place", "venue", "gợi ý")
+    ):
+        names = ", ".join(context.place_display_names[:3]) if context.place_display_names else "các địa điểm đã gợi ý"
+        if language == "vi":
+            return f"Bạn muốn biết thêm gì về {names}? Mình có thể giải thích lý do xếp hạng hoặc gợi ý thêm."
+        return f"What would you like to know more about {names}? I can explain rankings or suggest more."
+
+    # Default: bounded acknowledgment
+    if language == "vi":
+        return "Mình nhớ câu trả lời trước đó. Bạn cần giải thích thêm phần nào?"
+    return "I remember the previous answer. Which part would you like me to explain further?"
+
+
+def _is_new_request(message: str) -> bool:
+    """Detect whether a message looks like a brand-new place or knowledge
+    request rather than a follow-up to prior context.
+
+    Used to avoid short-circuiting new requests into clarification when
+    prior context exists but doesn't match the message.
+    """
+    text = _norm(message)
+    # New place request indicators
+    place_terms = (
+        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
+        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
+        "stay", "place", "nearby", "gần đây", "quanh đây",
+    )
+    action_terms = ("kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search")
+    # New knowledge request indicators
+    knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
+
+    has_place_topic = any(term in text for term in place_terms)
+    has_action = any(term in text for term in action_terms)
+    has_knowledge = any(term in text for term in knowledge_terms)
+
+    return (has_place_topic and has_action) or has_knowledge
+
+
+def _resolve_followup_before_tool_routing(
+    state: AgentState,
+) -> AgentState | None:
+    """Resolve follow-ups before entering tool routing.
+
+    Runs after _initial_state and before deterministic/LLM tool routing.
+    Returns a fully-populated state when the follow-up can be answered
+    from structured context, or None to proceed with normal routing.
+
+    Decision routing:
+    - structured_context → compose answer from prior context, skip tools
+    - history_context    → use deterministic direct-answer path, skip tools
+    - clarification_needed → return clarification message, skip tools
+    - insufficient_context → proceed to normal routing
+    """
+    decision = state.get("followup_decision")
+    prior = state.get("prior_context")
+
+    if decision == "structured_context" and prior and prior.is_populated:
+        state["response_text"] = _compose_followup_answer(
+            state["message"], prior, state["language"],
+        )
+        state["intent"] = "followup_contextual"
+        state["places_response_ready"] = True
+        state["fallback"] = False
+        logger.debug(
+            "agent.followup_resolved",
+            session_id=state["session_id"],
+            decision="structured_context",
+        )
+        return state
+
+    if decision == "history_context":
+        # Answerable from history alone — use direct-answer path, skip tools
+        state["response_text"] = _direct_answer(
+            state["message"], state.get("history", []), state["language"],
+        )
+        state["intent"] = "followup_history"
+        state["places_response_ready"] = True
+        state["fallback"] = False
+        return state
+
+    if decision == "clarification_needed":
+        # Distinguish between truly ambiguous pronouns and new requests.
+        # If the message looks like a new place/knowledge request, let normal
+        # routing handle it (insufficient_context path) rather than asking
+        # for clarification about prior context.
+        if _is_new_request(state["message"]):
+            return None  # Proceed to normal routing
+        state["response_text"] = _clarify_message(state["language"])
+        state["intent"] = "clarification"
+        state["places_response_ready"] = True
+        state["fallback"] = False
+        return state
+
+    # insufficient_context → proceed to normal routing
+    return None
 
 def _norm(text: str) -> str:
     return " ".join((text or "").strip().lower().split())

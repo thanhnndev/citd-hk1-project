@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from agents.graph.agent_service import (
+    AgentService,
     FollowUpContext,
     FollowUpDecision,
     InMemoryAgentCheckpointer,
@@ -29,6 +30,7 @@ from agents.graph.agent_service import (
     resolve_followup_decision,
 )
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
+from agents.tools.retriever import Retriever
 from app.models.places import PlaceDecisionTrace, PlaceAuditEvent, PlaceAuditPhase
 from app.models.response import ChatResponse, PlaceResult, ScoreBreakdown, PlaceExplanation, Citation
 from app.models.request import LatLng
@@ -939,3 +941,549 @@ class TestAgentServiceContextIntegration:
             await cp.save_context("sess-fail", ctx)
         except RuntimeError:
             pass  # Expected — real _save_followup_context catches this
+
+
+# ---------------------------------------------------------------------------
+# T03: Resolve follow-ups before tool routing
+# ---------------------------------------------------------------------------
+
+class TestComposeFollowupAnswer:
+    """Verify _compose_followup_answer produces contextual answers from
+    structured context without inventing facts."""
+
+    def test_place_name_reference_composes_answer(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_display_names=["Nhà hàng Hải Sản Biển Xanh"],
+            place_ids=["goong_1"],
+        )
+        answer = _compose_followup_answer("Biển Xanh có mở cửa không?", ctx, "vi")
+        assert "Biển Xanh" in answer
+        assert "gợi ý" in answer.lower()
+
+    def test_place_name_reference_english(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_display_names=["Blue Sea Restaurant"],
+            place_ids=["goong_1"],
+        )
+        answer = _compose_followup_answer("Is Blue Sea open?", ctx, "en")
+        assert "Blue Sea" in answer
+
+    def test_score_reference_composes_answer(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            score_breakdown_keys=["final_score", "tree1_locality", "tree2_proximity"],
+        )
+        answer = _compose_followup_answer("Vì sao quán này xếp cao?", ctx, "vi")
+        assert "final_score" in answer
+        assert "tree1_locality" in answer
+
+    def test_citation_reference_composes_answer(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent="cultural_query",
+            has_citations=True,
+            citation_sources=["Vietnam Tourism Board"],
+        )
+        answer = _compose_followup_answer("Nguồn này có đáng tin không?", ctx, "vi")
+        assert "Vietnam Tourism Board" in answer
+
+    def test_provider_reference_composes_answer(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            provider_source="goong_places",
+            provider_status="ok",
+        )
+        answer = _compose_followup_answer("Nguồn dữ liệu từ đâu?", ctx, "vi")
+        assert "goong_places" in answer
+        assert "ok" in answer
+
+    def test_general_recommendation_followup(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_display_names=["Quán A", "Quán B"],
+        )
+        answer = _compose_followup_answer("địa điểm này có ngon không?", ctx, "vi")
+        assert "Quán A" in answer or "địa điểm" in answer
+
+    def test_default_acknowledgment_when_no_match(self) -> None:
+        from agents.graph.agent_service import _compose_followup_answer
+        ctx = FollowUpContext(
+            session_id="s1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_ids=["goong_1"],
+            place_display_names=["Quán X"],
+            # No score keys, no citations, no provider — place name won't match
+        )
+        # Message that doesn't match any pattern
+        answer = _compose_followup_answer("khác hoàn toàn xyz", ctx, "vi")
+        assert len(answer) > 0  # At least returns default acknowledgment
+
+
+class TestResolveFollowupBeforeToolRouting:
+    """Verify the resolver correctly short-circuits tool routing for
+    contextual follow-ups."""
+
+    def test_structured_context_returns_resolved_state(self) -> None:
+        from agents.graph.agent_service import _resolve_followup_before_tool_routing
+        state: dict = {
+            "session_id": "s1",
+            "message": "Biển Xanh mở mấy giờ?",
+            "language": "vi",
+            "history": [],
+            "prior_context": FollowUpContext(
+                session_id="s1",
+                intent=PLACE_RECOMMENDATION_INTENT,
+                place_display_names=["Nhà hàng Biển Xanh"],
+                place_ids=["goong_1"],
+            ),
+            "followup_decision": "structured_context",
+            "context_source": "structured_context",
+            "response_text": "",
+            "places_response_ready": False,
+        }
+        result = _resolve_followup_before_tool_routing(state)
+        assert result is not None
+        assert result["response_text"] != ""
+        assert result["intent"] == "followup_contextual"
+        assert result["places_response_ready"] is True
+        assert result["fallback"] is False
+
+    def test_history_context_returns_resolved_state(self) -> None:
+        from agents.graph.agent_service import _resolve_followup_before_tool_routing
+        state: dict = {
+            "session_id": "s1",
+            "message": "ví dụ",
+            "language": "vi",
+            "history": [
+                {"role": "assistant", "content": "Hàm Ninh có nhiều quán ngon."},
+            ],
+            "prior_context": None,
+            "followup_decision": "history_context",
+            "context_source": "history_context",
+            "response_text": "",
+            "places_response_ready": False,
+        }
+        result = _resolve_followup_before_tool_routing(state)
+        assert result is not None
+        assert result["response_text"] != ""
+        assert result["intent"] == "followup_history"
+        assert result["places_response_ready"] is True
+        assert result["fallback"] is False
+
+    def test_clarification_needed_returns_clarification(self) -> None:
+        from agents.graph.agent_service import _resolve_followup_before_tool_routing
+        state: dict = {
+            "session_id": "s1",
+            "message": "nó gì?",
+            "language": "vi",
+            "history": [],
+            "prior_context": FollowUpContext(session_id="s1"),  # empty
+            "followup_decision": "clarification_needed",
+            "context_source": "none",
+            "response_text": "",
+            "places_response_ready": False,
+        }
+        result = _resolve_followup_before_tool_routing(state)
+        assert result is not None
+        assert result["intent"] == "clarification"
+        assert result["places_response_ready"] is True
+        assert result["fallback"] is False
+
+    def test_insufficient_context_returns_none(self) -> None:
+        from agents.graph.agent_service import _resolve_followup_before_tool_routing
+        state: dict = {
+            "session_id": "s1",
+            "message": "kiếm quán hải sản mới",
+            "language": "vi",
+            "history": [],
+            "prior_context": None,
+            "followup_decision": "insufficient_context",
+            "context_source": "none",
+            "response_text": "",
+            "places_response_ready": False,
+        }
+        result = _resolve_followup_before_tool_routing(state)
+        assert result is None  # Proceed to normal routing
+
+    def test_structured_context_with_empty_context_returns_none(self) -> None:
+        """If decision says structured_context but context isn't populated,
+        don't short-circuit — let normal routing handle it."""
+        from agents.graph.agent_service import _resolve_followup_before_tool_routing
+        state: dict = {
+            "session_id": "s1",
+            "message": "something",
+            "language": "vi",
+            "history": [],
+            "prior_context": FollowUpContext(session_id="s1"),  # not populated
+            "followup_decision": "structured_context",
+            "context_source": "none",
+            "response_text": "",
+            "places_response_ready": False,
+        }
+        result = _resolve_followup_before_tool_routing(state)
+        assert result is None  # Not populated → fall through to normal routing
+
+
+class TestAgentServiceFollowupResolution:
+    """Integration tests verifying that AgentService resolves follow-ups
+    before tool routing, with no retriever/place service calls."""
+
+    @pytest.mark.asyncio
+    async def test_structured_followup_no_retriever_no_place_service(self) -> None:
+        """A contextual follow-up resolved from structured context must NOT
+        call the retriever, NOT call the place service, and have fallback=False."""
+
+        class CallTracker:
+            def __init__(self):
+                self.retriever_calls = 0
+                self.place_service_calls = 0
+
+        tracker = CallTracker()
+
+        class NoopRetriever(Retriever):
+            def __init__(self):
+                pass
+
+            def search_with_citations(self, query, top_k=5):
+                tracker.retriever_calls += 1
+                from app.models.rag import RetrievalResult
+                return RetrievalResult(chunks=[]), []
+
+        class NoopPlaceService:
+            async def recommend(self, **kwargs):
+                tracker.place_service_calls += 1
+                raise RuntimeError("place service should NOT be called")
+
+        checkpointer = InMemoryAgentCheckpointer()
+        # Pre-seed a place response context
+        prior = FollowUpContext(
+            session_id="sess-t03-1",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_ids=["goong_t03"],
+            place_display_names=["Quán Hải Sản T03"],
+            score_breakdown_keys=["final_score"],
+        )
+        await checkpointer.save_context("sess-t03-1", prior)
+        await checkpointer.save_turn("sess-t03-1", "Tìm quán", "Dưới đây là gợi ý...")
+
+        service = AgentService(
+            retriever=NoopRetriever(),
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=NoopPlaceService(),
+            llm_service=None,  # No LLM → forces deterministic path if resolver doesn't short-circuit
+        )
+
+        # Contextual follow-up: references prior place name
+        response = await service.answer(
+            session_id="sess-t03-1",
+            message="Hải Sản T03 có ngon không?",
+            language="vi",
+        )
+
+        # Proves: no retriever, no place service, fallback=False
+        assert tracker.retriever_calls == 0, "Retriever should NOT be called for resolved follow-up"
+        assert tracker.place_service_calls == 0, "Place service should NOT be called for resolved follow-up"
+        assert response.fallback is False
+        assert response.intent == "followup_contextual"
+        assert len(response.message) > 0
+        assert "Hải Sản" in response.message or "T03" in response.message
+
+    @pytest.mark.asyncio
+    async def test_history_followup_no_retriever_no_place_service(self) -> None:
+        """A history-context follow-up must NOT call retriever or place service."""
+
+        class CallTracker:
+            def __init__(self):
+                self.retriever_calls = 0
+                self.place_service_calls = 0
+
+        tracker = CallTracker()
+
+        class NoopRetriever(Retriever):
+            def __init__(self):
+                pass
+
+            def search_with_citations(self, query, top_k=5):
+                tracker.retriever_calls += 1
+                from app.models.rag import RetrievalResult
+                return RetrievalResult(chunks=[]), []
+
+        checkpointer = InMemoryAgentCheckpointer()
+        # No structured context — just history
+        await checkpointer.save_turn("sess-t03-h1", "Gợi ý quán ăn", "Có 4 nhóm chính...")
+
+        service = AgentService(
+            retriever=NoopRetriever(),
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=None,
+            llm_service=None,
+        )
+
+        response = await service.answer(
+            session_id="sess-t03-h1",
+            message="ví dụ",
+            language="vi",
+        )
+
+        assert tracker.retriever_calls == 0
+        assert response.fallback is False
+        assert response.intent == "followup_history"
+        assert len(response.message) > 0
+
+    @pytest.mark.asyncio
+    async def test_new_place_request_not_blocked_by_prior_context(self) -> None:
+        """A new place request (not a follow-up) should still go through
+        normal place routing, even when prior context exists."""
+
+        class CallTracker:
+            def __init__(self):
+                self.place_service_calls = 0
+
+        tracker = CallTracker()
+
+        from app.models.response import ChatResponse as PlaceServiceResponse
+
+        class MockPlaceService:
+            async def recommend(self, **kwargs):
+                tracker.place_service_calls += 1
+                return PlaceServiceResponse(
+                    session_id=kwargs.get("session_id", "test"),
+                    message="Found places",
+                    places=[],
+                    citations=[],
+                    reasoning_log=None,
+                    intent=PLACE_RECOMMENDATION_INTENT,
+                    latency_ms=100.0,
+                    fallback=False,
+                )
+
+        checkpointer = InMemoryAgentCheckpointer()
+        # Pre-seed context from a prior turn
+        prior = FollowUpContext(
+            session_id="sess-t03-new",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_ids=["goong_old"],
+            place_display_names=["Quán Cũ"],
+        )
+        await checkpointer.save_context("sess-t03-new", prior)
+        await checkpointer.save_turn("sess-t03-new", "old query", "old response")
+
+        service = AgentService(
+            retriever=None,
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=MockPlaceService(),
+            llm_service=None,  # No LLM → deterministic routing
+        )
+
+        # New place request — NOT a follow-up
+        response = await service.answer(
+            session_id="sess-t03-new",
+            message="Tìm quán cà phê gần đây",
+            language="vi",
+        )
+
+        # Place service WAS called (normal routing, not blocked)
+        assert tracker.place_service_calls == 1
+        assert response.intent == PLACE_RECOMMENDATION_INTENT
+
+    @pytest.mark.asyncio
+    async def test_streaming_emits_correct_status_for_structured_followup(self) -> None:
+        """answer_stream must emit [STATUS] using_context for structured follow-ups."""
+        checkpointer = InMemoryAgentCheckpointer()
+        prior = FollowUpContext(
+            session_id="sess-t03-stream",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_ids=["goong_s"],
+            place_display_names=["Quán Stream Test"],
+        )
+        await checkpointer.save_context("sess-t03-stream", prior)
+        await checkpointer.save_turn("sess-t03-stream", "Tìm quán", "Gợi ý...")
+
+        service = AgentService(
+            retriever=None,
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=None,
+            llm_service=None,
+        )
+
+        events = []
+        async for event in service.answer_stream(
+            session_id="sess-t03-stream",
+            message="Stream Test mở cửa lúc mấy giờ?",
+            language="vi",
+        ):
+            events.append(event)
+
+        # First event should be the status token
+        assert any("using_context" in e for e in events), f"Expected [STATUS] using_context in {events}"
+        # Must have response content
+        assert any("using_context" not in e and len(e) > 0 for e in events)
+
+    @pytest.mark.asyncio
+    async def test_streaming_emits_using_history_for_history_followup(self) -> None:
+        """answer_stream must emit [STATUS] using_history for history follow-ups."""
+        checkpointer = InMemoryAgentCheckpointer()
+        await checkpointer.save_turn("sess-t03-sh", "Gợi ý", "4 nhóm chính...")
+
+        service = AgentService(
+            retriever=None,
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=None,
+            llm_service=None,
+        )
+
+        events = []
+        async for event in service.answer_stream(
+            session_id="sess-t03-sh",
+            message="ví dụ",
+            language="vi",
+        ):
+            events.append(event)
+
+        assert any("using_history" in e for e in events), f"Expected [STATUS] using_history in {events}"
+
+    @pytest.mark.asyncio
+    async def test_clarification_followup_no_tools_called(self) -> None:
+        """Ambiguous pronoun follow-up should return clarification without
+        calling retriever or place service."""
+
+        class CallTracker:
+            def __init__(self):
+                self.retriever_calls = 0
+                self.place_service_calls = 0
+
+        tracker = CallTracker()
+
+        class NoopRetriever(Retriever):
+            def __init__(self):
+                pass
+
+            def search_with_citations(self, query, top_k=5):
+                tracker.retriever_calls += 1
+                from app.models.rag import RetrievalResult
+                return RetrievalResult(chunks=[]), []
+
+        class NoopPlaceService:
+            async def recommend(self, **kwargs):
+                tracker.place_service_calls += 1
+                raise RuntimeError("should not be called")
+
+        checkpointer = InMemoryAgentCheckpointer()
+        # Empty context — will trigger clarification_needed
+        await checkpointer.save_turn("sess-t03-clarify", "hello", "hi")
+
+        service = AgentService(
+            retriever=NoopRetriever(),
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=NoopPlaceService(),
+            llm_service=None,
+        )
+
+        response = await service.answer(
+            session_id="sess-t03-clarify",
+            message="nó gì?",
+            language="vi",
+        )
+
+        assert tracker.retriever_calls == 0
+        assert tracker.place_service_calls == 0
+        assert response.fallback is False
+        assert response.intent == "clarification"
+        assert len(response.message) > 0
+
+    @pytest.mark.asyncio
+    async def test_insufficient_context_proceeds_to_normal_routing(self) -> None:
+        """insufficient_context should NOT be short-circuited — normal
+        routing should handle the new request."""
+
+        class CallTracker:
+            def __init__(self):
+                self.place_service_calls = 0
+
+        tracker = CallTracker()
+
+        from app.models.response import ChatResponse as PlaceServiceResponse
+
+        class MockPlaceService:
+            async def recommend(self, **kwargs):
+                tracker.place_service_calls += 1
+                return PlaceServiceResponse(
+                    session_id=kwargs.get("session_id", "test"),
+                    message="Found new places",
+                    places=[],
+                    citations=[],
+                    reasoning_log=None,
+                    intent=PLACE_RECOMMENDATION_INTENT,
+                    latency_ms=100.0,
+                    fallback=False,
+                )
+
+        checkpointer = InMemoryAgentCheckpointer()
+
+        service = AgentService(
+            retriever=None,
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=MockPlaceService(),
+            llm_service=None,
+        )
+
+        # New place request with no prior context → insufficient_context → normal routing
+        response = await service.answer(
+            session_id="sess-t03-insuff",
+            message="Tìm nhà hàng gần đây",
+            language="vi",
+        )
+
+        assert tracker.place_service_calls == 1, "New place request should reach place service"
+        assert response.intent == PLACE_RECOMMENDATION_INTENT
+
+    @pytest.mark.asyncio
+    async def test_followup_decision_reflected_in_response_intent(self) -> None:
+        """response.intent must reflect the follow-up decision for
+        structured and history paths."""
+
+        checkpointer = InMemoryAgentCheckpointer()
+        prior = FollowUpContext(
+            session_id="sess-t03-intent",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_display_names=["Quán Intent Test"],
+            place_ids=["goong_it"],
+        )
+        await checkpointer.save_context("sess-t03-intent", prior)
+        await checkpointer.save_turn("sess-t03-intent", "query", "response")
+
+        service = AgentService(
+            retriever=None,
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+            place_recommendation_service=None,
+            llm_service=None,
+        )
+
+        # Structured context follow-up
+        response = await service.answer(
+            session_id="sess-t03-intent",
+            message="Intent Test giá bao nhiêu?",
+            language="vi",
+        )
+        assert response.intent == "followup_contextual"
