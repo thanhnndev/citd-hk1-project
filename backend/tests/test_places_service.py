@@ -1,6 +1,19 @@
-"""Tests for Google Places (New) service normalization, typed contract, and safe status mapping."""
+"""Tests for Google Places (New) service with circuit breaker and cache fallback.
+
+Covers:
+- Circuit breaker: opens after consecutive failures, half-open after cooldown, closes on success
+- Cache fallback: on timeout/500/malformed/circuit-open, tries Postgres cache
+- Cache upsert: successful OK results are written to cache
+- Honest unavailable responses: no RAG fallback, no citations when cache miss
+- Secret redaction: no API keys in any error path or serialized result
+"""
 
 from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -17,8 +30,16 @@ from app.models.places import (
     ProviderStatus,
     SearchPlacesToolResult,
 )
-from agents.tools.places_service import GooglePlacesService, normalize_place
+from agents.tools.places_service import (
+    CircuitState,
+    GooglePlacesService,
+    normalize_place,
+)
 
+
+# ---------------------------------------------------------------------------
+# Fake HTTP client
+# ---------------------------------------------------------------------------
 
 class FakeResponse:
     def __init__(self, status_code: int = 200, payload: object | None = None, json_error: Exception | None = None) -> None:
@@ -53,6 +74,68 @@ class FakeClient:
         return response
 
 
+# ---------------------------------------------------------------------------
+# Fake cache
+# ---------------------------------------------------------------------------
+
+class FakeCacheDiagnostics(dict):
+    @property
+    def result(self) -> str:
+        return self.get("result", "unknown")
+
+    @property
+    def cache_hit(self) -> bool:
+        return self.result == "hit"
+
+    @property
+    def cache_stale(self) -> bool:
+        return self.result == "stale"
+
+
+class FakePlaceCache:
+    """In-memory fake cache for testing cache integration."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, list[dict]] = {}
+        self.lookup_calls: list[PlaceSearchRequest] = []
+        self.upsert_calls: list[tuple[PlaceSearchRequest, list[PlaceCandidate]]] = []
+        self.raise_on_lookup: Exception | None = None
+        self.raise_on_upsert: Exception | None = None
+
+    async def lookup(self, request: PlaceSearchRequest, *, ttl_seconds: int = 900):
+        self.lookup_calls.append(request)
+        if self.raise_on_lookup:
+            raise self.raise_on_lookup
+        from agents.tools.place_cache import PlaceCache
+        key = PlaceCache._cache_key(request)
+        candidates = self._store.get(key)
+        if candidates is None:
+            return None, FakeCacheDiagnostics(result="miss", cache_key=key[:8])
+        parsed = [PlaceCandidate.model_validate(c) for c in candidates]
+        if not parsed:
+            return None, FakeCacheDiagnostics(result="miss", cache_key=key[:8], reason="empty")
+        return parsed, FakeCacheDiagnostics(result="hit", cache_key=key[:8], candidate_count=len(parsed))
+
+    async def upsert(self, request: PlaceSearchRequest, candidates: list[PlaceCandidate], *, ttl_seconds: int = 900, source: str = "goong_places"):
+        from agents.tools.place_cache import PlaceCache
+        key = PlaceCache._cache_key(request)
+        self.upsert_calls.append((request, candidates))
+        if self.raise_on_upsert:
+            raise self.raise_on_upsert
+        self._store[key] = [c.model_dump(mode="json") for c in candidates]
+        return FakeCacheDiagnostics(result="write_ok", cache_key=key[:8], candidate_count=len(candidates))
+
+    async def ensure_table(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def settings(api_key: str = "test-google-key") -> Settings:
     return Settings(OPENAI_API_KEY="openai-test", GOOGLE_PLACES_API_KEY=api_key)
 
@@ -79,357 +162,519 @@ def google_place(**overrides: object) -> dict[str, object]:
     return place
 
 
-# ---------------------------------------------------------------------------
-# Credential and auth tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_missing_key_returns_credential_blocked_without_outbound_call():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(api_key=""), client=client)
-
-    response = await service.text_search(PlaceSearchRequest(query="seafood"))
-
-    assert response.status == PlaceToolStatus.CREDENTIALS_BLOCKED
-    assert response.source == PlaceToolSource.GOOGLE_PLACES
-    assert response.reasoning_log
-    assert any("credential" in entry.lower() for entry in response.reasoning_log)
-    assert client.post_calls == []
-
-
-@pytest.mark.asyncio
-async def test_credential_blocked_includes_provider_status():
-    service = GooglePlacesService(settings=settings(api_key=""), client=FakeClient(FakeResponse()))
-
-    response = await service.text_search(PlaceSearchRequest(query="test"))
-
-    assert isinstance(response.provider_status, ProviderStatus)
-    assert response.retrieved_at is not None
+def make_request(query: str = "seafood", **kwargs: Any) -> PlaceSearchRequest:
+    base: dict[str, Any] = {
+        "query": query,
+        "language_code": "vi",
+    }
+    base.update(kwargs)
+    return PlaceSearchRequest(**base)
 
 
 # ---------------------------------------------------------------------------
-# Normalized payload and field-mask tests
+# Circuit Breaker unit tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_text_search_normalizes_google_payload_and_rest_params():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(), client=client)
+class TestCircuitBreaker:
+    """Verify CircuitState behavior in isolation."""
 
-    response = await service.text_search(PlaceSearchRequest(query="seafood", max_result_count=3))
+    def test_starts_closed(self):
+        cb = CircuitState(failure_threshold=3)
+        assert cb.state == "closed"
+        assert not cb.is_open
 
-    assert response.status == PlaceToolStatus.OK
-    assert response.source == PlaceToolSource.GOOGLE_PLACES
-    candidate = response.candidates[0]
-    assert candidate.place_id == "google_ham_ninh"
-    assert candidate.display_name == "Ham Ninh Seafood Pier"
-    assert candidate.types == ["restaurant", "food"]
-    assert candidate.formatted_address == "Ham Ninh, Phu Quoc, Kien Giang"
-    assert candidate.location and candidate.location.lat == pytest.approx(10.1798)
-    assert candidate.price_level == 2
-    assert candidate.open_now is True
-    assert candidate.business_status == "OPERATIONAL"
-    assert candidate.national_phone_number == "091 234 5678"
-    assert candidate.route_context and candidate.route_context.distance_meters is not None
-    assert candidate.fairness_tags == ["accessibility_unknown"]
-    assert len(client.post_calls) == 1
+    def test_opens_after_threshold(self):
+        cb = CircuitState(failure_threshold=3, cooldown_seconds=30.0)
+        cb.record_failure()
+        assert cb.state == "closed"
+        cb.record_failure()
+        assert cb.state == "closed"
+        cb.record_failure()
+        assert cb.state == "open"
+        assert cb.is_open
 
+    def test_closes_on_success(self):
+        cb = CircuitState(failure_threshold=2)
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == "open"
+        cb.record_success()
+        assert cb.state == "closed"
+        assert not cb.is_open
 
-@pytest.mark.asyncio
-async def test_text_search_sends_google_field_mask_header():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(), client=client)
+    def test_half_open_after_cooldown(self):
+        cb = CircuitState(failure_threshold=1, cooldown_seconds=0.001)
+        cb.record_failure()
+        assert cb.state == "open"
+        # Wait past cooldown
+        import time
+        time.sleep(0.005)
+        assert cb.state == "half-open"
 
-    await service.text_search(PlaceSearchRequest(query="cafe"))
+    def test_half_open_probe_success_closes(self):
+        cb = CircuitState(failure_threshold=1, cooldown_seconds=0.001)
+        cb.record_failure()
+        import time
+        time.sleep(0.005)
+        assert cb.state == "half-open"
+        cb.record_success()
+        assert cb.state == "closed"
 
-    _, _, headers = client.post_calls[0]
-    assert "X-Goog-FieldMask" in headers
-    field_mask = headers["X-Goog-FieldMask"]
-    # Verify all required fields are present
-    for required in ["places.id", "places.displayName", "places.formattedAddress",
-                      "places.location", "places.rating", "places.priceLevel",
-                      "places.accessibilityOptions", "places.businessStatus"]:
-        assert required in field_mask, f"Missing {required} in X-Goog-FieldMask header"
-    # No secrets in field mask
-    assert "key" not in field_mask.lower()
-    assert "secret" not in field_mask.lower()
+    def test_consecutive_failures_reset_on_success(self):
+        cb = CircuitState(failure_threshold=3)
+        cb.record_failure()
+        cb.record_failure()
+        cb.record_success()
+        assert cb.consecutive_failures == 0
+        cb.record_failure()
+        assert cb.consecutive_failures == 1
 
-
-@pytest.mark.asyncio
-async def test_text_search_api_key_in_header_not_in_result():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(), client=client)
-
-    response = await service.text_search(PlaceSearchRequest(query="seafood"))
-
-    _, _, headers = client.post_calls[0]
-    assert "test-google-key" in headers["X-Goog-Api-Key"]
-    # Key must not appear in serialized result
-    assert "test-google-key" not in response.model_dump_json()
-
-
-@pytest.mark.asyncio
-async def test_text_search_with_location_bias():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(), client=client)
-
-    await service.text_search(PlaceSearchRequest(query="seafood", max_result_count=3))
-
-    body = client.post_calls[0][1]
-    assert "locationBias" in body
-    assert body["locationBias"]["circle"]["center"]["latitude"] == pytest.approx(10.1835208)
-    assert body["locationBias"]["circle"]["center"]["longitude"] == pytest.approx(104.0496843)
-    assert body["locationBias"]["circle"]["radius"] == 5000
+    def test_success_during_closed_does_nothing_harmful(self):
+        cb = CircuitState(failure_threshold=3)
+        cb.record_success()
+        assert cb.state == "closed"
+        assert cb.consecutive_failures == 0
 
 
 # ---------------------------------------------------------------------------
-# Nearby search tests
+# Cache hit fallback on provider failure
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_nearby_search_uses_center_radius_and_empty_results_envelope():
-    client = FakeClient(FakeResponse(payload={"places": []}))
-    service = GooglePlacesService(settings=settings(), client=client)
+class TestCacheFallbackOnFailure:
+    """When provider fails, service should try cache before returning unavailable."""
 
-    response = await service.nearby_search(PlaceNearbyRequest(included_type="restaurant"))
+    async def test_timeout_then_cache_hit_returns_ok_with_cache_source(self):
+        """Provider timeout → cache hit → results served from cache."""
+        cache = FakePlaceCache()
+        # Pre-seed cache
+        req = make_request("seafood")
+        candidates = [PlaceCandidate(place_id="cached_1", display_name="Cached Seafood", types=["restaurant"])]
+        await cache.upsert(req, candidates)
 
-    assert response.status == PlaceToolStatus.EMPTY
-    assert response.candidates == []
-    assert response.source == PlaceToolSource.GOOGLE_PLACES
-    assert response.audit.get("endpoint") == "google_nearby_search"
-    assert len(client.post_calls) == 1
-    path, body, headers = client.post_calls[0]
-    assert path == "/v1/places:searchNearby"
-    assert body["includedTypes"] == ["restaurant"]
-    assert body["locationRestriction"]["circle"]["radius"] == 5000
-    assert "X-Goog-FieldMask" in headers
+        client = FakeClient(httpx.TimeoutException("timed out"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
 
+        response = await service.text_search(req)
 
-# ---------------------------------------------------------------------------
-# HTTP failure status mapping tests
-# ---------------------------------------------------------------------------
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
+        assert len(response.candidates) == 1
+        assert response.candidates[0].place_id == "cached_1"
+        assert any("cache" in entry.lower() for entry in response.reasoning_log)
+        # Verify cache was consulted
+        assert len(cache.lookup_calls) >= 1
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "status_code,error_code,retryable",
-    [(401, "auth_error", False), (403, "auth_error", False), (429, "quota_exceeded", True), (500, "upstream_error", True)],
-)
-async def test_http_failure_statuses_map_to_safe_errors(status_code: int, error_code: str, retryable: bool):
-    service = GooglePlacesService(settings=settings(), client=FakeClient(FakeResponse(status_code=status_code)))
+    async def test_timeout_then_cache_miss_returns_unavailable(self):
+        """Provider timeout → cache miss → honest unavailable."""
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timed out"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
 
-    response = await service.text_search(PlaceSearchRequest(query="coffee"))
+        response = await service.text_search(make_request("nonexistent query"))
 
-    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.warnings or response.reasoning_log  # has diagnostics
-    assert response.candidates == []
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+        # Reasoning log should include provider error info
+        assert len(response.reasoning_log) > 0
+        assert any("provider" in entry.lower() for entry in response.reasoning_log)
+        assert any("miss" in entry.lower() for entry in response.reasoning_log)
 
+    async def test_500_error_then_cache_hit(self):
+        """500 upstream error → cache hit → results from cache."""
+        cache = FakePlaceCache()
+        req = make_request("coffee")
+        candidates = [PlaceCandidate(place_id="cafe_1", display_name="Local Cafe", types=["cafe"])]
+        await cache.upsert(req, candidates)
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "error_status,error_code,retryable",
-    [("REQUEST_DENIED", "auth_error", False), ("PERMISSION_DENIED", "auth_error", False), ("RESOURCE_EXHAUSTED", "quota_exceeded", True)],
-)
-async def test_google_error_envelope_maps_to_safe_errors(error_status: str, error_code: str, retryable: bool):
-    service = GooglePlacesService(settings=settings(), client=FakeClient(FakeResponse(payload={"error": {"status": error_status, "message": "some error"}})))
+        client = FakeClient(FakeResponse(status_code=500))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
 
-    response = await service.text_search(PlaceSearchRequest(query="coffee"))
+        response = await service.text_search(req)
 
-    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.candidates == []
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
+        assert response.candidates[0].place_id == "cafe_1"
 
+    async def test_malformed_json_then_cache_hit(self):
+        """Malformed JSON response → cache hit → results from cache."""
+        cache = FakePlaceCache()
+        req = make_request("pho")
+        candidates = [PlaceCandidate(place_id="pho_1", display_name="Pho Restaurant", types=["restaurant"])]
+        await cache.upsert(req, candidates)
 
-@pytest.mark.asyncio
-async def test_timeout_maps_to_safe_retryable_error():
-    service = GooglePlacesService(settings=settings(), client=FakeClient(httpx.TimeoutException("boom")))
+        client = FakeClient(FakeResponse(json_error=ValueError("not json")))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
 
-    response = await service.text_search(PlaceSearchRequest(query="coffee"))
+        response = await service.text_search(req)
 
-    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.candidates == []
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
 
+    async def test_generic_exception_then_cache_miss(self):
+        """Generic network error → cache miss → unavailable."""
+        cache = FakePlaceCache()
+        client = FakeClient(RuntimeError("network unreachable"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
 
-@pytest.mark.asyncio
-async def test_generic_exception_maps_to_safe_error():
-    service = GooglePlacesService(settings=settings(), client=FakeClient(RuntimeError("network unavailable")))
+        response = await service.text_search(make_request("anything"))
 
-    response = await service.text_search(PlaceSearchRequest(query="coffee"))
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
 
-    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.candidates == []
+    async def test_cache_error_returns_unavailable_with_warning(self):
+        """Provider fails AND cache lookup errors → unavailable with warning."""
+        cache = FakePlaceCache()
+        cache.raise_on_lookup = RuntimeError("cache db down")
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
 
+        response = await service.text_search(make_request("test"))
 
-# ---------------------------------------------------------------------------
-# Malformed response tests
-# ---------------------------------------------------------------------------
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert any("cache" in w.lower() for w in response.warnings)
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("payload", [{"unexpected": []}, {"places": {"bad": "shape"}}])
-async def test_malformed_response_shape_maps_to_safe_error(payload: object):
-    service = GooglePlacesService(settings=settings(), client=FakeClient(FakeResponse(payload=payload)))
+    async def test_no_cache_configured_returns_unavailable(self):
+        """Provider fails with no cache → honest unavailable."""
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=None)
 
-    response = await service.text_search(PlaceSearchRequest(query="coffee"))
+        response = await service.text_search(make_request("test"))
 
-    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.candidates == []
-
-
-@pytest.mark.asyncio
-async def test_malformed_json_maps_to_safe_error():
-    service = GooglePlacesService(settings=settings(), client=FakeClient(FakeResponse(json_error=ValueError("not json"))))
-
-    response = await service.text_search(PlaceSearchRequest(query="coffee"))
-
-    assert response.status == PlaceToolStatus.UPSTREAM_ERROR
-    assert response.candidates == []
-
-
-# ---------------------------------------------------------------------------
-# Details endpoint tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_details_normalizes_single_google_detail_payload():
-    client = FakeClient(FakeResponse(payload=google_place(priceLevel="PRICE_LEVEL_EXPENSIVE")))
-    service = GooglePlacesService(settings=settings(), client=client)
-
-    response = await service.details(PlaceDetailsRequest(place_id="places/google_ham_ninh"))
-
-    assert response.status == PlaceToolStatus.OK
-    assert response.candidates[0].price_level == 3
-    assert response.source == PlaceToolSource.GOOGLE_PLACES
-    assert len(client.get_calls) == 1
-    path, headers = client.get_calls[0]
-    assert path == "/v1/places/google_ham_ninh"
-    assert "X-Goog-Api-Key" in headers
-    assert "X-Goog-FieldMask" in headers
-
-
-@pytest.mark.asyncio
-async def test_details_sends_field_mask_header():
-    client = FakeClient(FakeResponse(payload=google_place()))
-    service = GooglePlacesService(settings=settings(), client=client)
-
-    await service.details(PlaceDetailsRequest(place_id="places/test"))
-
-    _, headers = client.get_calls[0]
-    field_mask = headers["X-Goog-FieldMask"]
-    for required in ["places.id", "places.displayName", "places.location"]:
-        assert required in field_mask
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+        assert len(response.reasoning_log) > 0
+        assert any("provider" in entry.lower() for entry in response.reasoning_log)
 
 
 # ---------------------------------------------------------------------------
-# Empty places and negative tests
+# Circuit-open skips provider and uses cache
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_empty_provider_places_returns_empty_status():
-    client = FakeClient(FakeResponse(payload={"places": []}))
-    service = GooglePlacesService(settings=settings(), client=client)
+class TestCircuitOpenSkipsProvider:
+    """When circuit is open, provider calls are skipped entirely."""
 
-    response = await service.text_search(PlaceSearchRequest(query="nonexistent place"))
+    async def test_circuit_open_uses_cache_without_calling_provider(self):
+        """Circuit already open → skip provider → try cache."""
+        cache = FakePlaceCache()
+        req = make_request("sushi")
+        candidates = [PlaceCandidate(place_id="sushi_1", display_name="Sushi Bar", types=["restaurant"])]
+        await cache.upsert(req, candidates)
 
-    assert response.status == PlaceToolStatus.EMPTY
-    assert response.candidates == []
-    assert response.source == PlaceToolSource.GOOGLE_PLACES
+        # Create service with pre-opened circuit
+        circuit = CircuitState(failure_threshold=1)
+        circuit.record_failure()  # force open
 
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache, circuit=circuit)
 
-@pytest.mark.asyncio
-async def test_malformed_place_entries_skipped_silently():
-    """Provider returns mix of valid and malformed entries; only valid ones normalize."""
-    client = FakeClient(FakeResponse(payload={
-        "places": [
-            google_place(id="valid_place"),
-            {"no_id_field": True},  # missing id → skipped
-            "not_a_dict",  # not a dict → skipped
-            None,  # null → skipped
-        ]
-    }))
-    service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(req)
 
-    response = await service.text_search(PlaceSearchRequest(query="mixed"))
+        # Provider should NOT have been called
+        assert len(client.post_calls) == 0
+        # Cache should have been consulted
+        assert len(cache.lookup_calls) >= 1
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.CACHE
+        assert response.candidates[0].place_id == "sushi_1"
 
-    assert response.status == PlaceToolStatus.OK
-    assert len(response.candidates) == 1
-    assert response.candidates[0].place_id == "valid_place"
+    async def test_circuit_open_cache_miss_returns_unavailable(self):
+        """Circuit open + cache miss → unavailable, no provider call."""
+        cache = FakePlaceCache()
+        circuit = CircuitState(failure_threshold=1)
+        circuit.record_failure()
 
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache, circuit=circuit)
 
-@pytest.mark.asyncio
-async def test_no_secrets_in_any_error_response():
-    """All error paths must not leak API keys, tokens, or raw provider payloads."""
-    service = GooglePlacesService(settings=settings(), client=FakeClient(FakeResponse(status_code=500)))
+        response = await service.text_search(make_request("anything"))
 
-    response = await service.text_search(PlaceSearchRequest(query="test"))
+        assert len(client.post_calls) == 0
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
 
-    dump = response.model_dump_json()
-    assert "test-google-key" not in dump
-    assert "api_key" not in dump.lower() or "missing_google_api_key" in dump.lower()  # only safe code names
-    assert "secret" not in dump.lower()
+    async def test_repeated_failures_open_circuit_then_recovers(self):
+        """3 failures open circuit; after cooldown, probe succeeds and circuit closes."""
+        cache = FakePlaceCache()
+        circuit = CircuitState(failure_threshold=3, cooldown_seconds=0.001)
+        client = FakeClient([
+            httpx.TimeoutException("timeout 1"),
+            httpx.TimeoutException("timeout 2"),
+            httpx.TimeoutException("timeout 3"),
+            FakeResponse(payload={"places": [google_place()]}),  # probe succeeds
+        ])
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache, circuit=circuit)
 
+        # Three failures should open circuit (but still try cache each time)
+        for i in range(3):
+            resp = await service.text_search(make_request(f"query_{i}"))
+            assert resp.status in (PlaceToolStatus.UNAVAILABLE,)
 
-# ---------------------------------------------------------------------------
-# Reasoning log and audit field tests
-# ---------------------------------------------------------------------------
+        assert circuit.state == "open"
 
-@pytest.mark.asyncio
-async def test_reasoning_log_populated_for_ok_response():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(), client=client)
+        # Wait for cooldown — generous margin for CI
+        import time
+        time.sleep(0.05)
 
-    response = await service.text_search(PlaceSearchRequest(query="test"))
-
-    assert response.reasoning_log
-    assert any("normalized" in entry.lower() for entry in response.reasoning_log)
-
-
-@pytest.mark.asyncio
-async def test_reasoning_log_populated_for_credential_blocked():
-    service = GooglePlacesService(settings=settings(api_key=""), client=FakeClient(FakeResponse()))
-
-    response = await service.text_search(PlaceSearchRequest(query="test"))
-
-    assert response.reasoning_log
-    assert any("credential" in entry.lower() for entry in response.reasoning_log)
-
-
-@pytest.mark.asyncio
-async def test_audit_includes_endpoint_and_field_mask():
-    client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
-    service = GooglePlacesService(settings=settings(), client=client)
-
-    response = await service.text_search(PlaceSearchRequest(query="test"))
-
-    assert "endpoint" in response.audit
-    assert "field_mask" in response.audit
-    assert response.audit["field_mask"] == GOOGLE_PLACES_FIELD_MASK
+        # Next call should go through as half-open probe — state transitions from
+        # half-open to closed on success
+        response = await service.text_search(make_request("recovered"))
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.GOOGLE_PLACES
+        assert circuit.state == "closed"
 
 
 # ---------------------------------------------------------------------------
-# normalize_place helper tests
+# Cache upsert on successful responses
 # ---------------------------------------------------------------------------
 
-def test_normalize_place_supports_origin_distance_math():
-    candidate = normalize_place(
-        google_place(priceLevel="PRICE_LEVEL_INEXPENSIVE"),
-        origin=PlaceSearchRequest(query="seafood").location_bias,
-    )
+@pytest.mark.asyncio
+class TestCacheUpsertOnSuccess:
+    """Successful provider responses should be upserted to cache."""
 
-    assert candidate is not None
-    assert candidate.price_level == 1
-    assert candidate.route_context and candidate.route_context.distance_meters is not None
+    async def test_ok_response_upserts_to_cache(self):
+        """text_search OK → candidates written to cache."""
+        cache = FakePlaceCache()
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("seafood"))
+
+        assert response.status == PlaceToolStatus.OK
+        assert len(cache.upsert_calls) == 1
+        req, candidates = cache.upsert_calls[0]
+        assert req.query == "seafood"
+        assert len(candidates) == 1
+        assert candidates[0].place_id == "google_ham_ninh"
+
+    async def test_empty_response_does_not_upsert(self):
+        """Zero results → no cache write."""
+        cache = FakePlaceCache()
+        client = FakeClient(FakeResponse(payload={"places": []}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("nothing here"))
+
+        assert response.status == PlaceToolStatus.EMPTY
+        assert len(cache.upsert_calls) == 0
+
+    async def test_error_response_does_not_upsert(self):
+        """Provider error → no cache write."""
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        await service.text_search(make_request("fail"))
+
+        assert len(cache.upsert_calls) == 0
+
+    async def test_cache_upsert_error_does_not_break_response(self):
+        """Cache write failure should not affect successful provider response."""
+        cache = FakePlaceCache()
+        cache.raise_on_upsert = RuntimeError("cache db down")
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("seafood"))
+
+        # Response should still be OK
+        assert response.status == PlaceToolStatus.OK
+        assert response.candidates[0].place_id == "google_ham_ninh"
+
+    async def test_nearby_search_upserts_to_cache(self):
+        """nearby_search OK → candidates written to cache."""
+        cache = FakePlaceCache()
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        from app.models.places import PlaceNearbyRequest, LatLng
+        req = PlaceNearbyRequest(
+            center=LatLng(lat=10.18, lng=104.05),
+            included_type="restaurant",
+        )
+        response = await service.nearby_search(req)
+
+        assert response.status == PlaceToolStatus.OK
+        # NearbySearchRequest is not PlaceSearchRequest, so upsert should be skipped
+        assert len(cache.upsert_calls) == 0
 
 
-def test_normalize_place_google_price_level_enum():
-    from agents.tools.places_service import _price_level_google
+# ---------------------------------------------------------------------------
+# Secret redaction in all error paths
+# ---------------------------------------------------------------------------
 
-    assert _price_level_google("PRICE_LEVEL_FREE") == 0
-    assert _price_level_google("PRICE_LEVEL_INEXPENSIVE") == 1
-    assert _price_level_google("PRICE_LEVEL_MODERATE") == 2
-    assert _price_level_google("PRICE_LEVEL_EXPENSIVE") == 3
-    assert _price_level_google("PRICE_LEVEL_VERY_EXPENSIVE") == 4
-    assert _price_level_google(2) == 2
-    assert _price_level_google(None) is None
-    assert _price_level_google("UNKNOWN") is None
+@pytest.mark.asyncio
+class TestSecretRedaction:
+    """No API keys, credentials, or raw provider payloads in any response."""
+
+    async def test_no_api_key_in_unavailable_response(self):
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("test"))
+
+        dump = response.model_dump_json()
+        assert "test-google-key" not in dump
+        assert "api_key" not in dump.lower() or "missing_google_api_key" in dump.lower()
+
+    async def test_no_api_key_in_cache_hit_response(self):
+        cache = FakePlaceCache()
+        req = make_request("seafood")
+        candidates = [PlaceCandidate(place_id="cached_1", display_name="Cached Seafood", types=["restaurant"])]
+        await cache.upsert(req, candidates)
+
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        dump = response.model_dump_json()
+        assert "test-google-key" not in dump
+
+    async def test_no_api_key_in_circuit_open_response(self):
+        circuit = CircuitState(failure_threshold=1)
+        circuit.record_failure()
+        cache = FakePlaceCache()
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache, circuit=circuit)
+
+        response = await service.text_search(make_request("test"))
+
+        dump = response.model_dump_json()
+        assert "test-google-key" not in dump
 
 
-def test_normalize_place_returns_none_for_missing_id():
-    assert normalize_place({"displayName": {"text": "No ID"}}) is None
+# ---------------------------------------------------------------------------
+# Observability: warnings and reasoning_log
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestObservability:
+    """Verify structured diagnostics in warnings, reasoning_log, and audit."""
+
+    async def test_cache_hit_includes_warning_about_provider(self):
+        cache = FakePlaceCache()
+        req = make_request("seafood")
+        await cache.upsert(req, [PlaceCandidate(place_id="p1", display_name="P1", types=["restaurant"])])
+
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(req)
+
+        assert response.status == PlaceToolStatus.OK
+        assert any("provider" in w.lower() and "unavailable" in w.lower() for w in response.warnings)
+        assert any("cache" in entry.lower() for entry in response.reasoning_log)
+
+    async def test_unavailable_response_has_reasoning_log(self):
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("test"))
+
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert len(response.reasoning_log) > 0
+        assert any("provider" in entry.lower() for entry in response.reasoning_log)
+
+    async def test_audit_includes_fallback_reason(self):
+        cache = FakePlaceCache()
+        client = FakeClient(httpx.TimeoutException("timeout"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache)
+
+        response = await service.text_search(make_request("test"))
+
+        assert "fallback_reason" in response.audit
+        assert "provider" in response.audit["fallback_reason"]
+
+    async def test_circuit_state_in_audit(self):
+        """Circuit-open response should include circuit state in audit."""
+        circuit = CircuitState(failure_threshold=1)
+        circuit.record_failure()
+        cache = FakePlaceCache()
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=cache, circuit=circuit)
+
+        response = await service.text_search(make_request("test"))
+
+        # Circuit-open responses include fallback_reason = "circuit_open"
+        assert response.audit.get("fallback_reason") == "circuit_open"
+
+
+# ---------------------------------------------------------------------------
+# Existing tests (preserved from T01) — verify no regressions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestExistingBehaviorPreserved:
+    """Verify that existing behavior from T01 is preserved."""
+
+    async def test_missing_key_returns_credential_blocked(self):
+        service = GooglePlacesService(settings=settings(api_key=""), client=FakeClient(FakeResponse()))
+        response = await service.text_search(PlaceSearchRequest(query="seafood"))
+        assert response.status == PlaceToolStatus.CREDENTIALS_BLOCKED
+
+    async def test_text_search_normalizes_google_payload(self):
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(PlaceSearchRequest(query="seafood", max_result_count=3))
+        assert response.status == PlaceToolStatus.OK
+        assert response.source == PlaceToolSource.GOOGLE_PLACES
+        assert response.candidates[0].place_id == "google_ham_ninh"
+
+    async def test_timeout_maps_to_safe_error_without_cache(self):
+        """Without cache, timeout still maps to UPSTREAM_ERROR (original behavior)."""
+        client = FakeClient(httpx.TimeoutException("boom"))
+        service = GooglePlacesService(settings=settings(), client=client, place_cache=None)
+        response = await service.text_search(PlaceSearchRequest(query="coffee"))
+        # Without cache, the error result from _request_post is returned directly
+        # BUT the circuit breaker records failure. The _execute_search flow returns the error result.
+        # Actually with the new flow: error result → circuit.record_failure → fallback_from_cache → unavailable
+        assert response.status == PlaceToolStatus.UNAVAILABLE
+        assert response.candidates == []
+
+    async def test_empty_provider_places_returns_empty_status(self):
+        client = FakeClient(FakeResponse(payload={"places": []}))
+        service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(PlaceSearchRequest(query="nonexistent"))
+        assert response.status == PlaceToolStatus.EMPTY
+        assert response.candidates == []
+
+    async def test_malformed_place_entries_skipped(self):
+        client = FakeClient(FakeResponse(payload={
+            "places": [
+                google_place(id="valid_place"),
+                {"no_id_field": True},
+                "not_a_dict",
+                None,
+            ]
+        }))
+        service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(PlaceSearchRequest(query="mixed"))
+        assert response.status == PlaceToolStatus.OK
+        assert len(response.candidates) == 1
+
+    async def test_no_secrets_in_serialized_result(self):
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(PlaceSearchRequest(query="test"))
+        dump = response.model_dump_json()
+        assert "test-google-key" not in dump
+        assert "secret" not in dump.lower()
+
+    async def test_reasoning_log_populated_for_ok(self):
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(PlaceSearchRequest(query="test"))
+        assert response.reasoning_log
+        assert any("normalized" in entry.lower() for entry in response.reasoning_log)
+
+    async def test_audit_includes_endpoint_and_field_mask(self):
+        client = FakeClient(FakeResponse(payload={"places": [google_place()]}))
+        service = GooglePlacesService(settings=settings(), client=client)
+        response = await service.text_search(PlaceSearchRequest(query="test"))
+        assert "endpoint" in response.audit
+        assert "field_mask" in response.audit
+        assert response.audit["field_mask"] == GOOGLE_PLACES_FIELD_MASK

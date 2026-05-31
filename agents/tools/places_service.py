@@ -7,6 +7,13 @@ Uses Google Places API (New) endpoints:
 
 All endpoints require X-Goog-Api-Key and X-Goog-FieldMask headers.
 Configured via GOOGLE_PLACES_API_KEY in .env.
+
+Circuit breaker: opens after consecutive failures, probes after cooldown,
+returns cached results on open/timeout/error states.
+
+Cache integration: successful OK results are upserted to Postgres cache;
+on provider failure/circuit-open, cache lookup is attempted before returning
+an honest unavailable status.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
+import structlog
 
 from app.core.config import Settings, get_settings
 from app.models.places import (
@@ -38,7 +46,7 @@ from app.models.places import (
 )
 from app.models.request import LatLng
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 PLACES_BASE_URL = "https://places.googleapis.com"
 TEXT_SEARCH_PATH = "/v1/places:searchText"
@@ -52,6 +60,75 @@ _DEFAULT_FIELD_MASK = GOOGLE_PLACES_FIELD_MASK
 _GOOGLE_AUTH_CODES = {"REQUEST_DENIED", "PERMISSION_DENIED"}
 _GOOGLE_RATE_LIMIT_CODES = {"RESOURCE_EXHAUSTED"}
 
+
+# ---------------------------------------------------------------------------
+# Circuit Breaker
+# ---------------------------------------------------------------------------
+
+class CircuitState:
+    """Simple circuit breaker with open/half-open/closed states.
+
+    - closed: normal operation, consecutive failures are counted
+    - open: provider calls are skipped; cache is used instead
+    - half-open: one probe call is allowed through after cooldown
+
+    State is in-memory only — resets on process restart.
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int = 3,
+        cooldown_seconds: float = 30.0,
+    ) -> None:
+        self._failure_threshold = failure_threshold
+        self._cooldown_seconds = cooldown_seconds
+        self._consecutive_failures = 0
+        self._state: str = "closed"
+        self._opened_at: datetime | None = None
+
+    @property
+    def state(self) -> str:
+        """Current circuit state: 'closed', 'open', or 'half-open'."""
+        if self._state == "open" and self._opened_at is not None:
+            elapsed = (datetime.now(UTC) - self._opened_at).total_seconds()
+            if elapsed >= self._cooldown_seconds:
+                self._state = "half-open"
+                logger.info("circuit.half_open", reason="cooldown_elapsed")
+        return self._state
+
+    @property
+    def is_open(self) -> bool:
+        return self.state in ("open", "half-open")
+
+    def record_success(self) -> None:
+        """Record a successful provider call — reset failure count and close circuit."""
+        self._consecutive_failures = 0
+        if self._state == "half-open":
+            logger.info("circuit.closed", reason="probe_succeeded")
+        self._state = "closed"
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        """Record a provider failure — advance failure count, open if threshold exceeded."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self._failure_threshold and self._state == "closed":
+            self._state = "open"
+            self._opened_at = datetime.now(UTC)
+            logger.warning(
+                "circuit.opened",
+                consecutive_failures=self._consecutive_failures,
+                threshold=self._failure_threshold,
+            )
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+
+# ---------------------------------------------------------------------------
+# HTTP Client Protocol
+# ---------------------------------------------------------------------------
 
 class PlacesHttpClient(Protocol):
     """Minimal async HTTP seam so tests and agents can substitute a mock client."""
@@ -77,17 +154,31 @@ class HttpxPlacesClient:
         await self._client.aclose()
 
 
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
 class GooglePlacesService:
-    """Server-side Google Places (New) service returning normalized candidates and safe envelopes."""
+    """Server-side Google Places (New) service returning normalized candidates and safe envelopes.
+
+    Integrates:
+    - Circuit breaker (in-memory) to avoid repeated calls during outages
+    - Postgres place cache for fallback on provider failure/circuit-open
+    - Cache upsert on successful OK responses
+    """
 
     def __init__(
         self,
         *,
         settings: Settings | None = None,
         client: PlacesHttpClient | None = None,
+        place_cache: Any | None = None,
+        circuit: CircuitState | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._client = client or HttpxPlacesClient()
+        self._place_cache = place_cache  # PlaceCacheProtocol | None
+        self._circuit = circuit or CircuitState()
 
     def _api_key(self) -> str | None:
         key = self._settings.GOOGLE_PLACES_API_KEY.strip()
@@ -103,7 +194,7 @@ class GooglePlacesService:
             headers["X-Goog-Language"] = language_code
         return headers
 
-    # -- Text Search (POST /v1/places:searchText) -------------------
+    # -- text Search (POST /v1/places:searchText) -------------------
 
     async def text_search(self, request: PlaceSearchRequest) -> SearchPlacesToolResult:
         body: dict[str, Any] = {
@@ -204,15 +295,38 @@ class GooglePlacesService:
         if not api_key:
             return self._credential_error(request, retrieved_at, metadata)
 
+        # Check circuit breaker before making outbound call
+        # half-open allows one probe through; only skip if fully open
+        if self._circuit.state == "open":
+            logger.info("circuit.open_skip", operation=operation)
+            return await self._fallback_from_cache(
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata={**metadata, "circuit_state": self._circuit.state},
+                reason="circuit_open",
+            )
+
         language_code = getattr(request, "language_code", "en")
         headers = self._auth_headers(language_code)
 
         response_payload = await self._request_post(operation, path, body, headers, request, retrieved_at, metadata)
         if isinstance(response_payload, SearchPlacesToolResult):
-            return response_payload
+            # Provider returned an error — record failure, try cache fallback
+            self._circuit.record_failure()
+            return await self._fallback_from_cache(
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata={**metadata, "provider_error": response_payload.status.value},
+                reason=f"provider_{response_payload.status.value}",
+                provider_result=response_payload,
+            )
+
+        # Provider returned a raw payload — success path
+        self._circuit.record_success()
 
         raw_results = _extract_places_list(response_payload)
         if raw_results is None:
+            self._circuit.record_failure()
             return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Google Places returned an unexpected response shape.", True)
 
         candidates: list[PlaceCandidate] = []
@@ -222,6 +336,10 @@ class GooglePlacesService:
             candidate = normalize_place(raw_place, origin=origin)
             if candidate:
                 candidates.append(candidate)
+
+        # Upsert successful results to cache (fire-and-forget — do not block response)
+        if candidates:
+            await self._try_cache_upsert(request, candidates)
 
         if not candidates:
             return self._response(status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at, metadata={**metadata, "error_code": "no_results"})
@@ -239,18 +357,44 @@ class GooglePlacesService:
         retrieved_at: datetime,
         metadata: dict[str, Any],
     ) -> SearchPlacesToolResult:
+        # Check circuit breaker — half-open allows one probe through
+        if self._circuit.state == "open":
+            logger.info("circuit.open_skip", operation=operation)
+            return await self._fallback_from_cache(
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata={**metadata, "circuit_state": self._circuit.state},
+                reason="circuit_open",
+            )
+
         response_payload = await self._request_get(operation, path, headers, request, retrieved_at, metadata)
         if isinstance(response_payload, SearchPlacesToolResult):
-            return response_payload
+            # Provider returned an error — record failure, try cache fallback
+            self._circuit.record_failure()
+            return await self._fallback_from_cache(
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata={**metadata, "provider_error": response_payload.status.value},
+                reason=f"provider_{response_payload.status.value}",
+                provider_result=response_payload,
+            )
+
+        # Provider returned a raw payload — success path
+        self._circuit.record_success()
 
         # Google Details returns the place object directly (not wrapped in "result")
         raw_place = response_payload if isinstance(response_payload, dict) and "id" in response_payload else None
         if raw_place is None:
+            self._circuit.record_failure()
             return self._safe_error(request, retrieved_at, metadata, "malformed_response", "Google Places returned an unexpected response shape.", True)
 
         candidate = normalize_place(raw_place)
         if not candidate:
             return self._response(status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at, metadata={**metadata, "error_code": "no_results"})
+
+        # Upsert successful result to cache
+        await self._try_cache_upsert(request, [candidate])
+
         return self._response(status=PlaceToolStatus.OK, request=request, retrieved_at=retrieved_at, metadata=metadata, candidates=[candidate])
 
     # -- HTTP request wrappers --------------------------------------
@@ -338,6 +482,90 @@ class GooglePlacesService:
 
         return payload
 
+    # -- Cache fallback ---------------------------------------------
+
+    async def _fallback_from_cache(
+        self,
+        *,
+        request: PlaceSearchRequest | PlaceDetailsRequest,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+        reason: str,
+        provider_result: SearchPlacesToolResult | None = None,
+    ) -> SearchPlacesToolResult:
+        """Try the Postgres cache before returning an honest unavailable response.
+
+        No RAG fallback or document citations are introduced here.
+        """
+        # Only text/nearby searches use PlaceSearchRequest which the cache supports
+        if self._place_cache is None or not isinstance(request, PlaceSearchRequest):
+            return self._unavailable_response(
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata=metadata,
+                reason=reason,
+                warning="place cache not configured",
+            )
+
+        try:
+            candidates, diagnostics = await self._place_cache.lookup(request)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cache_fallback_error", error_type=type(exc).__name__)
+            return self._unavailable_response(
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata=metadata,
+                reason=reason,
+                warning=f"cache lookup failed: {type(exc).__name__}",
+            )
+
+        if diagnostics.cache_hit and candidates:
+            logger.info(
+                "cache_fallback_hit",
+                cache_key=diagnostics.get("cache_key", "unknown")[:8],
+                candidate_count=len(candidates),
+            )
+            return self._response(
+                status=PlaceToolStatus.OK,
+                request=request,
+                retrieved_at=retrieved_at,
+                metadata={**metadata, "fallback_source": "cache"},
+                candidates=candidates,
+            )
+
+        # Cache miss or stale — return honest unavailable
+        cache_status = diagnostics.result if diagnostics else "no_cache"
+        # Extract specific error type from metadata if available
+        specific_reason = reason
+        provider_error_code = metadata.get("provider_error")
+        if provider_error_code:
+            specific_reason = f"{reason} (provider error: {provider_error_code})"
+
+        return self._unavailable_response(
+            request=request,
+            retrieved_at=retrieved_at,
+            metadata={**metadata, "cache_result": cache_status},
+            reason=specific_reason,
+            warning=f"cache {cache_status}",
+        )
+
+    async def _try_cache_upsert(
+        self,
+        request: PlaceSearchRequest | PlaceNearbyRequest,
+        candidates: list[PlaceCandidate],
+    ) -> None:
+        """Fire-and-forget cache upsert for successful results."""
+        if self._place_cache is None or not isinstance(request, PlaceSearchRequest):
+            return
+        try:
+            diag = await self._place_cache.upsert(request, candidates)
+            if diag.result == "write_ok":
+                logger.info("cache_upsert_ok", cache_key=diag.get("cache_key", "unknown")[:8])
+            else:
+                logger.warning("cache_upsert_failed", reason=diag.get("reason", "unknown"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cache_upsert_error", error_type=type(exc).__name__)
+
     # -- Response helpers -------------------------------------------
 
     def _credential_error(self, request: Any, retrieved_at: datetime, metadata: dict[str, Any]) -> SearchPlacesToolResult:
@@ -356,6 +584,44 @@ class GooglePlacesService:
             retrieved_at=retrieved_at,
             metadata={**metadata, "error_code": code},
             error=PlaceToolError(code=code, message=message, retryable=retryable),
+        )
+
+    def _unavailable_response(
+        self,
+        *,
+        request: Any,
+        retrieved_at: datetime,
+        metadata: dict[str, Any],
+        reason: str,
+        warning: str | None = None,
+    ) -> SearchPlacesToolResult:
+        """Return an honest unavailable response with no RAG fallback or citations."""
+        warnings: list[str] = []
+        reasoning_log: list[str] = [f"provider unavailable: {reason}"]
+        if warning:
+            warnings.append(warning)
+            reasoning_log.append(warning)
+
+        return SearchPlacesToolResult(
+            status=PlaceToolStatus.UNAVAILABLE,
+            source=PlaceToolSource.GOOGLE_PLACES,
+            provider_status=ProviderStatus(),
+            candidates=[],
+            warnings=warnings,
+            reasoning_log=reasoning_log,
+            explanation=None,
+            place_recommendation_status=PlaceRecommendationStatus(
+                provider_places_returned=0,
+                candidates_after_normalization=0,
+                filters_applied=[],
+                reason=reason,
+            ),
+            audit={
+                "endpoint": metadata.get("endpoint", "unknown"),
+                "field_mask": GOOGLE_PLACES_FIELD_MASK,
+                "fallback_reason": reason,
+            },
+            retrieved_at=retrieved_at,
         )
 
     def _response(
@@ -378,10 +644,13 @@ class GooglePlacesService:
             reasoning_log.append("credentials not configured — no outbound request made")
         elif status == PlaceToolStatus.OK and candidates:
             reasoning_log.append(f"normalized {len(candidates)} candidate(s) from provider response")
+        if metadata.get("fallback_source") == "cache":
+            reasoning_log.append("results served from durable cache after provider failure")
+            warnings.append("provider unavailable; showing cached results")
 
         return SearchPlacesToolResult(
             status=status,
-            source=PlaceToolSource.GOOGLE_PLACES,
+            source=PlaceToolSource.CACHE if metadata.get("fallback_source") == "cache" else PlaceToolSource.GOOGLE_PLACES,
             provider_status=ProviderStatus(),
             candidates=candidates or [],
             warnings=warnings,

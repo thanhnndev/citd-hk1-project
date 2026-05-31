@@ -23,6 +23,7 @@ class PlaceToolStatus(StrEnum):
     CREDENTIALS_BLOCKED = "credentials_blocked"
     UPSTREAM_ERROR = "upstream_error"
     INVALID_REQUEST = "invalid_request"
+    UNAVAILABLE = "unavailable"
 
 
 class PlaceToolSource(StrEnum):
