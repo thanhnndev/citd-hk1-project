@@ -76,7 +76,12 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     t0 = time.perf_counter()
     agent_service = getattr(request.app.state, "agent_service", None)
 
-    if not _agent_service_available(request):
+    can_answer_without_corpus = bool(
+        agent_service is not None
+        and hasattr(agent_service, "can_answer_without_corpus")
+        and agent_service.can_answer_without_corpus(body.message)
+    )
+    if not _agent_service_available(request) and not can_answer_without_corpus:
         logger.error("chat.agent_unavailable", session_id=body.session_id)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -232,7 +237,12 @@ async def chat_stream(
             # Fail-open: continue to stream
 
     agent_service = getattr(request.app.state, "agent_service", None)
-    if not _agent_service_available(request):
+    can_answer_without_corpus = bool(
+        agent_service is not None
+        and hasattr(agent_service, "can_answer_without_corpus")
+        and agent_service.can_answer_without_corpus(query)
+    )
+    if not _agent_service_available(request) and not can_answer_without_corpus:
         logger.error("sse.stream_error", reason="service_unavailable", session_id=sid)
         return _error_stream("service_unavailable")
 

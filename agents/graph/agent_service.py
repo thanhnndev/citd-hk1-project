@@ -237,7 +237,11 @@ class AgentService:
     async def answer(self, *, session_id: str, message: str, language: str = "vi") -> ChatResponse:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
-        if self._client is None:
+        if self._should_route_places_deterministically(message, state.get("history", [])):
+            await self._search_places_tool(state, message)
+            if not state.get("response_text"):
+                state["response_text"] = _place_unavailable_message(state["language"])
+        elif self._client is None:
             state = await self._deterministic_decide_and_run(state)
         else:
             state = await self._run_tool_loop(state)
@@ -249,7 +253,13 @@ class AgentService:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
         yield "[STATUS] understanding"
-        if self._client is None:
+        if self._should_route_places_deterministically(message, state.get("history", [])):
+            yield "[STATUS] checking_places"
+            await self._search_places_tool(state, message)
+            if not state.get("response_text"):
+                state["response_text"] = _place_unavailable_message(state["language"])
+            yield state.get("response_text", "")
+        elif self._client is None:
             state = await self._deterministic_decide_and_run(state)
             yield _status_for_state(state)
             yield state.get("response_text", "")
@@ -360,6 +370,15 @@ class AgentService:
         if state.get("places_response_ready"):
             return END
         return "tool_node" if state.get("tool_calls") else END
+
+    def _should_route_places_deterministically(self, message: str, history: list[dict[str, str]]) -> bool:
+        if self._client is not None or self._place_recommendation_service is None:
+            return False
+        return _fallback_action(message, history) == "places"
+
+    def can_answer_without_corpus(self, message: str) -> bool:
+        """Return True for place discovery requests served by the Places tool."""
+        return self._place_recommendation_service is not None and _fallback_action(message, []) == "places"
 
     async def _deterministic_decide_and_run(self, state: AgentState) -> AgentState:
         action = _fallback_action(state["message"], state.get("history", []))

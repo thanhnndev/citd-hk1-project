@@ -48,6 +48,68 @@ def _place_response(session_id: str = "s-place") -> ChatResponse:
     )
 
 
+
+@pytest.mark.asyncio
+async def test_llm_configured_place_request_uses_deterministic_places_not_rag() -> None:
+    from datetime import UTC, datetime
+
+    from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=[
+            PlaceCandidate(place_id="places/a", display_name="Quan A Ham Ninh", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+            PlaceCandidate(place_id="places/b", display_name="Quan B Ham Ninh", types=["seafood_restaurant"], location=LatLng(lat=10.19, lng=104.06)),
+        ],
+        request=PlaceSearchRequest(query="nha hang ham ninh"),
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    retriever = MagicMock()
+    llm = MagicMock()
+    llm._client = MagicMock()
+    service = AgentService(retriever=retriever, llm_service=llm, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-ham-ninh", message="Gợi ý nhà hàng ở Hàm Ninh", language="vi")
+
+    places_tool.text_search.assert_awaited_once()
+    retriever.search_with_citations.assert_not_called()
+    assert response.citations == []
+    assert [place.display_name for place in response.places] == ["Quan A Ham Ninh", "Quan B Ham Ninh"]
+    assert "Quan A Ham Ninh" in response.message
+    assert "Quan B Ham Ninh" in response.message
+    assert "Quan C" not in response.message
+
+@pytest.mark.asyncio
+async def test_place_provider_unavailable_does_not_use_retrieval_fallback() -> None:
+    from datetime import UTC, datetime
+
+    from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
+    from agents.services.place_recommendation_service import PlaceRecommendationService
+
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.UNAVAILABLE,
+        source=PlaceToolSource.MOCK,
+        candidates=[],
+        request=PlaceSearchRequest(query="nha hang ham ninh"),
+        retrieved_at=datetime.now(UTC),
+    )
+    recommender = PlaceRecommendationService(places_tool, routes_service=None)
+    retriever = MagicMock()
+    service = AgentService(retriever=retriever, place_recommendation_service=recommender, checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-unavailable", message="tìm nhà hàng Hàm Ninh", language="vi")
+
+    retriever.search_with_citations.assert_not_called()
+    assert response.places == []
+    assert response.citations == []
+    assert response.intent == "place_recommendation"
+    assert "không khả dụng" in response.message
+
 @pytest.mark.asyncio
 async def test_place_intent_calls_recommendation_service_and_skips_llm() -> None:
     recommender = AsyncMock()

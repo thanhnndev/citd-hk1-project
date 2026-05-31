@@ -370,6 +370,7 @@ class PlaceRecommendationService:
                 result_count=len(places),
                 is_commercial=_is_commercial_query(candidates),
                 language_code=request.language_code,
+                display_names=[place.display_name for place in places],
             ),
             status=tool_response.status,
             source=tool_response.source,
@@ -814,9 +815,15 @@ def _message_for_status(
     result_count: int = 0,
     is_commercial: bool = False,
     language_code: str = "vi",
+    display_names: list[str] | None = None,
 ) -> str:
     if status == PlaceToolStatus.OK:
-        base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
+        names = [name.strip() for name in (display_names or []) if name.strip()]
+        if names:
+            joined_names = "; ".join(f"{idx}. {name}" for idx, name in enumerate(names, start=1))
+            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh: {joined_names}. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
+        else:
+            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
         if is_commercial:
             return _cultural_preface(language_code) + base
         return base
