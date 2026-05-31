@@ -1642,3 +1642,296 @@ class TestPlaceExplanationRedactionService:
         long_text = "x" * 500
         result = _redact_text(long_text, max_length=240)
         assert len(result) <= 240
+
+
+# ============================================================================
+# T02: PlaceDecisionTrace bounds and PlaceDecisionTracer tests (M013/S05)
+# ============================================================================
+
+class TestPlaceDecisionTraceBounds:
+    """PlaceDecisionTrace must enforce max 30 events and credential_status labels."""
+
+    def test_max_30_events_enforced(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase, PlaceDecisionTrace
+        from pydantic import ValidationError
+
+        events = [
+            PlaceAuditEvent(event="request_built", phase=PlaceAuditPhase.REQUEST)
+            for _ in range(30)
+        ]
+        trace = PlaceDecisionTrace(events=events, session_id="s-bounds")
+        assert trace.total_events == 30
+
+    def test_over_30_events_rejected(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase, PlaceDecisionTrace
+        from pydantic import ValidationError
+
+        events = [
+            PlaceAuditEvent(event="request_built", phase=PlaceAuditPhase.REQUEST)
+            for _ in range(31)
+        ]
+        with pytest.raises(ValidationError):
+            PlaceDecisionTrace(events=events, session_id="s-bounds")
+
+    def test_credential_status_labels(self):
+        """credential_status accepts standard labels: live, blocked, unavailable, unknown."""
+        from app.models.places import PlaceDecisionTrace
+
+        for label in ("live", "blocked", "unavailable", "unknown", None):
+            trace = PlaceDecisionTrace(
+                session_id="s-cred",
+                credential_status=label,
+            )
+            assert trace.credential_status == label
+
+    def test_credential_status_max_length_enforced(self):
+        from app.models.places import PlaceDecisionTrace
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceDecisionTrace(session_id="s", credential_status="x" * 65)
+
+    def test_provider_source_max_length_enforced(self):
+        from app.models.places import PlaceDecisionTrace
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceDecisionTrace(session_id="s", provider_source="x" * 65)
+
+    def test_session_id_max_length_enforced(self):
+        from app.models.places import PlaceDecisionTrace
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceDecisionTrace(session_id="x" * 129)
+
+    def test_elapsed_ms_field_on_event(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+
+        event = PlaceAuditEvent(
+            event="provider_ok",
+            phase=PlaceAuditPhase.PROVIDER,
+            elapsed_ms=42.5,
+        )
+        assert event.elapsed_ms == 42.5
+
+    def test_elapsed_ms_optional(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+
+        event = PlaceAuditEvent(
+            event="cache_miss",
+            phase=PlaceAuditPhase.CACHE,
+        )
+        assert event.elapsed_ms is None
+
+    def test_event_detail_max_length_enforced(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaceAuditEvent(
+                event="request_built",
+                phase=PlaceAuditPhase.REQUEST,
+                detail={f"k{i}": i for i in range(11)},
+            )
+
+    def test_all_credential_events_exist(self):
+        """CREDENTIAL phase events must exist in the vocabulary."""
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "credential_live" in PLACE_AUDIT_EVENTS
+        assert "credential_blocked" in PLACE_AUDIT_EVENTS
+        assert "credential_unavailable" in PLACE_AUDIT_EVENTS
+
+    def test_all_provider_events_exist(self):
+        """PROVIDER phase events must exist in the vocabulary."""
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "provider_called" in PLACE_AUDIT_EVENTS
+        assert "provider_ok" in PLACE_AUDIT_EVENTS
+        assert "provider_error" in PLACE_AUDIT_EVENTS
+        assert "provider_credentials_blocked" in PLACE_AUDIT_EVENTS
+        assert "provider_unavailable" in PLACE_AUDIT_EVENTS
+
+    def test_all_cache_events_exist(self):
+        """CACHE phase events must exist in the vocabulary."""
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        for event in ("cache_hit", "cache_miss", "cache_stale", "cache_error", "cache_skip"):
+            assert event in PLACE_AUDIT_EVENTS
+
+    def test_all_route_events_exist(self):
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "route_enrichment_ok" in PLACE_AUDIT_EVENTS
+        assert "route_enrichment_fallback" in PLACE_AUDIT_EVENTS
+
+    def test_all_rerank_events_exist(self):
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "reranking_ensemble" in PLACE_AUDIT_EVENTS
+        assert "reranking_fallback" in PLACE_AUDIT_EVENTS
+
+    def test_all_fairness_events_exist(self):
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "fairness_balanced" in PLACE_AUDIT_EVENTS
+
+    def test_all_compose_events_exist(self):
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "composition_deterministic" in PLACE_AUDIT_EVENTS
+
+    def test_all_filter_events_exist(self):
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert "preference_filter_applied" in PLACE_AUDIT_EVENTS
+        assert "preference_filter_skipped" in PLACE_AUDIT_EVENTS
+
+    def test_event_vocabulary_size_reasonable(self):
+        """Event vocabulary should be compact — not more than 30 unique events."""
+        from app.models.places import PLACE_AUDIT_EVENTS
+
+        assert len(PLACE_AUDIT_EVENTS) <= 30, (
+            f"Event vocabulary has {len(PLACE_AUDIT_EVENTS)} events, expected <= 30"
+        )
+
+
+class TestPlaceDecisionTracer:
+    """PlaceDecisionTracer service tests — O(1) per phase, no network calls."""
+
+    def test_emit_records_event_with_elapsed(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+        from app.models.places import PlaceAuditPhase
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-tracer", started=started)
+        tracer.emit("request_built", PlaceAuditPhase.REQUEST, detail={"language_code": "vi"})
+
+        trace = tracer.build()
+        assert len(trace.events) == 1
+        assert trace.events[0].event == "request_built"
+        assert trace.events[0].phase == PlaceAuditPhase.REQUEST
+        assert trace.events[0].detail["language_code"] == "vi"
+        assert trace.events[0].elapsed_ms is not None
+        assert trace.events[0].elapsed_ms >= 0.0
+
+    def test_multiple_events_ordered(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+        from app.models.places import PlaceAuditPhase
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-ordered", started=started)
+        tracer.emit("request_built", PlaceAuditPhase.REQUEST)
+        tracer.emit("provider_called", PlaceAuditPhase.PROVIDER)
+        tracer.emit("cache_hit", PlaceAuditPhase.CACHE)
+        tracer.emit("composition_deterministic", PlaceAuditPhase.COMPOSE)
+
+        trace = tracer.build()
+        assert len(trace.events) == 4
+        assert trace.events[0].event == "request_built"
+        assert trace.events[1].event == "provider_called"
+        assert trace.events[2].event == "cache_hit"
+        assert trace.events[3].event == "composition_deterministic"
+
+    def test_credential_status_setter(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-cred-setter", started=started)
+        tracer.set_credential_status("blocked")
+        trace = tracer.build()
+        assert trace.credential_status == "blocked"
+
+    def test_provider_source_setter(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-src-setter", started=started)
+        tracer.set_provider_source("goong_places")
+        trace = tracer.build()
+        assert trace.provider_source == "goong_places"
+
+    def test_build_returns_independent_copy(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+        from app.models.places import PlaceAuditPhase
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-copy", started=started)
+        tracer.emit("request_built", PlaceAuditPhase.REQUEST)
+        trace1 = tracer.build()
+        trace2 = tracer.build()
+        # Modifying one trace should not affect the other
+        trace1.events.append(
+            type(trace1.events[0]).model_validate(
+                {"event": "cache_hit", "phase": "cache", "detail": {}}
+            )
+        )
+        assert len(trace2.events) == 1
+        assert len(trace1.events) == 2
+
+    def test_session_id_propagated(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-prop", started=started)
+        trace = tracer.build()
+        assert trace.session_id == "s-prop"
+
+    def test_empty_trace_has_zero_events(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-empty", started=started)
+        trace = tracer.build()
+        assert trace.total_events == 0
+        assert trace.credential_status is None
+        assert trace.provider_source is None
+
+
+class TestPlaceAuditEventNoSecretLeakage:
+    """All audit event detail payloads must be safe — no API keys, tokens, or PII."""
+
+    def test_detail_cannot_contain_api_key(self):
+        from app.models.places import PlaceAuditEvent, PlaceAuditPhase
+
+        event = PlaceAuditEvent(
+            event="provider_called",
+            phase=PlaceAuditPhase.PROVIDER,
+            detail={"source": "mock", "candidate_count": 3},
+        )
+        dump = event.model_dump_json()
+        assert "api_key" not in dump.lower()
+        assert "secret" not in dump.lower()
+
+    def test_trace_serialized_no_secret_in_events(self):
+        import time
+        from agents.services.place_recommendation_service import PlaceDecisionTracer
+        from app.models.places import PlaceAuditPhase
+
+        started = time.perf_counter()
+        tracer = PlaceDecisionTracer(session_id="s-safe", started=started)
+        tracer.emit("request_built", PlaceAuditPhase.REQUEST, detail={"language_code": "vi"})
+        tracer.emit("provider_called", PlaceAuditPhase.PROVIDER, detail={
+            "status": "ok", "source": "mock", "candidate_count": 5,
+        })
+        tracer.emit("cache_hit", PlaceAuditPhase.CACHE, detail={"candidate_count": 5})
+        tracer.emit("composition_deterministic", PlaceAuditPhase.COMPOSE, detail={
+            "result_count": 3,
+        })
+        tracer.set_credential_status("live")
+        tracer.set_provider_source("mock")
+
+        trace = tracer.build()
+        dump = trace.model_dump_json()
+        assert "api_key" not in dump.lower()
+        assert "secret" not in dump.lower()
+        assert "sk-" not in dump
+        assert "token=" not in dump.lower()
