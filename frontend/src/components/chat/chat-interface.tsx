@@ -36,6 +36,12 @@ interface ChatInterfaceProps {
     viewOnMap?: string;
     scoreLabel?: string;
     noRating?: string;
+    scoreBreakdown?: string;
+    explanation?: string;
+    providerSource?: string;
+    providerStatus?: string;
+    scoreDataLimited?: string;
+    accessibilityNote?: string;
     welcomeGreeting?: string;
     welcomeSubtitle?: string;
     newConversation?: string;
@@ -342,6 +348,12 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 viewOnMap: translations.viewOnMap ?? "View on Map",
                 scoreLabel: translations.scoreLabel ?? "Score",
                 noRating: translations.noRating ?? "No rating",
+                scoreBreakdown: translations.scoreBreakdown ?? "Score Breakdown",
+                explanation: translations.explanation ?? "Why this place?",
+                providerSource: translations.providerSource ?? "Source",
+                providerStatus: translations.providerStatus ?? "Status",
+                scoreDataLimited: translations.scoreDataLimited ?? "Limited scoring data available",
+                accessibilityNote: translations.accessibilityNote ?? "Accessibility info",
               }}
             />
           ))}

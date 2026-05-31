@@ -29,6 +29,12 @@ interface MessageBubbleProps {
     viewOnMap: string;
     scoreLabel: string;
     noRating: string;
+    scoreBreakdown?: string;
+    explanation?: string;
+    providerSource?: string;
+    providerStatus?: string;
+    scoreDataLimited?: string;
+    accessibilityNote?: string;
   };
   actionTranslations?: {
     copy?: string;

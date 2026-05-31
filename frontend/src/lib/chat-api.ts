@@ -34,6 +34,36 @@ export interface ScoreBreakdown {
   rank: number;
 }
 
+/**
+ * Safe structured explanation for why a place was recommended.
+ * Mirrors backend/app/models/response.py PlaceExplanation (extra='forbid').
+ * All fields are backend-owned — the frontend never fabricates reasoning.
+ */
+export interface PlaceExplanation {
+  /** 1-based recommendation rank, or 0 when not ranked. */
+  rank: number;
+  /** Concise reason derived only from normalized place data. */
+  primary_reason: string;
+  /** Preference signals matched by the normalized candidate. */
+  matched_preferences: string[];
+  /** Safe locality/fairness context without exact user GPS. */
+  local_context: string;
+  /** Compact score fields used by the reranker or fallback scorer. */
+  score_factors: Record<string, number | string | null>;
+  /** Fairness/locality note derived from local_factor metadata. */
+  fairness_note: string;
+  /** Accessibility note derived from normalized accessibility fields. */
+  accessibility_note: string;
+  /** Route summary without exact origin/user GPS. */
+  route_summary: string;
+  /** Normalized provider/source label (google_places, goong_places, mock, cache). */
+  provider_source: string | null;
+  /** Normalized provider status (ok, empty, credentials_blocked, upstream_error, unavailable). */
+  provider_status: string | null;
+  /** Normalized candidate/result fields used to build this explanation. */
+  evidence_fields_used: string[];
+}
+
 export interface PlaceResult {
   place_id: string;
   display_name: string;
@@ -52,6 +82,8 @@ export interface PlaceResult {
   accessibility_score?: number | null;
   accessibility_warning?: string | null;
   map_uri: string;
+  /** Structured why-this-recommendation data from backend. Never fabricated. */
+  explanation?: PlaceExplanation;
 }
 
 export interface Citation {
@@ -80,6 +112,19 @@ export type ChatStreamStatus =
   | "searching_knowledge"
   | "checking_places"
   | "composing";
+
+/**
+ * Provider source vocabulary — reflects which provider actually served results.
+ * Never fabricated by the frontend.
+ * @see docs/M014-S03-RECOMMENDATION-EXPLANATION-CONTRACT.md §2
+ */
+export type ProviderSource = "google_places" | "goong_places" | "mock" | "cache";
+
+/**
+ * Provider status vocabulary — reflects actual provider health/result state.
+ * @see docs/M014-S03-RECOMMENDATION-EXPLANATION-CONTRACT.md §2
+ */
+export type ProviderStatus = "ok" | "empty" | "credentials_blocked" | "upstream_error" | "unavailable";
 
 export interface StreamChatCallbacks {
   onToken: (token: string) => void;
