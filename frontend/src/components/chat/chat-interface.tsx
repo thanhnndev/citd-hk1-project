@@ -12,6 +12,7 @@ interface Message {
   content: string;
   citations?: Citation[];
   places?: PlaceResult[];
+  suggestions?: string[];
   guardrailStatus?: string;
   fallback?: boolean;
   langfuseTraceId?: string | null;
@@ -168,6 +169,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           content: displayText,
           citations: response.citations ?? [],
           places: response.places ?? [],
+          suggestions: response.suggestions ?? [],
           guardrailStatus: response.guardrail_status,
           fallback: response.fallback,
           langfuseTraceId: response.langfuse_trace_id,
@@ -199,6 +201,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           })),
           onCitations: (citations) => updateLastAssistant((message) => ({ ...message, citations })),
           onPlaces: (places) => updateLastAssistant((message) => ({ ...message, places })),
+          onSuggestions: (suggestions) => updateLastAssistant((message) => ({ ...message, suggestions })),
           onDone: () => {
             updateLastAssistant((message) => ({ ...message, status: "complete", streamStatus: null }));
             setLoading(false);
@@ -291,6 +294,11 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
   const deriveQuickReplies = useCallback((): string[] => {
     if (!lastAssistant || lastAssistant.status !== "complete") return [];
+
+    // Prefer LLM-generated dynamic suggestions if present
+    if (lastAssistant.suggestions && lastAssistant.suggestions.length > 0) {
+      return lastAssistant.suggestions;
+    }
 
     // Place results: show map / follow-up / accessibility chips
     if (lastAssistant.places && lastAssistant.places.length > 0) {

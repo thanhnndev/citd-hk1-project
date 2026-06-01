@@ -66,7 +66,7 @@ async def test_bare_followup_uses_history_without_retrieval(ham_ninh_chunk):
     await service.answer(session_id="s-follow", message="bạn giúp được gì", language="vi")
     response = await service.answer(session_id="s-follow", message="?", language="vi")
 
-    assert response.intent == "conversational"
+    assert response.intent == "followup_history"
     assert response.citations == []
     assert "4 nhóm" in response.message or "Ví dụ" in response.message
     assert retriever.queries == []
@@ -116,3 +116,44 @@ async def test_stream_direct_answer_has_no_citations_marker(ham_ninh_chunk):
     assert any("Chào bạn" in event for event in events)
     assert not any(event.startswith("[CITATIONS]") for event in events)
     assert retriever.queries == []
+
+def test_extract_suggestions_strips_tag_and_populates_list():
+    from agents.graph.agent_service import _extract_suggestions
+    text = "Chào bạn! [SUGGESTIONS] Gợi ý 1 | Gợi ý 2 | Gợi ý 3"
+    msg, sug = _extract_suggestions(text)
+    assert msg == "Chào bạn!"
+    assert sug == ["Gợi ý 1", "Gợi ý 2", "Gợi ý 3"]
+
+def test_response_from_state_gracefully_falls_back_to_defaults(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
+    state = {
+        "session_id": "test-fallback",
+        "language": "vi",
+        "response_text": "Xin chào!",
+        "places": [],
+        "citations": [],
+    }
+    response = service._response_from_state(state, 0)
+    assert response.suggestions == ["Bạn còn làm được gì?", "Kể về ẩm thực địa phương"]
+
+def test_descriptive_new_request_bypasses_clarification_loop():
+    from agents.graph.agent_service import resolve_followup_decision, FollowUpContext, PLACE_RECOMMENDATION_INTENT
+    
+    ctx = FollowUpContext(
+        session_id="test-bypass",
+        intent=PLACE_RECOMMENDATION_INTENT,
+        place_ids=["place_1", "place_2"],
+        place_display_names=["ANBA COFFEE", "Lotus Home & Cafe"],
+    )
+    
+    # Message is a descriptive new place request that does not overlap distinctively with previous names
+    message = "quán cf view đẹp giá dưới 50k"
+    decision = resolve_followup_decision(message, ctx, history=[{"role": "user", "content": "hello"}])
+    assert decision == "insufficient_context"
+
+    # Message is an abbreviated descriptive new request without standard Vietnamese prefixes
+    message_abbr = "cf view đẹp giá dưới 50k"
+    decision_abbr = resolve_followup_decision(message_abbr, ctx, history=[{"role": "user", "content": "hello"}])
+    assert decision_abbr == "insufficient_context"
+

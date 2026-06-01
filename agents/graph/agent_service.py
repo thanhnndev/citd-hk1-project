@@ -79,6 +79,8 @@ class FollowUpContext:
     intent: str | None = None
     place_ids: list[str] = field(default_factory=list)
     place_display_names: list[str] = field(default_factory=list)
+    place_ratings: list[float] = field(default_factory=list)
+    place_price_levels: list[int] = field(default_factory=list)
     has_citations: bool = False
     citation_sources: list[str] = field(default_factory=list)
     reasoning_log_summary: str | None = None
@@ -95,6 +97,8 @@ class FollowUpContext:
             "intent": self.intent,
             "place_ids": self.place_ids,
             "place_display_names": self.place_display_names,
+            "place_ratings": self.place_ratings,
+            "place_price_levels": self.place_price_levels,
             "has_citations": self.has_citations,
             "citation_sources": self.citation_sources,
             "reasoning_log_summary": self.reasoning_log_summary,
@@ -114,12 +118,22 @@ class FollowUpContext:
             if isinstance(val, list):
                 return [str(v) for v in val if v]
             return []
+        def _safe_float_list(val: Any) -> list[float]:
+            if isinstance(val, list):
+                return [float(v) for v in val if v is not None]
+            return []
+        def _safe_int_list(val: Any) -> list[int]:
+            if isinstance(val, list):
+                return [int(v) for v in val if v is not None]
+            return []
         try:
             return cls(
                 session_id=data.get("session_id", ""),
                 intent=data.get("intent"),
                 place_ids=_safe_list(data.get("place_ids")),
                 place_display_names=_safe_list(data.get("place_display_names")),
+                place_ratings=_safe_float_list(data.get("place_ratings")),
+                place_price_levels=_safe_int_list(data.get("place_price_levels")),
                 has_citations=bool(data.get("has_citations")),
                 citation_sources=_safe_list(data.get("citation_sources")),
                 reasoning_log_summary=data.get("reasoning_log_summary"),
@@ -182,6 +196,12 @@ def resolve_followup_decision(
     if not context or not context.is_populated:
         return "insufficient_context"
 
+    # If it is a brand-new descriptive request (doesn't match structured context),
+    # treat it as insufficient_context so normal routing handles it, rather than
+    # getting stuck in a clarification loop.
+    if _is_new_request(message):
+        return "insufficient_context"
+
     return "clarification_needed"
 
 
@@ -221,7 +241,7 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
 
     # References to scoring/ranking
     if context.score_breakdown_keys and any(
-        term in text for term in ("vì sao", "tại sao", "sao", "xếp", "rank", "score", "điểm", "cao", "thấp", "why", "ranked")
+        term in text for term in ("vì sao", "tại sao", "sao lại", "xếp hạng", "rank", "score", "điểm số", "điểm cao", "điểm thấp", "why", "ranked")
     ):
         return True
 
@@ -239,9 +259,14 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
 
     # References to recommendations (places intent with populated context)
     # Use demonstratives and specific terms — NOT generic "quán" which appears
-    # in new place requests
+    # in new place requests unless accompanied by comparatives or rating terms
     if context.intent == PLACE_RECOMMENDATION_INTENT and any(
-        term in text for term in ("địa điểm", "này", "kia", "đó", "place", "venue", "recommend", "gợi ý")
+        term in text for term in (
+            "địa điểm", "này", "kia", "đó", "place", "venue", "recommend", "gợi ý",
+            "nào", "nhất", "quán nào", "chỗ nào", "địa điểm nào", "best", "top", "rank",
+            "xếp hạng", "cao nhất", "thấp nhất", "rẻ nhất", "gần nhất", "đánh giá", "rating",
+            "review"
+        )
     ):
         return True
 
@@ -262,6 +287,8 @@ def _build_followup_context(response: ChatResponse) -> FollowUpContext:
     """Extract structured context from a ChatResponse for follow-up resolution."""
     place_ids = [p.place_id for p in response.places[:10]]
     place_names = [p.display_name for p in response.places[:10]]
+    place_ratings = [float(p.rating or 0.0) for p in response.places[:10]]
+    place_price_levels = [int(p.price_level or 0) for p in response.places[:10]]
     citation_sources = [c.source for c in response.citations[:5]]
 
     score_keys: list[str] = []
@@ -277,6 +304,8 @@ def _build_followup_context(response: ChatResponse) -> FollowUpContext:
         intent=response.intent,
         place_ids=place_ids,
         place_display_names=place_names,
+        place_ratings=place_ratings,
+        place_price_levels=place_price_levels,
         has_citations=bool(response.citations),
         citation_sources=citation_sources,
         reasoning_log_summary=(response.reasoning_log or "")[:500] if response.reasoning_log else None,
@@ -357,6 +386,7 @@ Follow this exact tool policy:
 - Cite only facts from search_knowledge results. Do not cite place results as document sources.
 - If a tool is unavailable or returns no useful data, say that honestly and ask a useful follow-up.
 - Reply in the user's language.
+- At the end of your final response (when you are not calling any tools), write exactly three short and context-specific suggestion chips for the user's next turn in this format: [SUGGESTIONS] Suggestion 1 | Suggestion 2 | Suggestion 3. Do not include this tag or suggestions if you are proposing tool calls.
 """
 
 class AgentState(TypedDict, total=False):
@@ -368,6 +398,7 @@ class AgentState(TypedDict, total=False):
     tool_calls: list[Any]
     citations: list[Citation]
     places: list[Any]
+    suggestions: list[str]
     reasoning_log: str | None
     intent: str | None
     response_text: str
@@ -543,7 +574,7 @@ class AgentService:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
         # Resolve contextual follow-ups before tool routing (R052 / T03)
-        resolved = _resolve_followup_before_tool_routing(state)
+        resolved = _resolve_followup_before_tool_routing(state, has_llm=(self._client is not None))
         if resolved is not None:
             response = self._response_from_state(resolved, started)
             await self._save_followup_context(session_id, response)
@@ -567,7 +598,7 @@ class AgentService:
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
         # Resolve contextual follow-ups before tool routing (R052 / T03)
-        resolved = _resolve_followup_before_tool_routing(state)
+        resolved = _resolve_followup_before_tool_routing(state, has_llm=(self._client is not None))
         if resolved is not None:
             # Emit status for observability
             decision = state.get("followup_decision")
@@ -618,6 +649,8 @@ class AgentService:
             yield f"[PLACES] {json.dumps([p.model_dump() for p in response.places], ensure_ascii=False)}"
         if response.citations:
             yield f"[CITATIONS] {json.dumps([c.model_dump() for c in response.citations], ensure_ascii=False)}"
+        if response.suggestions:
+            yield f"[SUGGESTIONS] {json.dumps(response.suggestions, ensure_ascii=False)}"
 
     async def stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         async for event in self.answer_stream(session_id=session_id, message=message, language=language):
@@ -654,6 +687,7 @@ class AgentService:
             "messages": _messages_for_llm(message=message, history=history, language=language),
             "citations": [],
             "places": [],
+            "suggestions": [],
             "reasoning_log": None,
             "intent": None,
             "response_text": "",
@@ -707,7 +741,10 @@ class AgentService:
             state["messages"].append(message.model_dump(exclude_none=True))
             return state
         state["tool_calls"] = []
-        state["response_text"] = message.content or _clarify_message(state["language"])
+        content = message.content or ""
+        msg_text, suggestions = _extract_suggestions(content)
+        state["response_text"] = msg_text or _clarify_message(state["language"])
+        state["suggestions"] = suggestions
         state["intent"] = state.get("intent") or "conversational"
         return state
 
@@ -823,11 +860,21 @@ class AgentService:
         return json.dumps({"status": "ok", "message": response.message, "places": [p.model_dump() for p in response.places[:5]]}, ensure_ascii=False)
 
     def _response_from_state(self, state: AgentState, started: float) -> ChatResponse:
+        suggestions = state.get("suggestions")
+        if not suggestions:
+            suggestions = _get_default_suggestions(
+                intent=state.get("intent"),
+                language=state["language"],
+                has_places=bool(state.get("places")),
+                has_citations=bool(state.get("citations")),
+                fallback=state.get("fallback", False),
+            )
         return ChatResponse(
             session_id=state["session_id"],
             message=state.get("response_text") or _clarify_message(state["language"]),
             citations=state.get("citations", []),
             places=state.get("places", []),
+            suggestions=suggestions,
             reasoning_log=state.get("reasoning_log"),
             intent=state.get("intent"),
             langfuse_trace_id=state.get("langfuse_trace_id"),
@@ -992,7 +1039,7 @@ def _compose_followup_answer(
 
     # Score / ranking reference
     if context.score_breakdown_keys and any(
-        term in text for term in ("vì sao", "tại sao", "sao", "xếp", "rank", "score", "điểm", "cao", "thấp", "why")
+        term in text for term in ("vì sao", "tại sao", "sao lại", "xếp hạng", "rank", "score", "điểm số", "điểm cao", "điểm thấp", "why")
     ):
         keys = ", ".join(context.score_breakdown_keys[:3])
         if language == "vi":
@@ -1024,6 +1071,44 @@ def _compose_followup_answer(
             return f"Dữ liệu địa điểm lấy từ {src} (trạng thái: {status})."
         return f"Place data comes from {src} (status: {status})."
 
+    # Comparative rating query (e.g., highest rated, best review)
+    if context.place_ratings and any(term in text for term in ("đánh giá cao nhất", "rating cao nhất", "highest rated", "best rated", "review cao nhất", "đánh giá tốt nhất", "ngon nhất", "ok nhất")):
+        max_rating = -1.0
+        best_indices = []
+        for i, r in enumerate(context.place_ratings):
+            if r > max_rating:
+                max_rating = r
+                best_indices = [i]
+            elif r == max_rating:
+                best_indices.append(i)
+        
+        if best_indices:
+            best_places = [context.place_display_names[idx] for idx in best_indices]
+            joined_names = " và ".join(best_places) if language == "vi" else " and ".join(best_places)
+            if language == "vi":
+                return f"Trong các địa điểm đã gợi ý, nơi có đánh giá cao nhất là {joined_names} với {max_rating}⭐."
+            return f"Among the recommended places, the highest rated is {joined_names} with {max_rating}⭐."
+
+    # Comparative price query (e.g., cheapest, best price, lowest cost)
+    if context.place_price_levels and any(term in text for term in ("rẻ nhất", "giá thấp nhất", "cheapest", "lowest price", "giá tốt nhất", "chi phí tiết kiệm nhất", "tiết kiệm nhất")):
+        min_price = 999
+        best_indices = []
+        for i, p in enumerate(context.place_price_levels):
+            val = p if p > 0 else 2
+            if val < min_price:
+                min_price = val
+                best_indices = [i]
+            elif val == min_price:
+                best_indices.append(i)
+        
+        if best_indices and min_price < 999:
+            best_places = [context.place_display_names[idx] for idx in best_indices]
+            joined_names = " và ".join(best_places) if language == "vi" else " and ".join(best_places)
+            price_desc = "giá tiết kiệm" if min_price == 1 else "giá hợp lý"
+            if language == "vi":
+                return f"Trong các địa điểm đã gợi ý, nơi có chi phí tiết kiệm nhất là {joined_names} ({price_desc})."
+            return f"Among the recommended places, the most budget-friendly is {joined_names}."
+
     # General recommendation follow-up
     if context.intent == PLACE_RECOMMENDATION_INTENT and any(
         term in text for term in ("quán", "địa điểm", "này", "kia", "đó", "place", "venue", "gợi ý")
@@ -1051,9 +1136,13 @@ def _is_new_request(message: str) -> bool:
     place_terms = (
         "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
         "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
-        "stay", "place", "nearby", "gần đây", "quanh đây",
+        "stay", "place", "nearby", "gần đây", "quanh đây", "cf", "coffee", "view"
     )
-    action_terms = ("kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search")
+    action_terms = (
+        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
+        "có", "nào", "đâu", "gì", "quanh", "gần", "ở", "không", "review",
+        "đánh giá", "giá", "sao", "lịch trình", "bản đồ", "map"
+    )
     # New knowledge request indicators
     knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
 
@@ -1061,11 +1150,15 @@ def _is_new_request(message: str) -> bool:
     has_action = any(term in text for term in action_terms)
     has_knowledge = any(term in text for term in knowledge_terms)
 
-    return (has_place_topic and has_action) or has_knowledge
+    # If it contains a place term and is long enough, treat it as a new request
+    is_descriptive_place = has_place_topic and len(text.split()) >= 3
+
+    return (has_place_topic and has_action) or has_knowledge or is_descriptive_place
 
 
 def _resolve_followup_before_tool_routing(
     state: AgentState,
+    has_llm: bool = False,
 ) -> AgentState | None:
     """Resolve follow-ups before entering tool routing.
 
@@ -1095,6 +1188,20 @@ def _resolve_followup_before_tool_routing(
             decision="structured_context",
         )
         return state
+
+    if has_llm:
+        # If the LLM is active, do NOT short-circuit general clarification_needed.
+        # Let the LLM reason over the conversation history and choose the appropriate tools or responses natively.
+        # Only allow history_context short-circuits (e.g. "?", "ví dụ") or very specific direct answers.
+        if decision == "history_context":
+            state["response_text"] = _direct_answer(
+                state["message"], state.get("history", []), state["language"],
+            )
+            state["intent"] = "followup_history"
+            state["places_response_ready"] = True
+            state["fallback"] = False
+            return state
+        return None
 
     if decision == "history_context":
         # Answerable from history alone — use direct-answer path, skip tools
@@ -1169,10 +1276,19 @@ def _is_place_or_route(text: str) -> bool:
     place_terms = (
         "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê", "khách sạn",
         "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood", "stay", "place", "nearby",
+        "cf", "coffee", "view"
     )
-    action_terms = ("kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search", "gần đây", "quanh đây")
+    action_terms = (
+        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search", "gần đây", "quanh đây",
+        "ở đâu", "có", "nào", "gì", "giá", "sao"
+    )
     route_terms = ("chỉ đường", "đường đi", "cách đi", "đi đến", "đi tới", "route", "direction", "map")
-    return any(term in text for term in route_terms) or (any(term in text for term in place_terms) and any(term in text for term in action_terms))
+    
+    has_place = any(term in text for term in place_terms)
+    has_action = any(term in text for term in action_terms)
+    is_descriptive = has_place and len(text.split()) >= 3
+    
+    return any(term in text for term in route_terms) or (has_place and has_action) or is_descriptive
 
 def _direct_answer(message: str, history: list[dict[str, str]], language: str) -> str:
     text = _norm(message)
@@ -1228,3 +1344,33 @@ def _place_unavailable_message(language: str) -> str:
 
 def _too_many_tools_message(language: str) -> str:
     return "Mình chưa chốt được công cụ phù hợp. Bạn nói rõ hơn yêu cầu nhé." if language == "vi" else "I could not settle on the right tool. Please clarify your request."
+
+def _extract_suggestions(text: str) -> tuple[str, list[str]]:
+    if not text:
+        return "", []
+    if "[SUGGESTIONS]" in text:
+        parts = text.split("[SUGGESTIONS]")
+        main_message = parts[0].strip()
+        suggestions_str = parts[1].strip()
+        # Parse suggestions_str which is separated by "|"
+        suggestions = [s.strip() for s in suggestions_str.split("|") if s.strip()]
+        return main_message, suggestions
+    return text, []
+
+def _get_default_suggestions(intent: str | None, language: str, has_places: bool = False, has_citations: bool = False, fallback: bool = False) -> list[str]:
+    if language == "vi":
+        if has_places:
+            return ["Hiển thị trên bản đồ", "Kể thêm về chỗ này", "Có tiếp cận được không?"]
+        if has_citations:
+            return ["Tóm tắt nguồn tham khảo", "Hỏi thêm về chủ đề này"]
+        if fallback:
+            return ["Thử hỏi theo hướng khác", "Hỏi về làng chài"]
+        return ["Bạn còn làm được gì?", "Kể về ẩm thực địa phương"]
+    else:
+        if has_places:
+            return ["Show on map", "Tell me more", "Is it accessible?"]
+        if has_citations:
+            return ["Summarize the sources", "Follow up on this"]
+        if fallback:
+            return ["Try a different angle", "Ask about the village"]
+        return ["What else can you do?", "Tell me about local food"]

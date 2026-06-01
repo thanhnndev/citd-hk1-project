@@ -107,12 +107,6 @@ export function MessageBubble({
         {/* Sender label + status badge */}
         <div className={`mb-1 flex items-center gap-2 text-[0.7rem] ${isUser ? "justify-end text-[#0b5f63]" : "text-[#4d6868]"}`}>
           <span className="font-semibold">{isUser ? userLabel : assistantLabel}</span>
-          {!isUser && status !== "complete" && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-[#0b5f63]/8 px-2 py-0.5 text-[#0b5f63]">
-              {status === "submitted" ? <Clock3 className="size-3" /> : <Loader2 className="size-3 animate-spin" />}
-              {streamStatusLabel ?? typingLabel}
-            </span>
-          )}
           {showComplete && hasSources && (
             <span className="inline-flex items-center gap-1 text-[#6b7f7e]">
               <CheckCircle2 className="size-3" />

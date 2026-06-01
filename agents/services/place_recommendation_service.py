@@ -318,6 +318,7 @@ class PlaceRecommendationService:
                 provider_source=provider_source_val,
                 provider_status=provider_status_val,
                 request=request,
+                language=language,
             )
             tracer.emit("reranking_ensemble", PlaceAuditPhase.RERANK, detail={
                 "candidate_count": len(candidates),
@@ -330,6 +331,7 @@ class PlaceRecommendationService:
                 provider_source=provider_source_val,
                 provider_status=provider_status_val,
                 request=request,
+                language=language,
             )
             ensemble_ok = False
             tracer.emit("reranking_fallback", PlaceAuditPhase.RERANK, detail={
@@ -509,6 +511,7 @@ def _reranked_results(
     provider_source: str | None = None,
     provider_status: str | None = None,
     request: PlaceSearchRequest | None = None,
+    language: str = "vi",
 ) -> list[PlaceResult]:
     """Run candidates through FeatureExtractor → EnsembleReranker pipeline."""
     extractor = FeatureExtractor()
@@ -576,6 +579,7 @@ def _reranked_results(
                     provider_status=provider_status,
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
+                    language=language,
                 ),
             )
         )
@@ -589,6 +593,7 @@ def _grounded_results(
     provider_source: str | None = None,
     provider_status: str | None = None,
     request: PlaceSearchRequest | None = None,
+    language: str = "vi",
 ) -> list[PlaceResult]:
     """Fallback path: return candidates with default ensemble ScoreBreakdown."""
     numeric_levels = request.numeric_price_levels if request else None
@@ -656,6 +661,7 @@ def _grounded_results(
                     provider_status=provider_status,
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
+                    language=language,
                 ),
             )
         )
@@ -682,6 +688,97 @@ def _redact_text(value: str, *, max_length: int = 240) -> str:
     return value[:max_length]
 
 
+def _make_friendly_reason(matched: list[str], fallback: bool, language: str) -> str:
+    # Extract type, rating, open status, budget, accessibility
+    place_type = None
+    rating_ok = False
+    open_now = False
+    budget_ok = False
+    access_ok = False
+
+    for m in matched:
+        if m.startswith("type:"):
+            place_type = m.split(":", 1)[1]
+        elif m == "provider_rating_available":
+            rating_ok = True
+        elif m == "open_now":
+            open_now = True
+        elif m == "budget_preference_matched":
+            budget_ok = True
+        elif m == "accessibility_preference_matched":
+            access_ok = True
+
+    if language == "vi":
+        type_map = {
+            "coffee_shop": "quán cà phê",
+            "cafe": "quán cà phê",
+            "restaurant": "nhà hàng",
+            "tourist_attraction": "điểm tham quan",
+            "lodging": "khách sạn/nơi lưu trú",
+            "hotel": "khách sạn",
+            "bar": "quán bar/bistro",
+            "food": "địa điểm ăn uống",
+            "park": "công viên",
+            "museum": "bảo tàng",
+        }
+        type_str = type_map.get(place_type, "địa điểm") if place_type else "địa điểm"
+        
+        parts = []
+        if budget_ok:
+            parts.append("phù hợp ngân sách")
+        if rating_ok:
+            parts.append("được đánh giá cao")
+        if open_now:
+            parts.append("đang mở cửa")
+        if access_ok:
+            parts.append("hỗ trợ lối xe lăn")
+            
+        if not parts:
+            if fallback:
+                return f"Gợi ý {type_str} phù hợp dựa trên các tiêu chí tìm kiếm cơ bản (fallback, recommended)."
+            return f"Gợi ý {type_str} chất lượng được đề xuất dựa trên các tiêu chí tối ưu (recommended)."
+            
+        # Join parts naturally
+        if len(parts) == 1:
+            desc = parts[0]
+        elif len(parts) == 2:
+            desc = f"{parts[0]} và {parts[1]}"
+        else:
+            desc = ", ".join(parts[:-1]) + f" và {parts[-1]}"
+            
+        capitalized_type = type_str.capitalize()
+        if fallback:
+            return f"{capitalized_type} được gợi ý dựa trên tiêu chí cơ bản vì {desc} (fallback, recommended)."
+        return f"{capitalized_type} được gợi ý vì {desc} (recommended)."
+    else:
+        type_str = place_type.replace("_", " ") if place_type else "place"
+        parts = []
+        if budget_ok:
+            parts.append("fits your budget")
+        if rating_ok:
+            parts.append("has high ratings")
+        if open_now:
+            parts.append("is open now")
+        if access_ok:
+            parts.append("offers wheelchair access")
+            
+        if not parts:
+            if fallback:
+                return f"Recommended using fallback grounded place fields (fallback)."
+            return f"Recommended by reranking grounded place fields (recommended)."
+            
+        if len(parts) == 1:
+            desc = parts[0]
+        elif len(parts) == 2:
+            desc = f"{parts[0]} and {parts[1]}"
+        else:
+            desc = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+            
+        if fallback:
+            return f"Recommended using fallback grounded place fields because it {desc} (fallback)."
+        return f"Recommended by reranking grounded place fields. It {desc} (recommended)."
+
+
 def _build_place_explanation(
     *,
     candidate: PlaceCandidate,
@@ -692,6 +789,7 @@ def _build_place_explanation(
     provider_status: str | None = None,
     budget_matched: bool = False,
     accessibility_matched: bool = False,
+    language: str = "vi",
 ) -> PlaceExplanation:
     """Create a redacted explanation from normalized candidate fields only.
 
@@ -763,9 +861,7 @@ def _build_place_explanation(
             parts.append(f"{round(candidate.route_context.duration_seconds / 60)}min")
         route_summary = "route " + ", ".join(parts) if parts else "route metadata limited"
 
-    primary_reason = "Recommended using fallback grounded place fields." if fallback else "Recommended by reranking grounded place fields."
-    if matched:
-        primary_reason += f" Matched {', '.join(matched[:3])}."
+    primary_reason = _make_friendly_reason(matched, fallback, language)
     primary_reason = _redact_text(primary_reason)
 
     score_factors: dict[str, float | int | str | None] = {

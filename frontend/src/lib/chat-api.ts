@@ -97,6 +97,7 @@ export interface ChatResponse {
   message: string;
   citations: Citation[];
   places: PlaceResult[];
+  suggestions?: string[];
   reasoning_log?: string | null;
   intent?: string | null;
   langfuse_trace_id?: string | null;
@@ -131,6 +132,7 @@ export interface StreamChatCallbacks {
   onCitations: (citations: Citation[]) => void;
   onPlaces?: (places: PlaceResult[]) => void;
   onStatus?: (status: ChatStreamStatus) => void;
+  onSuggestions?: (suggestions: string[]) => void;
   onDone: () => void;
   onOpen?: () => void;
   onError: (error: string) => void;
@@ -254,6 +256,16 @@ export async function streamChat(
           callbacks.onPlaces?.(JSON.parse(data.slice(9)) as PlaceResult[]);
         } catch {
           callbacks.onError("Invalid places payload");
+          return;
+        }
+        continue;
+      }
+
+      if (data.startsWith("[SUGGESTIONS] ")) {
+        try {
+          callbacks.onSuggestions?.(JSON.parse(data.slice(14)) as string[]);
+        } catch {
+          callbacks.onError("Invalid suggestions payload");
           return;
         }
         continue;
