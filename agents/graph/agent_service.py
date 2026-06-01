@@ -179,12 +179,18 @@ def resolve_followup_decision(
     if not text:
         return "insufficient_context"
 
-    # 1. Try structured context first
+    # 1. Explicit new requests should route normally before any prior-place
+    # token matching. This prevents broad category overlap (e.g. "hải sản")
+    # from hijacking a fresh search after place recommendations.
+    if _is_explicit_new_request(message):
+        return "insufficient_context"
+
+    # 2. Try structured context for genuine follow-ups.
     if context and context.is_populated:
         if _matches_structured_context(text, context):
             return "structured_context"
 
-    # 2. Fall back to history-only heuristics
+    # 3. Fall back to history-only heuristics
     if history and _is_followup(text, history):
         return "history_context"
 
@@ -1123,6 +1129,34 @@ def _compose_followup_answer(
         return "Mình nhớ câu trả lời trước đó. Bạn cần giải thích thêm phần nào?"
     return "I remember the previous answer. Which part would you like me to explain further?"
 
+
+def _is_explicit_new_request(message: str) -> bool:
+    """Return True for messages that clearly start a new tool/search task.
+
+    This is intentionally stricter than _is_new_request: it requires an
+    explicit action/search signal so follow-ups like "Hải Sản có tươi không?"
+    can still resolve against a previously recommended place named "Quán Hải Sản".
+    """
+    text = _norm(message)
+    if not text:
+        return False
+
+    place_terms = (
+        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
+        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
+        "stay", "place", "nearby", "gần đây", "quanh đây", "cf", "coffee", "view"
+    )
+    action_terms = (
+        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
+        "quanh", "gần", "ở đâu", "có quán", "có nhà hàng", "review", "đánh giá",
+        "giá", "lịch trình", "bản đồ", "map"
+    )
+    knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
+
+    has_place_topic = any(term in text for term in place_terms)
+    has_action = any(term in text for term in action_terms)
+    has_knowledge = any(term in text for term in knowledge_terms)
+    return (has_place_topic and has_action) or has_knowledge
 
 def _is_new_request(message: str) -> bool:
     """Detect whether a message looks like a brand-new place or knowledge

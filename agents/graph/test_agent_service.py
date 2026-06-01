@@ -157,3 +157,36 @@ def test_descriptive_new_request_bypasses_clarification_loop():
     decision_abbr = resolve_followup_decision(message_abbr, ctx, history=[{"role": "user", "content": "hello"}])
     assert decision_abbr == "insufficient_context"
 
+
+def test_explicit_new_place_search_beats_generic_prior_place_overlap():
+    from agents.graph.agent_service import resolve_followup_decision, FollowUpContext, PLACE_RECOMMENDATION_INTENT
+
+    ctx = FollowUpContext(
+        session_id="test-seafood-overlap",
+        intent=PLACE_RECOMMENDATION_INTENT,
+        place_ids=["place_1"],
+        place_display_names=["Quán Hải Sản Thiện"],
+        score_breakdown_keys=["final_score"],
+    )
+
+    decision = resolve_followup_decision(
+        "Tìm nhà hàng hải sản địa phương",
+        ctx,
+        history=[{"role": "assistant", "content": "Mình tìm được Quán Hải Sản Thiện."}],
+    )
+    assert decision == "insufficient_context"
+
+
+def test_non_search_place_name_followup_still_uses_structured_context():
+    from agents.graph.agent_service import resolve_followup_decision, FollowUpContext, PLACE_RECOMMENDATION_INTENT
+
+    ctx = FollowUpContext(
+        session_id="test-seafood-followup",
+        intent=PLACE_RECOMMENDATION_INTENT,
+        place_ids=["place_1"],
+        place_display_names=["Quán Hải Sản Thiện"],
+    )
+
+    decision = resolve_followup_decision("Hải Sản Thiện có ngon không?", ctx)
+    assert decision == "structured_context"
+
