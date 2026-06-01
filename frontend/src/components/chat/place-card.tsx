@@ -123,7 +123,7 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
       <div className="px-3 pb-2">
         <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
           {translations.scoreLabel}: {place.final_score.toFixed(2)}
-          {score_breakdown.rank != null && (
+          {score_breakdown?.rank != null && (
             <span className="ml-1 opacity-70">#{score_breakdown.rank}</span>
           )}
         </span>
@@ -200,6 +200,22 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
               {explanation.fairness_note}
             </p>
           )}
+
+          {/* Local context */}
+          {explanation.local_context &&
+            explanation.local_context !== "local signal unknown" && (
+              <p className="text-[0.65rem] text-muted-foreground italic">
+                📍 {explanation.local_context}
+              </p>
+            )}
+
+          {/* Route summary */}
+          {explanation.route_summary &&
+            explanation.route_summary !== "route metadata unavailable" && (
+              <p className="text-[0.65rem] text-muted-foreground italic">
+                🧭 {explanation.route_summary}
+              </p>
+            )}
 
           {/* Provider badge */}
           <ProviderBadge explanation={explanation} translations={translations} />
