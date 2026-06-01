@@ -199,13 +199,17 @@ export function MessageBubble({
           </details>
         )}
 
-        {/* Place cards — bounded at top 5 */}
+        {/* Place cards — horizontal scroll, bounded at top 5 */}
         {!isUser && places && places.length > 0 && placeTranslations && (
-          <section className="mt-3 rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-3 shadow-sm" role="region" aria-label={placeTranslations.placeResultsHeading}>
+          <section className="mt-3 max-w-full overflow-hidden rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-3 shadow-sm" role="region" aria-label={placeTranslations.placeResultsHeading}>
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#0b5f63]">
               {placeTranslations.placeResultsHeading}
             </p>
-            <div className="flex gap-2 overflow-x-auto pb-2" aria-label={placeTranslations.placeResultsHeading}>
+            <div
+              className="flex max-w-full gap-2 overflow-x-auto overscroll-x-contain pb-2 snap-x snap-mandatory"
+              aria-label={placeTranslations.placeResultsHeading}
+              style={{ scrollbarWidth: "thin" }}
+            >
               {places.slice(0, 5).map((place) => (
                 <PlaceCard key={place.place_id} place={place} translations={placeTranslations} />
               ))}

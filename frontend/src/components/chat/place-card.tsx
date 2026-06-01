@@ -41,7 +41,6 @@ function formatPreference(pref: string, isVi: boolean): string {
     price_level_3: "💵💵 Cao cấp",
     open_now: "🟢 Mở cửa",
     wheelchair_accessible: "♿ Lối xe lăn",
-    provider_rating_available: "⭐ Đánh giá tốt",
   } : {
     cafe: "☕ Cafe",
     coffee_shop: "☕ Coffee Shop",
@@ -53,7 +52,6 @@ function formatPreference(pref: string, isVi: boolean): string {
     price_level_3: "💵💵 Premium",
     open_now: "🟢 Open Now",
     wheelchair_accessible: "♿ Wheelchair Access",
-    provider_rating_available: "⭐ High Rating",
   };
 
   const key = pref.toLowerCase().replace(/:/g, "_");
@@ -83,6 +81,40 @@ function ScoreAxis({
         />
       </div>
       <span className="w-7 tabular-nums text-right font-mono font-medium">{pct}%</span>
+    </div>
+  );
+}
+
+/** Render a correction/deviation bar for delta score components.
+ * Unlike ScoreAxis, this shows signed values (penalties negative, bonuses positive). */
+function DeltaBar({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  const isPenalty = value < 0;
+  const absVal = Math.abs(value);
+  const barWidth = Math.round(Math.min(1, absVal / 0.2) * 100); // 0.2 = full bar width
+  return (
+    <div className="flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
+      <span className="w-16 shrink-0 truncate font-medium">{label}</span>
+      <div className="h-1.5 flex-1 rounded-full bg-secondary overflow-hidden relative">
+        {/* Center marker */}
+        <div className="absolute left-1/2 top-0 h-full w-px bg-muted-foreground/30" />
+        <div
+          className={`absolute top-0 h-full rounded-full transition-all duration-300 ${
+            isPenalty
+              ? "right-1/2 bg-gradient-to-l from-rose-500 to-orange-400"
+              : "left-1/2 bg-gradient-to-r from-emerald-400 to-teal-500"
+          }`}
+          style={{ width: `${barWidth}%` }}
+        />
+      </div>
+      <span className={`w-10 tabular-nums text-right font-mono font-medium ${isPenalty ? "text-rose-500" : "text-emerald-500"}`}>
+        {isPenalty ? "" : "+"}{value.toFixed(3)}
+      </span>
     </div>
   );
 }
@@ -133,7 +165,7 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
 
   return (
     <div
-      className="flex-shrink-0 w-[230px] md:w-64 rounded-xl border border-border/50 bg-card text-card-foreground shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between"
+      className="flex-shrink-0 w-52 sm:w-[230px] md:w-64 rounded-xl border border-border/50 bg-card text-card-foreground shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between"
       role="article"
       aria-label={place.display_name}
     >
@@ -269,13 +301,13 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
                 label={AXIS_LABELS.tree3_quality}
                 value={score_breakdown.tree3_quality}
               />
-              <ScoreAxis
+              <DeltaBar
                 label={AXIS_LABELS.delta1_fairness}
-                value={0.5 + score_breakdown.delta1_fairness}
+                value={score_breakdown.delta1_fairness}
               />
-              <ScoreAxis
+              <DeltaBar
                 label={AXIS_LABELS.delta2_access}
-                value={0.5 + score_breakdown.delta2_access}
+                value={score_breakdown.delta2_access}
               />
             </div>
 
