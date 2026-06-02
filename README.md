@@ -29,11 +29,15 @@ Hệ thống giải quyết 2 vấn đề cốt lõi:
 ## 🤖 Kiến trúc hệ thống
 
 ### Multi-Agent System
-Hệ thống gồm 3 agent phối hợp qua LangGraph StateGraph:
+Hệ thống gồm các tác nhân và service phối hợp qua LangGraph-style StateGraph, với phần orchestration đã được tách theo module để dễ maintain:
 
-| Agent | Vai trò | File |
+| Thành phần | Vai trò | File |
 |---|---|---|
-| **AgentService** | LangGraph orchestration (retrieve → answer) | `agents/graph/agent_service.py` |
+| **AgentService** | LangGraph orchestration: build graph, chạy LLM/tool loop, stream response | `agents/graph/agent_service.py` |
+| **Graph State & Tool Contract** | `AgentState`, timeout, tool schema, system prompt, optional LangGraph imports | `agents/graph/state.py` |
+| **Follow-up Context** | Lưu/khôi phục context hội thoại, resolve câu hỏi nối tiếp trước khi gọi tool | `agents/graph/followup.py` |
+| **Checkpointing** | In-memory/Postgres history + structured follow-up context persistence | `agents/graph/checkpointing.py` |
+| **Routing Helpers** | Deterministic intent routing, fallback answers, status/suggestion helpers | `agents/graph/routing.py` |
 | **GroundedAnswer** | Intent detection + grounded answers | `agents/guardrails/grounded_answer.py` |
 | **EnsembleReranker** | 3-tree Bagging + 2-step Boosting fairness | `agents/ml/ensemble_reranker.py` |
 
@@ -96,9 +100,13 @@ docker compose up
 
 ```
 citd-hk1-project/
-├── agents/                    # LangGraph Multi-Agent Orchestration
+├── agents/                    # LangGraph-style Multi-Agent Orchestration
 │   ├── graph/
-│   │   └── agent_service.py   # LangGraph StateGraph (retrieve → answer)
+│   │   ├── agent_service.py   # AgentService: graph build, LLM/tool loop, streaming
+│   │   ├── state.py           # AgentState, tool schemas, system prompt, timeouts
+│   │   ├── followup.py        # Structured follow-up context + pre-tool routing
+│   │   ├── checkpointing.py   # In-memory/Postgres conversation checkpointing
+│   │   └── routing.py         # Deterministic routing, fallbacks, suggestions
 │   ├── tools/
 │   │   ├── hybrid_retriever.py  # BM25 + Qdrant dense + keyword fallback
 │   │   ├── retriever.py         # In-memory keyword search

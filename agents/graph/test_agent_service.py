@@ -190,3 +190,70 @@ def test_non_search_place_name_followup_still_uses_structured_context():
     decision = resolve_followup_decision("Hải Sản Thiện có ngon không?", ctx)
     assert decision == "structured_context"
 
+
+class FakeToolCallFunction:
+    def __init__(self, name, arguments="{}"):
+        self.name = name
+        self.arguments = arguments
+
+class FakeToolCall:
+    def __init__(self, name="search_knowledge", arguments='{"query":"stale"}'):
+        self.id = "call_1"
+        self.function = FakeToolCallFunction(name, arguments)
+
+class FakeLLMMessage:
+    def __init__(self, *, content="", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+    def model_dump(self, exclude_none=True):
+        return {"role": "assistant", "content": self.content}
+
+class FakeChoice:
+    def __init__(self, message):
+        self.message = message
+
+class FakeCompletion:
+    def __init__(self, message):
+        self.choices = [FakeChoice(message)]
+
+class FakeCompletions:
+    def __init__(self, message):
+        self.message = message
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        return FakeCompletion(self.message)
+
+class FakeChat:
+    def __init__(self, message):
+        self.completions = FakeCompletions(message)
+
+class FakeOpenAIClient:
+    def __init__(self, message):
+        self.chat = FakeChat(message)
+
+class FakeLLMServiceWithClient:
+    model = "fake-model"
+
+    def __init__(self, message):
+        self._client = FakeOpenAIClient(message)
+
+@pytest.mark.asyncio
+async def test_preflight_blocks_llm_tool_call_for_greeting(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    llm_service = FakeLLMServiceWithClient(FakeLLMMessage(tool_calls=[FakeToolCall()]))
+    service = AgentService(
+        retriever=retriever,
+        llm_service=llm_service,
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(session_id="s-preflight-greeting", message="chào bạn", language="vi")
+
+    assert response.intent == "conversational"
+    assert response.citations == []
+    assert retriever.queries == []
+    assert llm_service._client.chat.completions.calls == 0

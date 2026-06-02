@@ -1,0 +1,534 @@
+"""Follow-up context detection and response composition."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+import structlog
+
+from app.models.response import ChatResponse
+from agents.graph.state import AgentState, FollowUpDecision
+from agents.graph.routing import _direct_answer as _default_direct_answer, _clarify_message as _default_clarify_message, _is_followup
+from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
+
+logger = structlog.get_logger(__name__)
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())
+
+
+@dataclass
+class FollowUpContext:
+    """Structured metadata from the most recent assistant response.
+
+    Persisted alongside plain-text history so that unseen follow-ups can
+    resolve references to prior places, score breakdowns, explanations,
+    provider trace/status, and prior assistant content without RAG fallback.
+
+    Redaction guarantee: no API keys, DSNs, raw provider payloads, exact
+    user GPS, or full conversation content beyond bounded assistant
+    summaries already visible to the user.
+    """
+
+    session_id: str = ""
+    intent: str | None = None
+    place_ids: list[str] = field(default_factory=list)
+    place_display_names: list[str] = field(default_factory=list)
+    place_ratings: list[float] = field(default_factory=list)
+    place_price_levels: list[int] = field(default_factory=list)
+    has_citations: bool = False
+    citation_sources: list[str] = field(default_factory=list)
+    reasoning_log_summary: str | None = None
+    score_breakdown_keys: list[str] = field(default_factory=list)
+    provider_source: str | None = None
+    provider_status: str | None = None
+    fallback: bool = False
+    explanation_keys: list[str] = field(default_factory=list)
+    _version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "intent": self.intent,
+            "place_ids": self.place_ids,
+            "place_display_names": self.place_display_names,
+            "place_ratings": self.place_ratings,
+            "place_price_levels": self.place_price_levels,
+            "has_citations": self.has_citations,
+            "citation_sources": self.citation_sources,
+            "reasoning_log_summary": self.reasoning_log_summary,
+            "score_breakdown_keys": self.score_breakdown_keys,
+            "provider_source": self.provider_source,
+            "provider_status": self.provider_status,
+            "fallback": self.fallback,
+            "explanation_keys": self.explanation_keys,
+            "_version": self._version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "FollowUpContext | None":
+        if not isinstance(data, dict):
+            return None
+        def _safe_list(val: Any) -> list[str]:
+            if isinstance(val, list):
+                return [str(v) for v in val if v]
+            return []
+        def _safe_float_list(val: Any) -> list[float]:
+            if isinstance(val, list):
+                return [float(v) for v in val if v is not None]
+            return []
+        def _safe_int_list(val: Any) -> list[int]:
+            if isinstance(val, list):
+                return [int(v) for v in val if v is not None]
+            return []
+        try:
+            return cls(
+                session_id=data.get("session_id", ""),
+                intent=data.get("intent"),
+                place_ids=_safe_list(data.get("place_ids")),
+                place_display_names=_safe_list(data.get("place_display_names")),
+                place_ratings=_safe_float_list(data.get("place_ratings")),
+                place_price_levels=_safe_int_list(data.get("place_price_levels")),
+                has_citations=bool(data.get("has_citations")),
+                citation_sources=_safe_list(data.get("citation_sources")),
+                reasoning_log_summary=data.get("reasoning_log_summary"),
+                score_breakdown_keys=_safe_list(data.get("score_breakdown_keys")),
+                provider_source=data.get("provider_source"),
+                provider_status=data.get("provider_status"),
+                fallback=bool(data.get("fallback")),
+                explanation_keys=_safe_list(data.get("explanation_keys")),
+                _version=data.get("_version", 1),
+            )
+        except (TypeError, AttributeError):
+            return None
+
+    @property
+    def is_populated(self) -> bool:
+        return bool(
+            self.place_ids
+            or self.place_display_names
+            or self.citation_sources
+            or self.reasoning_log_summary
+            or self.score_breakdown_keys
+            or self.provider_source
+        )
+
+
+def resolve_followup_decision(
+    message: str,
+    context: FollowUpContext | None,
+    history: list[dict[str, str]] | None = None,
+) -> FollowUpDecision:
+    """Classify a follow-up message into a decision label.
+
+    Priority order:
+    1. structured_context — message references entities in the prior structured context
+    2. history_context — message is answerable from conversation history alone
+    3. clarification_needed — ambiguous pronoun or underspecified follow-up
+    4. insufficient_context — no prior context or history to resolve from
+
+    Returns a label that callers can use to route the follow-up appropriately
+    (answer from context, ask clarification, or trigger RAG).
+    """
+    text = _norm(message)
+    if not text:
+        return "insufficient_context"
+
+    # 1. Explicit new requests should route normally before any prior-place
+    # token matching. This prevents broad category overlap (e.g. "hải sản")
+    # from hijacking a fresh search after place recommendations.
+    if _is_explicit_new_request(message):
+        return "insufficient_context"
+
+    # 2. Try structured context for genuine follow-ups.
+    if context and context.is_populated:
+        if _matches_structured_context(text, context):
+            return "structured_context"
+
+    # 3. Fall back to history-only heuristics
+    if history and _is_followup(text, history):
+        return "history_context"
+
+    # 3. Ambiguous pronouns that could reference missing context
+    if _is_ambiguous_pronoun_followup(text):
+        return "clarification_needed"
+
+    # 4. No context to resolve from
+    if not context or not context.is_populated:
+        return "insufficient_context"
+
+    # If it is a brand-new descriptive request (doesn't match structured context),
+    # treat it as insufficient_context so normal routing handles it, rather than
+    # getting stuck in a clarification loop.
+    if _is_new_request(message):
+        return "insufficient_context"
+
+    return "clarification_needed"
+
+
+def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
+    """Check if the follow-up message references entities in the structured context.
+
+    Ignores common Vietnamese descriptor words (quán, nhà hàng, hải sản, etc.)
+    so that new place requests like "tìm quán cà phê" don't falsely match
+    prior context. A place name must have at least one distinctive token
+    remaining after filtering.
+    """
+    # Common descriptor words that appear in many place names but don't
+    # uniquely identify a specific venue. Kept conservative — only words that
+    # are nearly always generic (not distinctive like "hải sản" or "ngọc lan").
+    _skip_tokens = frozenset({
+        "quán", "nhà", "hàng", "khách", "sạn",
+        "homestay", "hotel", "restaurant",
+        "ăn", "uống", "nghỉ", "dưỡng", "resort",
+    })
+
+    # Direct place name references (token-level, ignoring single-char tokens
+    # and common descriptor words). At least one distinctive token must match.
+    for name in context.place_display_names:
+        normalized = _norm(name)
+        if not normalized:
+            continue
+        tokens = [t for t in normalized.split() if len(t) > 1 and t not in _skip_tokens]
+        if not tokens:
+            # All tokens are skip words — only match if the full normalized
+            # name appears as a substring (for names like "Quán Hải Sản" where
+            # every token is a skip word)
+            if normalized in text:
+                return True
+            continue
+        if any(token in text for token in tokens):
+            return True
+
+    # References to scoring/ranking
+    if context.score_breakdown_keys and any(
+        term in text for term in ("vì sao", "tại sao", "sao lại", "xếp hạng", "rank", "score", "điểm số", "điểm cao", "điểm thấp", "why", "ranked")
+    ):
+        return True
+
+    # References to citations/sources
+    if context.has_citations and any(
+        term in text for term in ("nguồn", "source", "trích", "cite", "tài liệu", "document")
+    ):
+        return True
+
+    # References to provider/source
+    if context.provider_source and any(
+        term in text for term in ("provider", "nguồn dữ liệu", "data source")
+    ):
+        return True
+
+    # References to recommendations (places intent with populated context)
+    # Use demonstratives and specific terms — NOT generic "quán" which appears
+    # in new place requests unless accompanied by comparatives or rating terms
+    if context.intent == PLACE_RECOMMENDATION_INTENT and any(
+        term in text for term in (
+            "địa điểm", "này", "kia", "đó", "place", "venue", "recommend", "gợi ý",
+            "nào", "nhất", "quán nào", "chỗ nào", "địa điểm nào", "best", "top", "rank",
+            "xếp hạng", "cao nhất", "thấp nhất", "rẻ nhất", "gần nhất", "đánh giá", "rating",
+            "review"
+        )
+    ):
+        return True
+
+    return False
+
+
+def _is_ambiguous_pronoun_followup(text: str) -> bool:
+    """Detect follow-ups that use pronouns without clear referents."""
+    text = _norm(text)
+    # Strip trailing/leading punctuation for pronoun matching
+    text = text.strip("?.,!;:").strip()
+    ambiguous = {"nó", "chúng", "chúng nó", "đó", "kia", "ấy", "that", "those", "they", "them"}
+    words = set(text.split())
+    return bool(words & ambiguous) and len(text.split()) <= 4
+
+
+def _build_followup_context(response: ChatResponse) -> FollowUpContext:
+    """Extract structured context from a ChatResponse for follow-up resolution."""
+    place_ids = [p.place_id for p in response.places[:10]]
+    place_names = [p.display_name for p in response.places[:10]]
+    place_ratings = [float(p.rating or 0.0) for p in response.places[:10]]
+    place_price_levels = [int(p.price_level or 0) for p in response.places[:10]]
+    citation_sources = [c.source for c in response.citations[:5]]
+
+    score_keys: list[str] = []
+    explanation_keys: list[str] = []
+    for p in response.places[:5]:
+        if p.score_breakdown:
+            score_keys.extend(str(k) for k in p.score_breakdown.model_dump().keys() if k not in score_keys)
+        if p.explanation:
+            explanation_keys.extend(str(k) for k in p.explanation.model_dump().keys() if k not in explanation_keys)
+
+    return FollowUpContext(
+        session_id=response.session_id,
+        intent=response.intent,
+        place_ids=place_ids,
+        place_display_names=place_names,
+        place_ratings=place_ratings,
+        place_price_levels=place_price_levels,
+        has_citations=bool(response.citations),
+        citation_sources=citation_sources,
+        reasoning_log_summary=(response.reasoning_log or "")[:500] if response.reasoning_log else None,
+        score_breakdown_keys=score_keys[:10],
+        provider_source=getattr(response.decision_trace, "provider_source", None) if response.decision_trace else None,
+        provider_status=getattr(response.decision_trace, "credential_status", None) if response.decision_trace else None,
+        fallback=response.fallback,
+        explanation_keys=explanation_keys[:10],
+    )
+
+def compose_followup_answer(
+    message: str,
+    context: FollowUpContext,
+    language: str,
+) -> str:
+    """Compose a contextual follow-up answer from structured last-response context.
+
+    Uses pattern-matching guardrails (not hardcoded example strings) to detect
+    the type of follow-up and compose an appropriate answer. Never invents
+    facts — when context lacks details, provides a bounded acknowledgment.
+    """
+    text = _norm(message)
+
+    # Place name reference → give what we know about that place
+    for name in context.place_display_names:
+        normalized = _norm(name)
+        if not normalized:
+            continue
+        for token in normalized.split():
+            if len(token) > 1 and token in text:
+                if language == "vi":
+                    return (
+                        f"Về {name}: mình đã gợi ý địa điểm này trước đó. "
+                        f"Bạn cần thông tin cụ thể nào (giờ mở cửa, đánh giá, đường đi)?"
+                    )
+                return (
+                    f"About {name}: I recommended this venue earlier. "
+                    f"What specific info do you need (hours, reviews, directions)?"
+                )
+
+    # Score / ranking reference
+    if context.score_breakdown_keys and any(
+        term in text for term in ("vì sao", "tại sao", "sao lại", "xếp hạng", "rank", "score", "điểm số", "điểm cao", "điểm thấp", "why")
+    ):
+        keys = ", ".join(context.score_breakdown_keys[:3])
+        if language == "vi":
+            return (
+                f"Địa điểm được xếp hạng dựa trên các tiêu chí: {keys}. "
+                f"Yếu tố địa phương (local_factor) và chất lượng đóng vai trò chính."
+            )
+        return (
+            f"Places were ranked using: {keys}. "
+            f"Local factor and quality scores are the main drivers."
+        )
+
+    # Citation / source reference
+    if context.has_citations and any(
+        term in text for term in ("nguồn", "source", "trích", "cite", "tài liệu", "document")
+    ):
+        sources = ", ".join(context.citation_sources[:2]) if context.citation_sources else "các nguồn đã tham khảo"
+        if language == "vi":
+            return f"Thông tin trước đó được tham khảo từ: {sources}. Bạn cần kiểm tra nguồn cụ thể nào?"
+        return f"Previous info was sourced from: {sources}. Which source would you like to check?"
+
+    # Provider / data source reference
+    if context.provider_source and any(
+        term in text for term in ("provider", "nguồn dữ liệu", "data source")
+    ):
+        src = context.provider_source
+        status = context.provider_status or "unknown"
+        if language == "vi":
+            return f"Dữ liệu địa điểm lấy từ {src} (trạng thái: {status})."
+        return f"Place data comes from {src} (status: {status})."
+
+    # Comparative rating query (e.g., highest rated, best review)
+    if context.place_ratings and any(term in text for term in ("đánh giá cao nhất", "rating cao nhất", "highest rated", "best rated", "review cao nhất", "đánh giá tốt nhất", "ngon nhất", "ok nhất")):
+        max_rating = -1.0
+        best_indices = []
+        for i, r in enumerate(context.place_ratings):
+            if r > max_rating:
+                max_rating = r
+                best_indices = [i]
+            elif r == max_rating:
+                best_indices.append(i)
+        
+        if best_indices:
+            best_places = [context.place_display_names[idx] for idx in best_indices]
+            joined_names = " và ".join(best_places) if language == "vi" else " and ".join(best_places)
+            if language == "vi":
+                return f"Trong các địa điểm đã gợi ý, nơi có đánh giá cao nhất là {joined_names} với {max_rating}⭐."
+            return f"Among the recommended places, the highest rated is {joined_names} with {max_rating}⭐."
+
+    # Comparative price query (e.g., cheapest, best price, lowest cost)
+    if context.place_price_levels and any(term in text for term in ("rẻ nhất", "giá thấp nhất", "cheapest", "lowest price", "giá tốt nhất", "chi phí tiết kiệm nhất", "tiết kiệm nhất")):
+        min_price = 999
+        best_indices = []
+        for i, p in enumerate(context.place_price_levels):
+            val = p if p > 0 else 2
+            if val < min_price:
+                min_price = val
+                best_indices = [i]
+            elif val == min_price:
+                best_indices.append(i)
+        
+        if best_indices and min_price < 999:
+            best_places = [context.place_display_names[idx] for idx in best_indices]
+            joined_names = " và ".join(best_places) if language == "vi" else " and ".join(best_places)
+            price_desc = "giá tiết kiệm" if min_price == 1 else "giá hợp lý"
+            if language == "vi":
+                return f"Trong các địa điểm đã gợi ý, nơi có chi phí tiết kiệm nhất là {joined_names} ({price_desc})."
+            return f"Among the recommended places, the most budget-friendly is {joined_names}."
+
+    # General recommendation follow-up
+    if context.intent == PLACE_RECOMMENDATION_INTENT and any(
+        term in text for term in ("quán", "địa điểm", "này", "kia", "đó", "place", "venue", "gợi ý")
+    ):
+        names = ", ".join(context.place_display_names[:3]) if context.place_display_names else "các địa điểm đã gợi ý"
+        if language == "vi":
+            return f"Bạn muốn biết thêm gì về {names}? Mình có thể giải thích lý do xếp hạng hoặc gợi ý thêm."
+        return f"What would you like to know more about {names}? I can explain rankings or suggest more."
+
+    # Default: bounded acknowledgment
+    if language == "vi":
+        return "Mình nhớ câu trả lời trước đó. Bạn cần giải thích thêm phần nào?"
+    return "I remember the previous answer. Which part would you like me to explain further?"
+
+
+def _is_explicit_new_request(message: str) -> bool:
+    """Return True for messages that clearly start a new tool/search task.
+
+    This is intentionally stricter than _is_new_request: it requires an
+    explicit action/search signal so follow-ups like "Hải Sản có tươi không?"
+    can still resolve against a previously recommended place named "Quán Hải Sản".
+    """
+    text = _norm(message)
+    if not text:
+        return False
+
+    place_terms = (
+        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
+        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
+        "stay", "place", "nearby", "gần đây", "quanh đây", "cf", "coffee", "view"
+    )
+    action_terms = (
+        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
+        "quanh", "gần", "ở đâu", "có quán", "có nhà hàng", "review", "đánh giá",
+        "giá", "lịch trình", "bản đồ", "map"
+    )
+    knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
+
+    has_place_topic = any(term in text for term in place_terms)
+    has_action = any(term in text for term in action_terms)
+    has_knowledge = any(term in text for term in knowledge_terms)
+    return (has_place_topic and has_action) or has_knowledge
+
+def _is_new_request(message: str) -> bool:
+    """Detect whether a message looks like a brand-new place or knowledge
+    request rather than a follow-up to prior context.
+
+    Used to avoid short-circuiting new requests into clarification when
+    prior context exists but doesn't match the message.
+    """
+    text = _norm(message)
+    # New place request indicators
+    place_terms = (
+        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
+        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
+        "stay", "place", "nearby", "gần đây", "quanh đây", "cf", "coffee", "view"
+    )
+    action_terms = (
+        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
+        "có", "nào", "đâu", "gì", "quanh", "gần", "ở", "không", "review",
+        "đánh giá", "giá", "sao", "lịch trình", "bản đồ", "map"
+    )
+    # New knowledge request indicators
+    knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
+
+    has_place_topic = any(term in text for term in place_terms)
+    has_action = any(term in text for term in action_terms)
+    has_knowledge = any(term in text for term in knowledge_terms)
+
+    # If it contains a place term and is long enough, treat it as a new request
+    is_descriptive_place = has_place_topic and len(text.split()) >= 3
+
+    return (has_place_topic and has_action) or has_knowledge or is_descriptive_place
+
+
+def resolve_followup_before_tool_routing(
+    state: AgentState,
+    *,
+    has_llm: bool = False,
+    direct_answer: Callable[[str, list[dict[str, str]], str], str] = _default_direct_answer,
+    clarify_message: Callable[[str], str] = _default_clarify_message,
+) -> AgentState | None:
+    """Resolve follow-ups before entering tool routing.
+
+    Runs after _initial_state and before deterministic/LLM tool routing.
+    Returns a fully-populated state when the follow-up can be answered
+    from structured context, or None to proceed with normal routing.
+
+    Decision routing:
+    - structured_context → compose answer from prior context, skip tools
+    - history_context    → use deterministic direct-answer path, skip tools
+    - clarification_needed → return clarification message, skip tools
+    - insufficient_context → proceed to normal routing
+    """
+    decision = state.get("followup_decision")
+    prior = state.get("prior_context")
+
+    if decision == "structured_context" and prior and prior.is_populated:
+        state["response_text"] = compose_followup_answer(
+            state["message"], prior, state["language"],
+        )
+        state["intent"] = "followup_contextual"
+        state["places_response_ready"] = True
+        state["fallback"] = False
+        logger.debug(
+            "agent.followup_resolved",
+            session_id=state["session_id"],
+            decision="structured_context",
+        )
+        return state
+
+    if has_llm:
+        # If the LLM is active, do NOT short-circuit general clarification_needed.
+        # Let the LLM reason over the conversation history and choose the appropriate tools or responses natively.
+        # Only allow history_context short-circuits (e.g. "?", "ví dụ") or very specific direct answers.
+        if decision == "history_context":
+            state["response_text"] = direct_answer(
+                state["message"], state.get("history", []), state["language"],
+            )
+            state["intent"] = "followup_history"
+            state["places_response_ready"] = True
+            state["fallback"] = False
+            return state
+        return None
+
+    if decision == "history_context":
+        # Answerable from history alone — use direct-answer path, skip tools
+        state["response_text"] = direct_answer(
+            state["message"], state.get("history", []), state["language"],
+        )
+        state["intent"] = "followup_history"
+        state["places_response_ready"] = True
+        state["fallback"] = False
+        return state
+
+    if decision == "clarification_needed":
+        # Distinguish between truly ambiguous pronouns and new requests.
+        # If the message looks like a new place/knowledge request, let normal
+        # routing handle it (insufficient_context path) rather than asking
+        # for clarification about prior context.
+        if _is_new_request(state["message"]):
+            return None  # Proceed to normal routing
+        state["response_text"] = clarify_message(state["language"])
+        state["intent"] = "clarification"
+        state["places_response_ready"] = True
+        state["fallback"] = False
+        return state
+
+    # insufficient_context → proceed to normal routing
+    return None
