@@ -697,9 +697,22 @@ def _make_place_specific_reason(
     type_label = candidate.primary_type_display_name or (candidate.primary_type or "place").replace("_", " ")
     rating_bits: list[str] = []
     if candidate.rating is not None:
-        rating_bits.append(f"{candidate.rating:.1f}⭐")
+        if language == "vi":
+            if candidate.rating >= 4.3:
+                rating_bits.append(f"điểm mạnh {candidate.rating:.1f}⭐")
+            elif candidate.rating >= 4.0:
+                rating_bits.append(f"đánh giá khá {candidate.rating:.1f}⭐")
+            else:
+                rating_bits.append(f"đánh giá trung bình {candidate.rating:.1f}⭐")
+        else:
+            if candidate.rating >= 4.3:
+                rating_bits.append(f"strong rating {candidate.rating:.1f}⭐")
+            elif candidate.rating >= 4.0:
+                rating_bits.append(f"solid rating {candidate.rating:.1f}⭐")
+            else:
+                rating_bits.append(f"mixed rating {candidate.rating:.1f}⭐")
     if candidate.user_rating_count:
-        rating_bits.append(f"{candidate.user_rating_count} reviews")
+        rating_bits.append(f"{candidate.user_rating_count} reviews" if language != "vi" else f"{candidate.user_rating_count} lượt đánh giá")
     status_bits: list[str] = []
     if candidate.open_now is True:
         status_bits.append("đang mở cửa" if language == "vi" else "open now")
@@ -717,7 +730,7 @@ def _make_place_specific_reason(
     if language == "vi":
         pieces = [f"{candidate.display_name} là {type_label}"]
         if joined_rating:
-            pieces.append(f"có tín hiệu chất lượng từ {joined_rating}")
+            pieces.append(f"có tín hiệu đánh giá từ {joined_rating}")
         if joined_status:
             pieces.append(joined_status)
         if fallback:
@@ -833,7 +846,7 @@ def _make_friendly_reason(matched: list[str], fallback: bool, language: str) -> 
         if budget_ok:
             parts.append("phù hợp ngân sách")
         if rating_ok:
-            parts.append("được đánh giá cao")
+            parts.append("có dữ liệu đánh giá từ nhà cung cấp")
         if open_now:
             parts.append("đang mở cửa")
         if access_ok:
@@ -862,7 +875,7 @@ def _make_friendly_reason(matched: list[str], fallback: bool, language: str) -> 
         if budget_ok:
             parts.append("fits your budget")
         if rating_ok:
-            parts.append("has high ratings")
+            parts.append("has provider rating data")
         if open_now:
             parts.append("is open now")
         if access_ok:

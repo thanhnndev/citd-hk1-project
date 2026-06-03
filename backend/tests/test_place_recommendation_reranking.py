@@ -1002,3 +1002,27 @@ class TestPreferenceEndToEnd:
         )
 
         assert response.citations == []
+
+@pytest.mark.asyncio
+async def test_explanation_does_not_call_mid_rating_high() -> None:
+    candidate = _candidate(
+        "places/mid-rating",
+        display_name="Hạnh Nhung Làng Chài Hàm Ninh Phú Quốc",
+        local_factor=None,
+        rating=3.6,
+    )
+    places_tool = AsyncMock()
+    places_tool.text_search.return_value = PlaceToolResponse(
+        status=PlaceToolStatus.OK,
+        source=PlaceToolSource.MOCK,
+        candidates=[candidate],
+        request=PlaceSearchRequest(query="nhà hàng"),
+        retrieved_at=datetime.now(UTC),
+    )
+    service = PlaceRecommendationService(places_tool, routes_service=None)
+
+    response = await service.recommend(query="nhà hàng", language="vi", session_id="s-mid-rating")
+
+    reason = response.places[0].explanation.primary_reason.lower()
+    assert "được đánh giá cao" not in reason
+    assert "đánh giá trung bình 3.6" in reason
