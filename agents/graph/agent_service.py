@@ -270,6 +270,7 @@ class AgentService:
             "prior_context": prior_context,
             "followup_decision": followup_decision,
             "context_source": context_source,
+            "tool_call_signatures": [],
         }
 
     async def _run_tool_loop(self, state: AgentState) -> AgentState:
@@ -310,7 +311,7 @@ class AgentService:
             max_completion_tokens=520,
         )
         message = completion.choices[0].message
-        tool_calls = list(message.tool_calls or [])
+        tool_calls = self._normalize_tool_calls(list(message.tool_calls or []))
         if tool_calls:
             state["tool_calls"] = tool_calls
             state["messages"].append(message.model_dump(exclude_none=True))
@@ -325,20 +326,47 @@ class AgentService:
 
     async def _tool_node(self, state: AgentState) -> AgentState:
         tool_messages: list[dict[str, Any]] = []
-        for call in state.get("tool_calls", [])[:2]:
-            name = call.function.name
-            args = _json_args(call.function.arguments)
+        signatures = state.setdefault("tool_call_signatures", [])
+        for call in self._normalize_tool_calls(state.get("tool_calls", []))[:2]:
+            name = call["name"]
+            args = call["args"]
             query = str(args.get("query") or state["message"])
-            if name == "search_knowledge":
+            signature = f"{name}:{query}"
+            if signature in signatures:
+                content = json.dumps({"status": "repeat", "message": "Tool call already attempted for this query."}, ensure_ascii=False)
+            elif name == "search_knowledge":
+                signatures.append(signature)
                 content = await self._search_knowledge_tool(state, query)
             elif name == "search_places":
+                signatures.append(signature)
                 content = await self._search_places_tool(state, query)
             else:
-                content = json.dumps({"status": "unavailable", "message": "Unknown tool"})
-            tool_messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+                content = json.dumps({"status": "unavailable", "message": "Unknown tool"}, ensure_ascii=False)
+            tool_messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
         state["messages"].extend(tool_messages)
         state["tool_calls"] = []
         return state
+
+    def _normalize_tool_calls(self, tool_calls: list[Any]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for index, call in enumerate(tool_calls):
+            function = getattr(call, "function", None)
+            name = getattr(function, "name", None)
+            arguments = getattr(function, "arguments", None)
+            call_id = getattr(call, "id", None)
+            if isinstance(call, dict):
+                function_data = call.get("function") if isinstance(call.get("function"), dict) else {}
+                name = function_data.get("name") or call.get("name")
+                arguments = function_data.get("arguments") or call.get("arguments")
+                call_id = call.get("id")
+            if not name:
+                continue
+            normalized.append({
+                "id": str(call_id or f"tool-{index}"),
+                "name": str(name),
+                "args": _json_args(arguments if isinstance(arguments, str) else json.dumps(arguments or {})),
+            })
+        return normalized
 
     def _should_continue(self, state: AgentState) -> Literal["tool_node", "__end__"]:
         if state.get("places_response_ready"):
@@ -424,9 +452,9 @@ class AgentService:
         _budget: str | None = None
         _accessibility: bool | None = None
         _user_location: dict[str, float] | None = None
-        for call in state.get("tool_calls", [])[:2]:
-            if call.function.name == "search_places":
-                args = _json_args(call.function.arguments)
+        for call in self._normalize_tool_calls(state.get("tool_calls", []))[:2]:
+            if call["name"] == "search_places":
+                args = call["args"]
                 _budget = args.get("budget") if isinstance(args.get("budget"), str) else None
                 _accessibility = args.get("accessibility") if isinstance(args.get("accessibility"), bool) else None
                 ul = args.get("user_location")

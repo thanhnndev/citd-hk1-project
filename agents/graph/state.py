@@ -57,6 +57,7 @@ class AgentState(TypedDict, total=False):
     prior_context: Any | None
     followup_decision: FollowUpDecision | None
     context_source: str | None
+    tool_call_signatures: list[str]
 
 
 TOOLS = [

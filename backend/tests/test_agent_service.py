@@ -673,3 +673,61 @@ class TestCulturalQueryRouting:
         assert retriever.call_count == 0, "Retriever should NOT be called for structured follow-up"
         assert response.intent == "followup_contextual"
         assert response.fallback is False
+
+@pytest.mark.asyncio
+async def test_agent_routes_knowledge_about_seafood_as_knowledge_not_places(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="seafood-knowledge",
+        message="Kể về hải sản và đời sống làng chài Hàm Ninh",
+        language="vi",
+    )
+
+    assert response.intent == "cultural_query"
+    assert response.places == []
+    assert retriever.queries == ["Kể về hải sản và đời sống làng chài Hàm Ninh"]
+
+@pytest.mark.asyncio
+async def test_tool_node_accepts_dict_tool_calls_and_prevents_repeats(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+    state = {
+        "session_id": "dict-tools",
+        "message": "Văn hóa Hàm Ninh",
+        "language": "vi",
+        "history": [],
+        "messages": [],
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "function": {"name": "search_knowledge", "arguments": '{"query":"Văn hóa Hàm Ninh"}'},
+            }
+        ],
+        "citations": [],
+        "places": [],
+        "suggestions": [],
+        "response_text": "",
+        "tool_call_signatures": [],
+    }
+
+    first = await service._tool_node(state)
+    first["tool_calls"] = [
+        {
+            "id": "call-2",
+            "function": {"name": "search_knowledge", "arguments": '{"query":"Văn hóa Hàm Ninh"}'},
+        }
+    ]
+    second = await service._tool_node(first)
+
+    assert retriever.queries == ["Văn hóa Hàm Ninh"]
+    assert '"status": "repeat"' in second["messages"][-1]["content"]

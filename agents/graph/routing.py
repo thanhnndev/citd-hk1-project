@@ -16,11 +16,15 @@ def _fallback_action(message: str, history: list[dict[str, str]]) -> Literal["di
     text = _norm(message)
     if not text:
         return "clarify"
-    if _is_greeting(text) or _is_capability(text) or _is_followup(text, history) or _is_place_capability(text):
+    if _is_greeting(text) or _is_capability(text) or _is_place_capability(text):
+        return "direct"
+    if _is_followup(text, history):
+        if _is_place_or_route(text):
+            return "places"
         return "direct"
     if _is_ambiguous_route(text):
         return "clarify"
-    if any(term in text for term in ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")):
+    if _is_knowledge_query(text):
         return "knowledge"
     if _is_place_or_route(text):
         return "places"
@@ -48,6 +52,14 @@ def _is_place_capability(text: str) -> bool:
     asks_capability = any(term in text for term in ("được không", "có được", "có thể", "can you"))
     return has_place and asks_capability
 
+def _is_knowledge_query(text: str) -> bool:
+    knowledge_terms = (
+        "văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài", "làng chài",
+        "đặc biệt", "nguồn gốc", "câu chuyện", "kể về", "giới thiệu", "tìm hiểu", "đời sống",
+        "phong tục", "nghề biển", "local life", "fishing village", "background", "explain",
+    )
+    return any(term in text for term in knowledge_terms)
+
 def _is_ambiguous_route(text: str) -> bool:
     route_terms = ("tìm đường", "đường đi", "cách đi", "route", "direction")
     has_route = any(term in text for term in route_terms)
@@ -68,8 +80,8 @@ def _is_place_or_route(text: str) -> bool:
     
     has_place = any(term in text for term in place_terms)
     has_action = any(term in text for term in action_terms)
-    is_descriptive = has_place and len(text.split()) >= 3
-    
+    is_descriptive = has_place and len(text.split()) >= 3 and not _is_knowledge_query(text)
+
     return any(term in text for term in route_terms) or (has_place and has_action) or is_descriptive
 
 def _direct_answer(message: str, history: list[dict[str, str]], language: str) -> str:
@@ -185,7 +197,15 @@ def _status_for_state(state: AgentState) -> str:
     return "[STATUS] using_history"
 
 def _status_for_tool_calls(tool_calls: list[Any]) -> str:
-    names = {call.function.name for call in tool_calls}
+    names: set[str] = set()
+    for call in tool_calls:
+        function = getattr(call, "function", None)
+        name = getattr(function, "name", None)
+        if isinstance(call, dict):
+            function_data = call.get("function") if isinstance(call.get("function"), dict) else {}
+            name = function_data.get("name") or call.get("name")
+        if name:
+            names.add(str(name))
     if "search_places" in names:
         return "[STATUS] checking_places"
     if "search_knowledge" in names:
