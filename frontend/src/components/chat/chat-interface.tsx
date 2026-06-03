@@ -410,17 +410,59 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 disclosure: language === "vi"
                   ? "Đây là trợ lý AI; thông tin có thể sai. Với đường đi, giờ mở cửa hoặc an toàn, hãy kiểm tra lại trên bản đồ/nguồn chính thức."
                   : "This is an AI assistant and can be wrong. For routes, opening hours, or safety, verify with a map or official source.",
-                quickPromptLabel: language === "vi" ? "Thử hỏi nhanh" : "Try a quick prompt",
-                guidanceCards: language === "vi"
+                quickPromptLabel: language === "vi" ? "Chọn điểm bắt đầu" : "Choose a starting point",
+                welcomeIntents: language === "vi"
                   ? [
-                    { title: "Địa điểm", body: "Quán ăn, cà phê, lưu trú." },
-                    { title: "Đường đi", body: "Hỏi điểm đến hoặc điểm xuất phát." },
-                    { title: "Văn hóa", body: "Ẩm thực, làng chài, lịch sử." },
+                    {
+                      title: "Khám phá văn hóa",
+                      description: "Hiểu ẩm thực, làng chài, lịch sử và đời sống địa phương với nguồn khi cần.",
+                      badge: "Có nguồn",
+                      prompts: ["Kể về ẩm thực địa phương", "Hải sản Hàm Ninh có gì nổi bật?"],
+                    },
+                    {
+                      title: "Tìm địa điểm",
+                      description: "Gợi ý quán hải sản, cà phê, homestay hoặc điểm ghé quanh Hàm Ninh.",
+                      badge: "Địa điểm",
+                      prompts: ["Tìm quán hải sản gần đây", "Có homestay gần biển không?"],
+                    },
+                    {
+                      title: "Hỏi đường",
+                      description: "Nói điểm đến hoặc điểm xuất phát; nếu thiếu, trợ lý sẽ hỏi lại.",
+                      badge: "Đường đi",
+                      prompts: ["Chỉ đường đến chợ Hàm Ninh", "Từ Dương Đông đi Hàm Ninh thế nào?"],
+                    },
+                    {
+                      title: "Lên lịch trình",
+                      description: "Biến thời gian, nhóm đi và sở thích thành một kế hoạch tham quan ngắn.",
+                      badge: "Kế hoạch",
+                      prompts: ["Gợi ý lịch trình 3 giờ", "Đi với trẻ em nên ghé đâu?"],
+                    },
                   ]
                   : [
-                    { title: "Places", body: "Food, cafes, stays." },
-                    { title: "Directions", body: "Share a destination or start point." },
-                    { title: "Culture", body: "Food, fishing life, history." },
+                    {
+                      title: "Explore culture",
+                      description: "Understand food, fishing life, history, and local context with sources when needed.",
+                      badge: "Sources",
+                      prompts: ["Tell me about local food", "What seafood is Ham Ninh known for?"],
+                    },
+                    {
+                      title: "Find places",
+                      description: "Get seafood, cafe, homestay, or stopover ideas around Ham Ninh.",
+                      badge: "Places",
+                      prompts: ["Find nearby seafood restaurants", "Any homestays near the coast?"],
+                    },
+                    {
+                      title: "Ask directions",
+                      description: "Share a destination or starting point; the assistant clarifies missing details.",
+                      badge: "Routes",
+                      prompts: ["Get directions to Ham Ninh market", "How do I get there from Duong Dong?"],
+                    },
+                    {
+                      title: "Plan a stop",
+                      description: "Turn time, group context, and interests into a compact itinerary.",
+                      badge: "Plan",
+                      prompts: ["Plan a 3-hour visit", "Where should I go with kids?"],
+                    },
                   ],
               }}
             />
