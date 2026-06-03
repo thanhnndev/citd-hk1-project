@@ -107,6 +107,31 @@ async def test_knowledge_query_is_only_path_that_returns_citations(ham_ninh_chun
     assert retriever.queries == ["Làng chài Hàm Ninh có gì đặc biệt?"]
 
 @pytest.mark.asyncio
+async def test_terse_food_topic_after_knowledge_turn_refines_with_retrieval(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
+
+    await service.answer(session_id="s-food-refine", message="Kể về ẩm thực địa phương", language="vi")
+    response = await service.answer(session_id="s-food-refine", message="HẢI SẢN", language="vi")
+
+    assert response.intent == "cultural_query"
+    assert response.citations
+    assert retriever.queries == ["Kể về ẩm thực địa phương", "HẢI SẢN"]
+    assert "4 nhóm" not in response.message
+
+@pytest.mark.asyncio
+async def test_bare_direction_word_clarifies_instead_of_capability_answer(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
+
+    response = await service.answer(session_id="s-bare-route", message="đường", language="vi")
+
+    assert response.intent == "clarification"
+    assert response.citations == []
+    assert "4 nhóm" not in response.message
+    assert retriever.queries == []
+
+@pytest.mark.asyncio
 async def test_stream_direct_answer_has_no_citations_marker(ham_ninh_chunk):
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")

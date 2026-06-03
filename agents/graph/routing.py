@@ -24,6 +24,8 @@ def _fallback_action(message: str, history: list[dict[str, str]]) -> Literal["di
         if any(term in text for term in ("ví dụ", "cụ thể", "example", "tươi ngon", "đồ ngon", "món ngon")):
             return "direct"
         return "knowledge"
+    if _is_topic_refinement(text, history):
+        return "knowledge"
     if _is_ambiguous_route(text):
         return "clarify"
     if _is_knowledge_query(text):
@@ -52,6 +54,28 @@ def _is_followup(text: str, history: list[dict[str, str]]) -> bool:
         or (any(term in text for term in ("tươi ngon", "đồ ngon", "món ngon")) and len(text.split()) <= 6)
     )
 
+def _is_topic_refinement(text: str, history: list[dict[str, str]]) -> bool:
+    """Detect terse follow-up topics that should refine the last knowledge turn.
+
+    LangGraph routing should use state plus model/tool policy rather than a
+    brittle short-text shortcut. A one- or two-word topic after a cited answer
+    is usually a refinement request, not a capabilities question.
+    """
+    if not any(item.get("role") == "assistant" for item in history[-4:]):
+        return False
+    if len(text.split()) > 3:
+        return False
+    topic_terms = (
+        "hải sản", "hai san", "ghẹ", "ghe", "tôm", "tom", "mực", "muc", "ẩm thực", "am thuc",
+        "văn hóa", "văn hoá", "van hoa", "lịch sử", "lich su", "nghề biển", "nghe bien",
+    )
+    recent = " ".join(item.get("content", "") for item in history[-4:]).lower()
+    knowledge_context_terms = (
+        "nguồn tham khảo", "ẩm thực", "am thuc", "hải sản", "hai san", "làng chài",
+        "lang chai", "văn hóa", "văn hoá", "lịch sử", "nghề biển",
+    )
+    return any(term in text for term in topic_terms) and any(term in recent for term in knowledge_context_terms)
+
 def _looks_like_unknown_token(text: str) -> bool:
     return len(text) >= 6 and text.isascii() and text.isalnum()
 
@@ -69,6 +93,8 @@ def _is_knowledge_query(text: str) -> bool:
     return any(term in text for term in knowledge_terms)
 
 def _is_ambiguous_route(text: str) -> bool:
+    if text in {"đường", "duong", "route", "direction", "map", "bản đồ", "ban do"}:
+        return True
     route_terms = ("tìm đường", "đường đi", "cách đi", "route", "direction")
     has_route = any(term in text for term in route_terms)
     has_destination = any(term in text for term in ("đến ", "tới ", "toi ", "to ", "hàm ninh", "ham ninh", "chợ", "cho "))

@@ -252,7 +252,7 @@ def resolve_followup_decision(
 
     # 2. Try structured context for genuine follow-ups.
     if context and context.is_populated:
-        if _is_knowledge_topic_followup(text, context):
+        if _is_knowledge_topic_followup(text, context) or _is_knowledge_topic_refinement(text, context):
             return "insufficient_context"
         resolution = _resolve_place_followup(message, context)
         if resolution.decision == "structured_context":
@@ -290,6 +290,15 @@ def _is_knowledge_topic_followup(text: str, context: FollowUpContext) -> bool:
         "hỏi thêm", "chủ đề này", "nói thêm", "kể thêm", "tiếp tục",
         "more about this", "follow up", "tell me more"
     ))
+
+def _is_knowledge_topic_refinement(text: str, context: FollowUpContext) -> bool:
+    if context.intent not in {"cultural_query", "knowledge"} or len(text.split()) > 3:
+        return False
+    topic_terms = (
+        "hải sản", "hai san", "ghẹ", "ghe", "tôm", "tom", "mực", "muc", "ẩm thực", "am thuc",
+        "văn hóa", "văn hoá", "van hoa", "lịch sử", "lich su", "nghề biển", "nghe bien",
+    )
+    return any(term in text for term in topic_terms)
 
 def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
     """Check if the follow-up message references entities in the structured context.
