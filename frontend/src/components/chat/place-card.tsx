@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, Star, Sparkles, ChevronDown, ChevronUp, MapPin, Navigation, Accessibility } from "lucide-react";
+import { ExternalLink, Star, Sparkles, ChevronDown, ChevronUp, MapPin, Navigation, Accessibility, Info } from "lucide-react";
 import type { PlaceExplanation, PlaceResult } from "@/lib/chat-api";
 
 interface PlaceCardProps {
@@ -234,6 +234,12 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
 
             {/* Micro highlights block */}
             <div className="space-y-1 text-[0.63rem] md:text-[0.68rem] text-muted-foreground">
+              {place.editorial_summary && (
+                <div className="flex items-center gap-1.5">
+                  <Info className="h-3 w-3 shrink-0 text-amber-500" />
+                  <span className="leading-snug line-clamp-2" title={place.editorial_summary}>{place.editorial_summary}</span>
+                </div>
+              )}
               {/* Local context */}
               {explanation.local_context &&
                 explanation.local_context !== "local signal unknown" && (

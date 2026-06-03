@@ -687,6 +687,52 @@ def _grounded_results(
     return results
 
 
+def _make_place_specific_reason(
+    *,
+    candidate: PlaceCandidate,
+    detail_highlights: list[str],
+    fallback: bool,
+    language: str,
+) -> str:
+    type_label = candidate.primary_type_display_name or (candidate.primary_type or "place").replace("_", " ")
+    rating_bits: list[str] = []
+    if candidate.rating is not None:
+        rating_bits.append(f"{candidate.rating:.1f}⭐")
+    if candidate.user_rating_count:
+        rating_bits.append(f"{candidate.user_rating_count} reviews")
+    status_bits: list[str] = []
+    if candidate.open_now is True:
+        status_bits.append("đang mở cửa" if language == "vi" else "open now")
+    if candidate.price_level is not None:
+        status_bits.append(("mức giá" if language == "vi" else "price level") + f" {candidate.price_level}")
+
+    if detail_highlights:
+        lead = detail_highlights[0].rstrip(".")
+        if language == "vi":
+            return f"{candidate.display_name} phù hợp vì hồ sơ địa điểm có mô tả riêng: {lead}."
+        return f"{candidate.display_name} fits because its place details include this specific context: {lead}."
+
+    joined_rating = ", ".join(rating_bits)
+    joined_status = ", ".join(status_bits)
+    if language == "vi":
+        pieces = [f"{candidate.display_name} là {type_label}"]
+        if joined_rating:
+            pieces.append(f"có tín hiệu chất lượng từ {joined_rating}")
+        if joined_status:
+            pieces.append(joined_status)
+        if fallback:
+            pieces.append("fallback: được giữ lại từ dữ liệu dự phòng")
+        return "; ".join(pieces) + "."
+
+    pieces = [f"{candidate.display_name} is a {type_label}"]
+    if joined_rating:
+        pieces.append(f"quality signal: {joined_rating}")
+    if joined_status:
+        pieces.append(joined_status)
+    if fallback:
+        pieces.append("kept from fallback place data")
+    return "; ".join(pieces) + "."
+
 def _service_options(candidate: PlaceCandidate) -> dict[str, bool | None]:
     return {
         "takeout": candidate.takeout,
@@ -927,7 +973,12 @@ def _build_place_explanation(
             parts.append(f"{round(candidate.route_context.duration_seconds / 60)}min")
         route_summary = "route " + ", ".join(parts) if parts else "route metadata limited"
 
-    primary_reason = _make_friendly_reason(matched, fallback, language)
+    primary_reason = _make_place_specific_reason(
+        candidate=candidate,
+        detail_highlights=detail_highlights,
+        fallback=fallback,
+        language=language,
+    )
     primary_reason = _redact_text(primary_reason)
 
     score_factors: dict[str, float | int | str | None] = {
