@@ -51,7 +51,6 @@ from agents.graph.followup import (
     _build_followup_context,
     _is_ambiguous_pronoun_followup,
     _matches_structured_context,
-    _is_knowledge_topic_followup,
     compose_followup_answer as _compose_followup_answer,
     resolve_followup_before_tool_routing as _resolve_followup_before_tool_routing_impl,
     resolve_followup_decision,
@@ -77,6 +76,7 @@ from agents.graph.routing import (
     _get_default_suggestions,
     _json_args,
     _knowledge_fallback_answer,
+    _llm_unavailable_message,
     _messages_for_llm,
     _place_unavailable_message,
     _status_for_state,
@@ -183,21 +183,9 @@ class AgentService:
             yield "[STATUS] using_history"
         else:
             yield "[STATUS] understanding"
-        preflight_action = _fallback_action(message, state.get("history", []))
         preflight_handled = await self._run_preflight_route(state)
         if preflight_handled:
-            if preflight_action == "places":
-                yield "[STATUS] checking_places"
-            elif preflight_action == "knowledge":
-                yield "[STATUS] searching_knowledge"
-            else:
-                yield _status_for_state(state)
-            yield state.get("response_text", "")
-        elif self._should_route_places_deterministically(message, state.get("history", [])):
-            yield "[STATUS] checking_places"
-            await self._search_places_tool(state, message)
-            if not state.get("response_text"):
-                state["response_text"] = _place_unavailable_message(state["language"])
+            yield _status_for_state(state)
             yield state.get("response_text", "")
         elif self._client is None:
             state = await self._deterministic_decide_and_run(state)
@@ -371,40 +359,24 @@ class AgentService:
             return END
         return "tool_node" if state.get("tool_calls") else END
 
-    def _should_route_places_deterministically(self, message: str, history: list[dict[str, str]]) -> bool:
-        if self._client is not None or self._place_recommendation_service is None:
-            return False
-        return _fallback_action(message, history) == "places"
-
     async def _run_preflight_route(self, state: AgentState) -> bool:
-        """Apply deterministic tool gates before any LLM/tool loop.
+        """Handle only safe deterministic conversational shortcuts.
 
-        Context7/LangGraph guidance keeps the LLM node responsible for tool
-        calls, but production agents still need an explicit policy boundary so
-        small talk cannot accidentally inherit history and trigger retrieval.
+        LangGraph's agent pattern keeps semantic routing inside the LLM node:
+        llm_call decides whether to emit tool calls, and the conditional edge
+        only checks for those tool calls. Keep preflight limited to greetings,
+        thanks, and capability prompts so domain intents stay soft-routed.
         """
         action = _fallback_action(state["message"], state.get("history", []))
         if action == "direct":
             state["response_text"] = _direct_answer(state["message"], state.get("history", []), state["language"])
             state["intent"] = "conversational"
             return True
-        if action == "knowledge" and self._is_contextual_knowledge_followup(state):
-            await self._search_knowledge_tool(state, self._contextual_knowledge_query(state))
-            return True
-        if action == "clarify":
-            state["response_text"] = _clarify_message(state["language"])
-            state["intent"] = "clarification"
-            return True
-        if action == "places" and self._place_recommendation_service is not None:
-            await self._search_places_tool(state, state["message"])
-            if not state.get("response_text"):
-                state["response_text"] = _place_unavailable_message(state["language"])
-            return True
         return False
 
     def can_answer_without_corpus(self, message: str) -> bool:
-        """Return True for place discovery requests served by the Places tool."""
-        return self._place_recommendation_service is not None and _fallback_action(message, []) == "places"
+        """Corpus bypass now requires the LLM/tool loop, not hard routing."""
+        return False
 
     async def _deterministic_decide_and_run(self, state: AgentState) -> AgentState:
         action = _fallback_action(state["message"], state.get("history", []))
@@ -412,27 +384,14 @@ class AgentService:
             state["response_text"] = _direct_answer(state["message"], state.get("history", []), state["language"])
             state["intent"] = "conversational"
             return state
-        if action == "places":
-            await self._search_places_tool(state, state["message"])
-            if not state.get("response_text"):
-                state["response_text"] = _place_unavailable_message(state["language"])
+        if action == "clarify":
+            state["response_text"] = _clarify_message(state["language"])
+            state["intent"] = "clarification"
             return state
-        if action == "knowledge":
-            await self._search_knowledge_tool(state, self._contextual_knowledge_query(state))
-            return state
-        state["response_text"] = _clarify_message(state["language"])
+        state["response_text"] = _llm_unavailable_message(state["language"])
         state["intent"] = "clarification"
+        state["fallback"] = True
         return state
-
-    def _is_contextual_knowledge_followup(self, state: AgentState) -> bool:
-        context = state.get("prior_context")
-        return isinstance(context, FollowUpContext) and _is_knowledge_topic_followup(state["message"].lower(), context)
-
-    def _contextual_knowledge_query(self, state: AgentState) -> str:
-        context = state.get("prior_context")
-        if self._is_contextual_knowledge_followup(state) and isinstance(context, FollowUpContext):
-            return context.last_user_topic or state["message"]
-        return state["message"]
 
     async def _search_knowledge_tool(self, state: AgentState, query: str) -> str:
         chunks: list[RAGChunk] = []
@@ -623,7 +582,7 @@ class AgentService:
 
     async def _classify_message_intent(self, state: AgentState) -> str:
         action = _fallback_action(state["message"], state.get("history", []))
-        intent = {"places": PLACE_RECOMMENDATION_INTENT, "knowledge": "cultural_query", "direct": "conversational"}.get(action, "clarification")
+        intent = {"direct": "conversational", "clarify": "clarification"}.get(action, "llm_routed")
         state["intent"] = intent
         return intent
 

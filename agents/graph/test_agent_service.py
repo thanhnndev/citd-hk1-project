@@ -72,62 +72,29 @@ async def test_bare_followup_uses_history_without_retrieval(ham_ninh_chunk):
     assert retriever.queries == []
 
 @pytest.mark.asyncio
-async def test_place_capability_question_clarifies_without_rag(ham_ninh_chunk):
+async def test_domain_request_without_llm_does_not_hard_route_to_rag(ham_ninh_chunk):
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
 
-    response = await service.answer(session_id="s-place-cap", message="kiếm khách sạn được không?", language="vi")
-
-    assert response.intent == "conversational"
-    assert response.citations == []
-    assert "ngân sách" in response.message or "loại" in response.message
-    assert retriever.queries == []
-
-@pytest.mark.asyncio
-async def test_ambiguous_route_clarifies_without_rag(ham_ninh_chunk):
-    retriever = FakeRetriever([ham_ninh_chunk])
-    service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
-
-    response = await service.answer(session_id="s-route", message="tìm đường thế nào?", language="vi")
+    response = await service.answer(session_id="s-no-llm-domain", message="Làng chài Hàm Ninh có gì đặc biệt?", language="vi")
 
     assert response.intent == "clarification"
     assert response.citations == []
-    assert "điểm" in response.message or "rõ" in response.message
+    assert response.fallback is True
+    assert "LLM" in response.message or "AI" in response.message
     assert retriever.queries == []
 
 @pytest.mark.asyncio
-async def test_knowledge_query_is_only_path_that_returns_citations(ham_ninh_chunk):
+async def test_terse_topic_without_llm_does_not_return_capability_answer(ham_ninh_chunk):
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
 
-    response = await service.answer(session_id="s-knowledge", message="Làng chài Hàm Ninh có gì đặc biệt?", language="vi")
-
-    assert response.intent == "cultural_query"
-    assert response.citations
-    assert retriever.queries == ["Làng chài Hàm Ninh có gì đặc biệt?"]
-
-@pytest.mark.asyncio
-async def test_terse_food_topic_after_knowledge_turn_refines_with_retrieval(ham_ninh_chunk):
-    retriever = FakeRetriever([ham_ninh_chunk])
-    service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
-
-    await service.answer(session_id="s-food-refine", message="Kể về ẩm thực địa phương", language="vi")
+    await service.answer(session_id="s-food-refine", message="bạn giúp được gì", language="vi")
     response = await service.answer(session_id="s-food-refine", message="HẢI SẢN", language="vi")
 
-    assert response.intent == "cultural_query"
-    assert response.citations
-    assert retriever.queries == ["Kể về ẩm thực địa phương", "HẢI SẢN"]
-    assert "4 nhóm" not in response.message
-
-@pytest.mark.asyncio
-async def test_bare_direction_word_clarifies_instead_of_capability_answer(ham_ninh_chunk):
-    retriever = FakeRetriever([ham_ninh_chunk])
-    service = AgentService(retriever=retriever, checkpointer=InMemoryAgentCheckpointer(), checkpoint_mode="test")
-
-    response = await service.answer(session_id="s-bare-route", message="đường", language="vi")
-
     assert response.intent == "clarification"
     assert response.citations == []
+    assert response.fallback is True
     assert "4 nhóm" not in response.message
     assert retriever.queries == []
 

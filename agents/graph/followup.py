@@ -10,7 +10,7 @@ import structlog
 
 from app.models.response import ChatResponse
 from agents.graph.state import AgentState, FollowUpDecision
-from agents.graph.routing import _direct_answer as _default_direct_answer, _clarify_message as _default_clarify_message, _is_followup
+from agents.graph.routing import _direct_answer as _default_direct_answer, _clarify_message as _default_clarify_message, _fallback_action
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 
 logger = structlog.get_logger(__name__)
@@ -244,16 +244,9 @@ def resolve_followup_decision(
     if not text:
         return "insufficient_context"
 
-    # 1. Explicit new requests should route normally before any prior-place
-    # token matching. This prevents broad category overlap (e.g. "hải sản")
-    # from hijacking a fresh search after place recommendations.
-    if _is_explicit_new_request(message):
-        return "insufficient_context"
-
-    # 2. Try structured context for genuine follow-ups.
+    # 1. Try structured context for genuine follow-ups. Brand-new domain
+    # requests must fall through to the LangGraph LLM/tool loop.
     if context and context.is_populated:
-        if _is_knowledge_topic_followup(text, context) or _is_knowledge_topic_refinement(text, context):
-            return "insufficient_context"
         resolution = _resolve_place_followup(message, context)
         if resolution.decision == "structured_context":
             return "structured_context"
@@ -262,8 +255,8 @@ def resolve_followup_decision(
         if _matches_structured_context(text, context):
             return "structured_context"
 
-    # 3. Fall back to history-only heuristics
-    if history and _is_followup(text, history):
+    # 2. Fall back only for safe conversational nudges such as "?" or examples.
+    if history and _fallback_action(message, history) == "direct":
         return "history_context"
 
     # 3. Ambiguous pronouns that could reference missing context
@@ -274,31 +267,7 @@ def resolve_followup_decision(
     if not context or not context.is_populated:
         return "insufficient_context"
 
-    # If it is a brand-new descriptive request (doesn't match structured context),
-    # treat it as insufficient_context so normal routing handles it, rather than
-    # getting stuck in a clarification loop.
-    if _is_new_request(message):
-        return "insufficient_context"
-
-    return "clarification_needed"
-
-
-def _is_knowledge_topic_followup(text: str, context: FollowUpContext) -> bool:
-    if context.intent not in {"cultural_query", "knowledge", "followup_history"}:
-        return False
-    return any(term in text for term in (
-        "hỏi thêm", "chủ đề này", "nói thêm", "kể thêm", "tiếp tục",
-        "more about this", "follow up", "tell me more"
-    ))
-
-def _is_knowledge_topic_refinement(text: str, context: FollowUpContext) -> bool:
-    if context.intent not in {"cultural_query", "knowledge"} or len(text.split()) > 3:
-        return False
-    topic_terms = (
-        "hải sản", "hai san", "ghẹ", "ghe", "tôm", "tom", "mực", "muc", "ẩm thực", "am thuc",
-        "văn hóa", "văn hoá", "van hoa", "lịch sử", "lich su", "nghề biển", "nghe bien",
-    )
-    return any(term in text for term in topic_terms)
+    return "insufficient_context"
 
 def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
     """Check if the follow-up message references entities in the structured context.
@@ -554,66 +523,6 @@ def compose_followup_answer(
     return "I remember the previous answer. Which part would you like me to explain further?"
 
 
-def _is_explicit_new_request(message: str) -> bool:
-    """Return True for messages that clearly start a new tool/search task.
-
-    This is intentionally stricter than _is_new_request: it requires an
-    explicit action/search signal so follow-ups like "Hải Sản có tươi không?"
-    can still resolve against a previously recommended place named "Quán Hải Sản".
-    """
-    text = _norm(message)
-    if not text:
-        return False
-
-    place_terms = (
-        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
-        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
-        "stay", "place", "nearby", "gần đây", "quanh đây", "cf", "coffee", "view"
-    )
-    action_terms = (
-        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
-        "quanh", "gần", "ở đâu", "có quán", "có nhà hàng",
-        "lịch trình", "bản đồ", "map"
-    )
-    knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
-
-    has_place_topic = any(term in text for term in place_terms)
-    has_action = any(term in text for term in action_terms)
-    has_knowledge = any(term in text for term in knowledge_terms)
-    return (has_place_topic and has_action) or has_knowledge
-
-def _is_new_request(message: str) -> bool:
-    """Detect whether a message looks like a brand-new place or knowledge
-    request rather than a follow-up to prior context.
-
-    Used to avoid short-circuiting new requests into clarification when
-    prior context exists but doesn't match the message.
-    """
-    text = _norm(message)
-    # New place request indicators
-    place_terms = (
-        "nhà hàng", "quán", "đồ ngon", "món ngon", "ăn", "hải sản", "cafe", "cà phê",
-        "khách sạn", "homestay", "lưu trú", "chỗ ở", "hotel", "restaurant", "seafood",
-        "stay", "place", "nearby", "gần đây", "quanh đây", "cf", "coffee", "view"
-    )
-    action_terms = (
-        "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
-        "có", "nào", "đâu", "gì", "quanh", "gần", "ở", "không", "review",
-        "đánh giá", "giá", "sao", "lịch trình", "bản đồ", "map"
-    )
-    # New knowledge request indicators
-    knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
-
-    has_place_topic = any(term in text for term in place_terms)
-    has_action = any(term in text for term in action_terms)
-    has_knowledge = any(term in text for term in knowledge_terms)
-
-    # If it contains a place term and is long enough, treat it as a new request
-    is_descriptive_place = has_place_topic and len(text.split()) >= 3
-
-    return (has_place_topic and has_action) or has_knowledge or is_descriptive_place
-
-
 def resolve_followup_before_tool_routing(
     state: AgentState,
     *,
@@ -675,12 +584,6 @@ def resolve_followup_before_tool_routing(
         return state
 
     if decision == "clarification_needed":
-        # Distinguish between truly ambiguous pronouns and new requests.
-        # If the message looks like a new place/knowledge request, let normal
-        # routing handle it (insufficient_context path) rather than asking
-        # for clarification about prior context.
-        if _is_new_request(state["message"]):
-            return None  # Proceed to normal routing
         state["response_text"] = clarify_message(state["language"])
         state["intent"] = "clarification"
         state["places_response_ready"] = True
