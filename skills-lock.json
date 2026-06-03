@@ -1,11 +1,41 @@
 {
   "version": 1,
   "skills": {
+    "agentic-core-orchestrator": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/agentic-core-orchestrator/SKILL.md",
+      "computedHash": "6f03b5e68c021cb92c346713cfc0df901c76f8847cb6424840ff65332c968cc5"
+    },
+    "agentic-planning-and-specs": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/agentic-planning-and-specs/SKILL.md",
+      "computedHash": "31f3a4b26b7c601217117216af01d471d3c05417e93d529d0a6e663452601098"
+    },
+    "agentic-product-designer-2026": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/agentic-product-designer-2026/SKILL.md",
+      "computedHash": "ceaa4e2a8c71972d79f54ab57378c7ae4fab2c695090b5455f2f9ccdeac29afa"
+    },
+    "backend-agent-engineer": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/backend-agent-engineer/SKILL.md",
+      "computedHash": "84a8bf70bca51483cf55ac3e0166c7fe266e3972582d67c1eef5e4e5f3e21c87"
+    },
     "code-review-excellence": {
       "source": "wshobson/agents",
       "sourceType": "github",
       "skillPath": "plugins/developer-essentials/skills/code-review-excellence/SKILL.md",
       "computedHash": "0f585a4ad2f6d8353069ca9051c6f0e8865abb9d3a6a268d423784c3c3852962"
+    },
+    "database-agent-engineer": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/database-agent-engineer/SKILL.md",
+      "computedHash": "cd5e4ef2f44d3237762e49733c9cc703361629d7149ec6b7a97eac7acf1095c8"
     },
     "docx": {
       "source": "anthropics/skills",
@@ -18,6 +48,18 @@
       "sourceType": "github",
       "skillPath": "plugins/developer-essentials/skills/error-handling-patterns/SKILL.md",
       "computedHash": "824c53fa080765f05862d3ec0ef829aaff9f8d544f9de0039b8fcafa6bc1a899"
+    },
+    "evals-ops-and-guardrails": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/evals-ops-and-guardrails/SKILL.md",
+      "computedHash": "580d211ae5a305cc988589e9c370f5c151bc0e52a43c19e233b238d4b1a2ff79"
+    },
+    "frontend-agent-experience": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/frontend-agent-experience/SKILL.md",
+      "computedHash": "07839223339e6d605d1c7e3f4a7f8736d7450203b38545fae08d8997462dd327"
     },
     "git-advanced-workflows": {
       "source": "wshobson/agents",
@@ -42,6 +84,12 @@
       "sourceType": "github",
       "skillPath": "skills/skill-creator/SKILL.md",
       "computedHash": "5ea13a6d9f0d4bb694405d79acd00cadec0d21bb138c4dd10fcf3c500cb835c2"
+    },
+    "visionary-product-operator": {
+      "source": "Jack-Pision/agentic-AI-development-skills-claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/visionary-product-operator/SKILL.md",
+      "computedHash": "dfb148e6b097abdd90406e1d33cafa1e956cffe47ce879c2ec75439b5cd0f8ca"
     },
     "xlsx": {
       "source": "anthropics/skills",
