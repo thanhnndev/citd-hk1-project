@@ -731,3 +731,23 @@ async def test_tool_node_accepts_dict_tool_calls_and_prevents_repeats(ham_ninh_c
 
     assert retriever.queries == ["Văn hóa Hàm Ninh"]
     assert '"status": "repeat"' in second["messages"][-1]["content"]
+
+@pytest.mark.asyncio
+async def test_agent_routes_vietnamese_variant_culture_to_knowledge(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="culture-tone-mark",
+        message="tôi muốn hiểu về văn hoá hàm ninh",
+        language="vi",
+    )
+
+    assert response.intent == "cultural_query"
+    assert response.places == []
+    assert retriever.queries == ["tôi muốn hiểu về văn hoá hàm ninh"]
+    assert response.citations

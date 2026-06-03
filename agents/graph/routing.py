@@ -59,7 +59,7 @@ def _is_place_capability(text: str) -> bool:
 
 def _is_knowledge_query(text: str) -> bool:
     knowledge_terms = (
-        "văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài", "làng chài",
+        "văn hóa", "văn hoá", "lịch sử", "culture", "history", "truyền thống", "dân chài", "làng chài",
         "đặc biệt", "nguồn gốc", "câu chuyện", "kể về", "giới thiệu", "tìm hiểu", "đời sống",
         "phong tục", "nghề biển", "local life", "fishing village", "background", "explain",
     )
