@@ -185,6 +185,10 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
         "homestay", "hotel", "restaurant",
         "ăn", "uống", "nghỉ", "dưỡng", "resort",
     })
+    generic_query_tokens = {
+        "giá", "bao", "nhiêu", "mở", "cửa", "đường", "đi", "review", "rating",
+        "đánh", "giá", "rẻ", "gần", "xa", "price", "cost", "hours", "open",
+    }
 
     # Direct place name references (token-level, ignoring single-char tokens
     # and common descriptor words). At least one distinctive token must match.
@@ -200,7 +204,8 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
             if normalized in text:
                 return True
             continue
-        if any(token in text for token in tokens):
+        matched = [token for token in tokens if token in text]
+        if any(token not in generic_query_tokens for token in matched):
             return True
 
     # References to scoring/ranking
@@ -415,8 +420,8 @@ def _is_explicit_new_request(message: str) -> bool:
     )
     action_terms = (
         "kiếm", "tìm", "gợi ý", "đề xuất", "recommend", "find", "search",
-        "quanh", "gần", "ở đâu", "có quán", "có nhà hàng", "review", "đánh giá",
-        "giá", "lịch trình", "bản đồ", "map"
+        "quanh", "gần", "ở đâu", "có quán", "có nhà hàng",
+        "lịch trình", "bản đồ", "map"
     )
     knowledge_terms = ("văn hóa", "lịch sử", "culture", "history", "truyền thống", "dân chài")
 

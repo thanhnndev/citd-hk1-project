@@ -28,8 +28,10 @@ def _fallback_action(message: str, history: list[dict[str, str]]) -> Literal["di
         return "knowledge"
     if _is_place_or_route(text):
         return "places"
+    if _looks_like_unknown_token(text):
+        return "knowledge"
     if len(text) < 8:
-        return "clarify"
+        return "direct"
     return "knowledge"
 
 def _is_greeting(text: str) -> bool:
@@ -46,6 +48,9 @@ def _is_followup(text: str, history: list[dict[str, str]]) -> bool:
         or any(term in text for term in ("ví dụ", "cụ thể", "example"))
         or (any(term in text for term in ("tươi ngon", "đồ ngon", "món ngon")) and len(text.split()) <= 6)
     )
+
+def _looks_like_unknown_token(text: str) -> bool:
+    return len(text) >= 6 and text.isascii() and text.isalnum()
 
 def _is_place_capability(text: str) -> bool:
     has_place = any(term in text for term in ("khách sạn", "hotel", "lưu trú", "chỗ ở", "nhà hàng", "restaurant", "homestay"))
