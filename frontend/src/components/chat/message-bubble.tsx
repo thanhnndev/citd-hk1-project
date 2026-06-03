@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { CitationCard } from "./citation-card";
 import { PlaceCard } from "./place-card";
 import { MessageActions } from "./message-actions";
@@ -7,7 +8,6 @@ import { AccessibilityBadge } from "@/components/reasoning/accessibility-badge";
 import {
   Bot,
   CheckCircle2,
-  Clock3,
   Loader2,
   UserRound,
   ArrowRight,
@@ -64,7 +64,7 @@ export function MessageBubble({
   assistantLabel = "Ham Ninh Assistant",
   userLabel = "You",
   sourcesLabel = "Sources",
-  streamStatusLabel,
+  streamStatusLabel: _streamStatusLabel,
   status = "complete",
   guardrailStatus,
   fallback,
@@ -82,6 +82,7 @@ export function MessageBubble({
   const showComplete = !isUser && status === "complete" && content;
   const hasStatusHistory = !isUser && statusHistory && statusHistory.length > 0;
   const isStreaming = status === "streaming" || status === "submitted";
+  const [showAllPlaces, setShowAllPlaces] = useState(false);
 
   /** Build a compact post-response summary from status history + data signals. */
   const postResponseSummary = (() => {
@@ -191,8 +192,8 @@ export function MessageBubble({
             )}
         </div>
 
-        {/* Thinking timeline — shown during streaming and retained after completion */}
-        {!isUser && hasStatusHistory && streamStatusLabels && (
+        {/* Thinking timeline — useful while waiting, hidden after completion for end users. */}
+        {!isUser && isStreaming && hasStatusHistory && streamStatusLabels && (
           <div
             className={`mt-2 rounded-xl border px-2.5 py-1.5 text-[0.6rem] transition-colors sm:px-3 sm:py-2 ${
               isStreaming
@@ -249,25 +250,40 @@ export function MessageBubble({
           </details>
         )}
 
-        {/* Place cards — horizontal scroll, bounded at top 5 */}
+        {/* Place cards — curated first, with progressive disclosure for more results. */}
         {!isUser && places && places.length > 0 && placeTranslations && (
           <section
-            className="mt-3 max-w-full overflow-hidden rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-3 shadow-sm"
+            className="mt-3 max-w-full overflow-hidden rounded-3xl border border-[#0b5f63]/10 bg-white/72 p-3 shadow-sm"
             role="region"
             aria-label={placeTranslations.placeResultsHeading}
           >
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#0b5f63]">
-              {placeTranslations.placeResultsHeading}
-            </p>
-            <div
-              className="flex max-w-full gap-2 overflow-x-auto overscroll-x-contain pb-2 snap-x snap-mandatory"
-              aria-label={placeTranslations.placeResultsHeading}
-              style={{ scrollbarWidth: "thin" }}
-            >
-              {places.slice(0, 5).map((place) => (
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#0b5f63]">
+                  {placeTranslations.placeResultsHeading}
+                </p>
+                <p className="mt-1 text-xs text-[#5d7373]">
+                  {places.length > 3
+                    ? `Hiển thị 3 gợi ý nổi bật trước, còn ${places.length - 3} địa điểm trong danh sách mở rộng.`
+                    : "Các gợi ý đã được rút gọn để bạn dễ chọn."}
+                </p>
+              </div>
+              {places.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllPlaces((value) => !value)}
+                  className="rounded-full border border-[#0b5f63]/20 bg-white px-3 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-[#0b5f63]/8"
+                >
+                  {showAllPlaces ? "Thu gọn" : `Xem thêm ${places.length - 3}`}
+                </button>
+              )}
+            </div>
+            <div className="grid max-w-full gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label={placeTranslations.placeResultsHeading}>
+              {places.slice(0, showAllPlaces ? places.length : 3).map((place, index) => (
                 <PlaceCard
                   key={place.place_id}
                   place={place}
+                  rank={index + 1}
                   translations={placeTranslations}
                 />
               ))}
