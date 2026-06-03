@@ -21,6 +21,45 @@ def _norm(text: str) -> str:
 
 
 @dataclass
+class PlaceMemory:
+    """Structured short-term memory for one place from the latest response."""
+
+    index: int
+    place_id: str
+    name: str
+    reviews: list[dict[str, Any]] = field(default_factory=list)
+    hours: dict[str, Any] = field(default_factory=dict)
+    rating: float | None = None
+    price_level: int | None = None
+
+    @property
+    def aliases(self) -> list[str]:
+        normalized = _norm(self.name)
+        aliases = [normalized] if normalized else []
+        distinctive = [t for t in normalized.split() if len(t) > 1 and t not in _PLACE_DESCRIPTOR_TOKENS]
+        aliases.extend(distinctive)
+        return aliases
+
+@dataclass
+class FollowUpResolution:
+    """Typed resolver output used before tool routing."""
+
+    decision: FollowUpDecision
+    field: str | None = None
+    place: PlaceMemory | None = None
+    confidence: float = 0.0
+    reason: str = ""
+
+_PLACE_DESCRIPTOR_TOKENS = frozenset({
+    "quán", "nhà", "hàng", "khách", "sạn", "bè", "hải", "sản",
+    "homestay", "hotel", "restaurant", "seafood", "ăn", "uống", "nghỉ", "dưỡng", "resort",
+})
+_QUERY_DETAIL_TOKENS = frozenset({
+    "giá", "bao", "nhiêu", "mở", "cửa", "đường", "đi", "review", "rating",
+    "đánh", "rẻ", "gần", "xa", "price", "cost", "hours", "open", "giờ",
+})
+
+@dataclass
 class FollowUpContext:
     """Structured metadata from the most recent assistant response.
 
@@ -125,6 +164,62 @@ class FollowUpContext:
         )
 
 
+def _place_memories(context: FollowUpContext) -> list[PlaceMemory]:
+    memories: list[PlaceMemory] = []
+    for index, name in enumerate(context.place_display_names):
+        memories.append(PlaceMemory(
+            index=index,
+            place_id=context.place_ids[index] if index < len(context.place_ids) else "",
+            name=name,
+            rating=context.place_ratings[index] if index < len(context.place_ratings) else None,
+            price_level=context.place_price_levels[index] if index < len(context.place_price_levels) else None,
+            reviews=context.place_reviews[index] if index < len(context.place_reviews) else [],
+            hours=context.place_hours[index] if index < len(context.place_hours) and isinstance(context.place_hours[index], dict) else {},
+        ))
+    return memories
+
+def _requested_followup_field(text: str) -> str | None:
+    if any(term in text for term in ("review", "đánh giá", "nhận xét", "bình luận")):
+        return "reviews"
+    if any(term in text for term in ("giờ", "mở cửa", "open", "hours")):
+        return "hours"
+    if any(term in text for term in ("đường", "bản đồ", "map", "route", "direction", "chỉ đường")):
+        return "directions"
+    if any(term in text for term in ("vì sao", "tại sao", "xếp hạng", "score", "điểm")):
+        return "score"
+    if any(term in text for term in ("nguồn", "provider", "data source")):
+        return "source"
+    return None
+
+def _resolve_place_followup(message: str, context: FollowUpContext) -> FollowUpResolution:
+    text = _norm(message)
+    field = _requested_followup_field(text)
+    best: PlaceMemory | None = None
+    best_score = 0.0
+    for place in _place_memories(context):
+        normalized = _norm(place.name)
+        distinctive = [t for t in normalized.split() if len(t) > 1 and t not in _PLACE_DESCRIPTOR_TOKENS]
+        descriptor = [t for t in normalized.split() if len(t) > 1 and t in _PLACE_DESCRIPTOR_TOKENS]
+        score = 0.0
+        if normalized and normalized in text:
+            score += 10.0
+        score += sum(2.0 for token in distinctive if token in text)
+        score += min(1.0, sum(0.25 for token in descriptor if token in text))
+        if score > best_score:
+            best_score = score
+            best = place
+    if best and best_score >= 1.5:
+        return FollowUpResolution("structured_context", field=field, place=best, confidence=best_score, reason="place_match")
+    demonstratives = ("này", "kia", "đó", "that", "this")
+    if any(term in text for term in demonstratives) and context.intent == PLACE_RECOMMENDATION_INTENT and len(context.place_display_names) == 1:
+        memories = _place_memories(context)
+        return FollowUpResolution("structured_context", field=field, place=memories[0] if memories else None, confidence=1.0, reason="single_place_demonstrative")
+    if field in {"score", "source"}:
+        return FollowUpResolution("structured_context", field=field, confidence=0.8, reason="context_field")
+    if field and context.intent == PLACE_RECOMMENDATION_INTENT and context.place_display_names:
+        return FollowUpResolution("clarification_needed", field=field, confidence=0.5, reason="field_without_place")
+    return FollowUpResolution("insufficient_context", field=field, confidence=0.0, reason="no_place_match")
+
 def resolve_followup_decision(
     message: str,
     context: FollowUpContext | None,
@@ -153,6 +248,11 @@ def resolve_followup_decision(
 
     # 2. Try structured context for genuine follow-ups.
     if context and context.is_populated:
+        resolution = _resolve_place_followup(message, context)
+        if resolution.decision == "structured_context":
+            return "structured_context"
+        if resolution.decision == "clarification_needed":
+            return "clarification_needed"
         if _matches_structured_context(text, context):
             return "structured_context"
 
@@ -310,28 +410,13 @@ def compose_followup_answer(
     """
     text = _norm(message)
 
-    # Place name reference -> answer specific review/hours follow-ups from stored details.
-    matched_index: int | None = None
-    best_score = 0
-    skip_tokens = {"quán", "nhà", "hàng", "bè", "hải", "sản", "restaurant", "seafood"}
-    for index, name in enumerate(context.place_display_names):
-        normalized = _norm(name)
-        tokens = [t for t in normalized.split() if len(t) > 1 and t not in skip_tokens]
-        score = sum(1 for token in tokens if token in text)
-        if normalized and normalized in text:
-            score += 10
-        if score > best_score:
-            best_score = score
-            matched_index = index
-
-    if matched_index is not None and best_score > 0:
-        name = context.place_display_names[matched_index]
-        wants_reviews = any(term in text for term in ("review", "đánh giá", "nhận xét", "bình luận"))
-        wants_hours = any(term in text for term in ("giờ", "mở cửa", "open", "hours"))
-        if wants_reviews:
-            reviews = context.place_reviews[matched_index] if matched_index < len(context.place_reviews) else []
+    resolution = _resolve_place_followup(message, context)
+    if resolution.decision == "structured_context" and resolution.place is not None:
+        place = resolution.place
+        name = place.name
+        if resolution.field == "reviews":
             lines = []
-            for review in reviews[:3]:
+            for review in place.reviews[:3]:
                 rating = review.get("rating")
                 body = review.get("text")
                 if body:
@@ -340,10 +425,9 @@ def compose_followup_answer(
             if lines:
                 return (f"Một vài review về {name}:\n" + "\n".join(lines)) if language == "vi" else (f"A few reviews for {name}:\n" + "\n".join(lines))
             return f"Mình chưa có nội dung review cụ thể cho {name} trong dữ liệu hiện có." if language == "vi" else f"I do not have review text for {name} in the current data."
-        if wants_hours:
-            hours = context.place_hours[matched_index] if matched_index < len(context.place_hours) else {}
-            descriptions = hours.get("weekdayDescriptions") or hours.get("weekday_descriptions") or []
-            open_now = hours.get("openNow")
+        if resolution.field == "hours":
+            descriptions = place.hours.get("weekdayDescriptions") or place.hours.get("weekday_descriptions") or []
+            open_now = place.hours.get("openNow")
             if descriptions:
                 return (f"Giờ mở cửa của {name}:\n" + "\n".join(str(item) for item in descriptions[:7])) if language == "vi" else (f"Opening hours for {name}:\n" + "\n".join(str(item) for item in descriptions[:7]))
             if isinstance(open_now, bool):
@@ -353,6 +437,12 @@ def compose_followup_answer(
         if language == "vi":
             return f"Về {name}: bạn muốn xem review, giờ mở cửa, đường đi hay lý do xếp hạng?"
         return f"About {name}: do you want reviews, opening hours, directions, or ranking reasons?"
+
+    if resolution.decision == "clarification_needed" and resolution.field in {"reviews", "hours", "directions", "score"}:
+        names = ", ".join(context.place_display_names[:3])
+        if language == "vi":
+            return f"Bạn muốn hỏi {resolution.field} của địa điểm nào? Một vài lựa chọn: {names}."
+        return f"Which place do you want {resolution.field} for? Options include: {names}."
 
     # Score / ranking reference
     if context.score_breakdown_keys and any(
