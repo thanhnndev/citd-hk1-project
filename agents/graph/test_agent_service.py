@@ -127,7 +127,7 @@ def test_response_from_state_gracefully_falls_back_to_defaults(ham_ninh_chunk):
         "citations": [],
     }
     response = service._response_from_state(state, 0)
-    assert response.suggestions == ["Bạn còn làm được gì?", "Kể về ẩm thực địa phương"]
+    assert response.suggestions == ["Kể về ẩm thực địa phương", "Tìm quán hải sản gần đây", "Chỉ đường đến chợ Hàm Ninh"]
 
 def test_descriptive_new_request_bypasses_clarification_loop():
     from agents.graph.agent_service import resolve_followup_decision, FollowUpContext, PLACE_RECOMMENDATION_INTENT

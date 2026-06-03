@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
-import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, MessageSquare, RotateCcw, ShieldCheck, Trash2, Waves, ArrowRight } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, RotateCcw, ShieldCheck, Trash2, Waves, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -410,6 +410,18 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 disclosure: language === "vi"
                   ? "Đây là trợ lý AI; thông tin có thể sai. Với đường đi, giờ mở cửa hoặc an toàn, hãy kiểm tra lại trên bản đồ/nguồn chính thức."
                   : "This is an AI assistant and can be wrong. For routes, opening hours, or safety, verify with a map or official source.",
+                quickPromptLabel: language === "vi" ? "Thử hỏi nhanh" : "Try a quick prompt",
+                guidanceCards: language === "vi"
+                  ? [
+                    { title: "Địa điểm", body: "Quán ăn, cà phê, lưu trú." },
+                    { title: "Đường đi", body: "Hỏi điểm đến hoặc điểm xuất phát." },
+                    { title: "Văn hóa", body: "Ẩm thực, làng chài, lịch sử." },
+                  ]
+                  : [
+                    { title: "Places", body: "Food, cafes, stays." },
+                    { title: "Directions", body: "Share a destination or start point." },
+                    { title: "Culture", body: "Food, fishing life, history." },
+                  ],
               }}
             />
           )}

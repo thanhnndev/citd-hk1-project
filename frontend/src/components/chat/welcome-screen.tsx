@@ -11,6 +11,8 @@ interface WelcomeScreenProps {
     promptChips: string[];
     badgeLabel?: string;
     disclosure?: string;
+    quickPromptLabel?: string;
+    guidanceCards?: { title: string; body: string }[];
   };
 }
 
@@ -33,11 +35,26 @@ export function WelcomeScreen({ onPromptClick, translations }: WelcomeScreenProp
       <p className="mt-4 max-w-xl text-base leading-8 text-muted-foreground">
         {translations.subtitle}
       </p>
+      <div className="mt-5 grid w-full max-w-2xl gap-2 text-left text-xs leading-5 text-[#426365] sm:grid-cols-3">
+        {(translations.guidanceCards ?? [
+          { title: "Places", body: "Food, cafes, stays." },
+          { title: "Directions", body: "Share a destination or start point." },
+          { title: "Culture", body: "Food, fishing life, history." },
+        ]).map((card) => (
+          <div key={card.title} className="rounded-2xl border border-white/70 bg-white/65 px-3 py-3 shadow-sm backdrop-blur">
+            <span className="font-semibold text-[#0b5f63]">{card.title}</span><br />{card.body}
+          </div>
+        ))}
+      </div>
       <p className="mt-3 max-w-xl rounded-2xl border border-[#0b5f63]/10 bg-white/65 px-4 py-3 text-xs leading-5 text-[#5d7373] shadow-sm">
         {translations.disclosure ?? "AI assistant: verify important route, opening-hour, and safety details with a map or official source."}
       </p>
 
-      <div className="mt-8 grid w-full max-w-2xl gap-2 sm:grid-cols-2">
+      <div className="mt-8 flex items-center gap-2 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-[#0b5f63]">
+        <Sparkles className="size-3.5" />
+        <span>{translations.quickPromptLabel ?? "Try a quick prompt"}</span>
+      </div>
+      <div className="mt-3 grid w-full max-w-2xl gap-2 sm:grid-cols-2">
         {translations.promptChips.map((prompt) => (
           <Button
             key={prompt}

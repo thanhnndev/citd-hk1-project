@@ -119,30 +119,30 @@ def _extract_suggestions(text: str) -> tuple[str, list[str]]:
     if not text:
         return "", []
     if "[SUGGESTIONS]" in text:
-        parts = text.split("[SUGGESTIONS]")
+        parts = text.split("[SUGGESTIONS]", 1)
         main_message = parts[0].strip()
         suggestions_str = parts[1].strip()
         suggestions = [s.strip() for s in suggestions_str.split("|") if s.strip()]
-        return main_message, suggestions
+        return main_message, suggestions[:3]
     return text, []
 
 
 def _get_default_suggestions(intent: str | None, language: str, has_places: bool = False, has_citations: bool = False, fallback: bool = False) -> list[str]:
     if language == "vi":
         if has_places:
-            return ["Hiển thị trên bản đồ", "Kể thêm về chỗ này", "Có tiếp cận được không?"]
+            return ["Chỉ đường tới nơi này", "So sánh các địa điểm", "Tìm chỗ gần đó"]
         if has_citations:
-            return ["Tóm tắt nguồn tham khảo", "Hỏi thêm về chủ đề này"]
+            return ["Hải sản nào nổi bật?", "Tìm quán hải sản gần đây", "Kể thêm về làng chài"]
         if fallback:
-            return ["Thử hỏi theo hướng khác", "Hỏi về làng chài"]
-        return ["Bạn còn làm được gì?", "Kể về ẩm thực địa phương"]
+            return ["Kể về làng chài Hàm Ninh", "Tìm quán hải sản", "Hỏi đường đến chợ Hàm Ninh"]
+        return ["Kể về ẩm thực địa phương", "Tìm quán hải sản gần đây", "Chỉ đường đến chợ Hàm Ninh"]
     if has_places:
-        return ["Show on map", "Tell me more", "Is it accessible?"]
+        return ["Get directions", "Compare these places", "Find something nearby"]
     if has_citations:
-        return ["Summarize the sources", "Follow up on this"]
+        return ["What seafood stands out?", "Find nearby seafood", "Tell me more about the village"]
     if fallback:
-        return ["Try a different angle", "Ask about the village"]
-    return ["What else can you do?", "Tell me about local food"]
+        return ["Ask about the fishing village", "Find seafood places", "Ask directions to Ham Ninh market"]
+    return ["Tell me about local food", "Find nearby seafood", "Get directions to Ham Ninh market"]
 
 
 def _messages_for_llm(*, message: str, history: list[dict[str, str]], language: str) -> list[dict[str, Any]]:

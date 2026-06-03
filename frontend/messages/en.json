@@ -313,17 +313,17 @@
     "providerStatus": "Status",
     "scoreDataLimited": "Limited scoring data available",
     "accessibilityNote": "Accessibility info",
-    "welcomeGreeting": "Plan Ham Ninh with an assistant that chats like a real guide",
-    "welcomeSubtitle": "Start with small talk or ask directly. The assistant answers naturally and only reaches for sources when your question needs them.",
+    "welcomeGreeting": "How would you like to explore Ham Ninh?",
+    "welcomeSubtitle": "Ask about places, directions, culture/history, food, or trip ideas around Ham Ninh. If details are missing, I will clarify instead of guessing.",
     "newConversation": "New conversation",
     "copy": "Copy",
     "copied": "Copied!",
     "retryMessage": "Retry",
     "prompts": [
-      "Hello there",
-      "Suggest a local seafood spot",
-      "Give me a short village history",
-      "How do I get there from Duong Dong?"
+      "Tell me about local food",
+      "Find nearby seafood restaurants",
+      "Get directions to Ham Ninh market",
+      "What makes Ham Ninh fishing village special?"
     ],
     "quickReplyLabels": {
       "places": [
@@ -332,16 +332,19 @@
         "Is it accessible?"
       ],
       "sources": [
-        "Summarize the sources",
-        "Follow up on this"
+        "What seafood stands out?",
+        "Find nearby seafood",
+        "Tell me more about the village"
       ],
       "fallback": [
-        "Try a different angle",
-        "Ask about the village"
+        "Ask about the fishing village",
+        "Find seafood places",
+        "Ask directions to Ham Ninh market"
       ],
       "generic": [
-        "What else can you do?",
-        "Tell me about local food"
+        "Tell me about local food",
+        "Find nearby seafood",
+        "Get directions to Ham Ninh market"
       ]
     }
   },

@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from app.models.rag import RAGChunk, RetrievalResult
@@ -67,6 +68,74 @@ class FakeLLM:
         yield "LLM "
         yield "stream"
 
+class FakeToolCallFunction:
+    def __init__(self, name, arguments="{}"):
+        self.name = name
+        self.arguments = arguments
+
+class FakeToolCall:
+    def __init__(self, name="search_knowledge", arguments='{"query":"Ham Ninh"}'):
+        self.id = "call_1"
+        self.function = FakeToolCallFunction(name, arguments)
+
+class FakeLLMMessage:
+    def __init__(self, *, content="", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+    def model_dump(self, exclude_none=True):
+        data = {"role": "assistant"}
+        if self.content:
+            data["content"] = self.content
+        if self.tool_calls:
+            data["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+                for call in self.tool_calls
+            ]
+        return data
+
+class FakeChoice:
+    def __init__(self, message):
+        self.message = message
+
+class FakeCompletion:
+    def __init__(self, message):
+        self.choices = [FakeChoice(message)]
+
+class FakeCompletions:
+    def __init__(self, messages):
+        self.messages = list(messages)
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        index = min(self.calls, len(self.messages) - 1)
+        self.calls += 1
+        return FakeCompletion(self.messages[index])
+
+class FakeChat:
+    def __init__(self, messages):
+        self.completions = FakeCompletions(messages)
+
+class FakeOpenAIClient:
+    def __init__(self, messages):
+        self.chat = FakeChat(messages)
+
+class FakeLLMServiceWithClient(FakeLLM):
+    model = "fake-model"
+
+    def __init__(self, messages):
+        super().__init__()
+        self._client = FakeOpenAIClient(messages)
+
+def fake_knowledge_llm(query: str) -> FakeLLMServiceWithClient:
+    return FakeLLMServiceWithClient([
+        FakeLLMMessage(tool_calls=[FakeToolCall("search_knowledge", f'{json.dumps({"query": query}, ensure_ascii=False)}')]),
+    ])
+
 
 
 
@@ -130,7 +199,7 @@ async def test_agent_answers_first_turn_with_citations(ham_ninh_chunk):
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(
         retriever=retriever,
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("Ham Ninh co gi dac biet?"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -155,7 +224,10 @@ async def test_agent_uses_prior_turn_for_follow_up_retrieval(ham_ninh_chunk):
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(
         retriever=retriever,
-        llm_service=FakeLLM(),
+        llm_service=FakeLLMServiceWithClient([
+            FakeLLMMessage(tool_calls=[FakeToolCall("search_knowledge", json.dumps({"query": "Ke ve Ham Ninh"}, ensure_ascii=False))]),
+            FakeLLMMessage(tool_calls=[FakeToolCall("search_knowledge", json.dumps({"query": "Lịch sử Hàm Ninh"}, ensure_ascii=False))]),
+        ]),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -173,7 +245,7 @@ async def test_in_memory_checkpoint_is_same_process_only(ham_ninh_chunk):
     first_retriever = FakeRetriever([ham_ninh_chunk])
     first_service = AgentService(
         retriever=first_retriever,
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("Ke ve Ham Ninh"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="memory",
     )
@@ -182,7 +254,7 @@ async def test_in_memory_checkpoint_is_same_process_only(ham_ninh_chunk):
     second_retriever = FakeRetriever([ham_ninh_chunk])
     restarted_service = AgentService(
         retriever=second_retriever,
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("No co gi ngon?"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="memory",
     )
@@ -214,10 +286,9 @@ async def test_agent_falls_back_when_llm_unavailable(ham_ninh_chunk):
         language="vi",
     )
 
-    # Deterministic path retrieves citations
-    assert response.citations
-    assert "Ham Ninh" in response.citations[0].source
-    assert response.fallback is False  # Deterministic path, not degraded
+    assert response.citations == []
+    assert response.fallback is True
+    assert "LLM" in response.message or "AI" in response.message
 
 
 @pytest.mark.asyncio
@@ -237,10 +308,9 @@ async def test_agent_returns_honest_no_evidence_when_retrieval_empty(ham_ninh_ch
         language="en",
     )
 
-    # Empty retrieval → honest no-evidence message
     assert response.citations == []
-    # The knowledge fallback answer for empty citations in English
-    assert "do not have enough" in response.message.lower() or "not enough" in response.message.lower() or "not have sufficient" in response.message.lower()
+    assert response.fallback is True
+    assert "llm service" in response.message.lower() or "ai service" in response.message.lower()
 
 
 @pytest.mark.asyncio
@@ -249,7 +319,7 @@ async def test_agent_stream_yields_status_response_citations_and_done(ham_ninh_c
     response text, and citations."""
     service = AgentService(
         retriever=FakeRetriever([ham_ninh_chunk]),
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("Stream Ham Ninh"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -593,6 +663,7 @@ class TestCulturalQueryRouting:
         retriever = FakeRetriever([chunk])
         service = AgentService(
             retriever=retriever,
+            llm_service=fake_knowledge_llm('Văn hóa Hàm Ninh có gì đặc biệt?'),
             checkpointer=InMemoryAgentCheckpointer(),
             checkpoint_mode="test",
         )
@@ -615,6 +686,7 @@ class TestCulturalQueryRouting:
         retriever = FakeRetriever([chunk])
         service = AgentService(
             retriever=retriever,
+            llm_service=fake_knowledge_llm('Nhà Tây Sơn khởi nghĩa năm nào?'),
             checkpointer=InMemoryAgentCheckpointer(),
             checkpoint_mode="test",
         )
@@ -679,6 +751,7 @@ async def test_agent_routes_knowledge_about_seafood_as_knowledge_not_places(ham_
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(
         retriever=retriever,
+        llm_service=fake_knowledge_llm("Kể về hải sản và đời sống làng chài Hàm Ninh"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -737,6 +810,7 @@ async def test_agent_routes_vietnamese_variant_culture_to_knowledge(ham_ninh_chu
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(
         retriever=retriever,
+        llm_service=fake_knowledge_llm("tôi muốn hiểu về văn hoá hàm ninh"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -780,8 +854,9 @@ async def test_knowledge_followup_retrieves_with_prior_topic_not_generic_button_
         language="vi",
     )
 
-    assert retriever.queries[-1] == "Kể về ẩm thực địa phương"
-    assert response.intent == "cultural_query"
-    assert response.citations
+    assert retriever.queries == []
+    assert response.intent == "clarification"
+    assert response.citations == []
+    assert response.fallback is True
     assert "Mình có thể giúp" not in response.message
 

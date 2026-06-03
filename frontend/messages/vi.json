@@ -313,17 +313,17 @@
     "providerStatus": "Trạng thái",
     "scoreDataLimited": "Dữ liệu chấm điểm hạn chế",
     "accessibilityNote": "Thông tin tiếp cận",
-    "welcomeGreeting": "Đi Hàm Ninh nhẹ nhàng hơn với một trợ lý biết trò chuyện",
-    "welcomeSubtitle": "Chào hỏi thoải mái hoặc hỏi thẳng điều bạn cần. Trợ lý sẽ trả lời tự nhiên, chỉ dùng nguồn khi câu hỏi thật sự cần tra cứu.",
+    "welcomeGreeting": "Bạn muốn khám phá Hàm Ninh theo cách nào?",
+    "welcomeSubtitle": "Hỏi mình về địa điểm, đường đi, văn hóa/lịch sử, ẩm thực hoặc lịch trình quanh Hàm Ninh. Nếu thiếu thông tin, mình sẽ hỏi lại thay vì đoán.",
     "newConversation": "Cuộc trò chuyện mới",
     "copy": "Sao chép",
     "copied": "Đã sao chép!",
     "retryMessage": "Thử lại",
     "prompts": [
-      "Chào bạn",
-      "Gợi ý một quán hải sản địa phương",
-      "Kể ngắn gọn lịch sử làng chài",
-      "Từ Dương Đông đi Hàm Ninh thế nào?"
+      "Kể về ẩm thực địa phương",
+      "Tìm quán hải sản gần đây",
+      "Chỉ đường đến chợ Hàm Ninh",
+      "Làng chài Hàm Ninh có gì đặc biệt?"
     ],
     "quickReplyLabels": {
       "places": [
@@ -332,16 +332,19 @@
         "Có tiếp cận được không?"
       ],
       "sources": [
-        "Tóm tắt nguồn tham khảo",
-        "Hỏi thêm về chủ đề này"
+        "Hải sản nào nổi bật?",
+        "Tìm quán hải sản gần đây",
+        "Kể thêm về làng chài"
       ],
       "fallback": [
-        "Thử hỏi theo hướng khác",
-        "Hỏi về làng chài"
+        "Kể về làng chài Hàm Ninh",
+        "Tìm quán hải sản",
+        "Hỏi đường đến chợ Hàm Ninh"
       ],
       "generic": [
-        "Bạn còn làm được gì?",
-        "Kể về ẩm thực địa phương"
+        "Kể về ẩm thực địa phương",
+        "Tìm quán hải sản gần đây",
+        "Chỉ đường đến chợ Hàm Ninh"
     ]
     }
   },
