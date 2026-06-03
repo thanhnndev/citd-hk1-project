@@ -191,6 +191,7 @@ class PlaceCandidate(BaseModel):
     short_formatted_address: str | None = Field(default=None, max_length=240)
     location: LatLng | None = None
     primary_type: str | None = Field(default=None, max_length=80)
+    primary_type_display_name: str | None = Field(default=None, max_length=120)
     rating: float | None = Field(default=None, ge=0.0, le=5.0)
     user_rating_count: int | None = Field(default=None, ge=0)
     price_level: int | None = Field(default=None, ge=0, le=4)
@@ -201,6 +202,25 @@ class PlaceCandidate(BaseModel):
     international_phone_number: str | None = Field(default=None, max_length=80)
     map_uri: str | None = Field(default=None, max_length=2048)
     website_uri: str | None = Field(default=None, max_length=2048)
+    regular_opening_hours: dict[str, Any] | None = Field(default=None, max_length=20)
+    current_opening_hours: dict[str, Any] | None = Field(default=None, max_length=20)
+    payment_options: dict[str, bool] = Field(default_factory=dict, max_length=20)
+    parking_options: dict[str, bool] = Field(default_factory=dict, max_length=20)
+    editorial_summary: str | None = Field(default=None, max_length=500)
+    generative_summary: str | None = Field(default=None, max_length=800)
+    review_summary: str | None = Field(default=None, max_length=800)
+    reviews: list[dict[str, Any]] = Field(default_factory=list, max_length=5)
+    photos: list[str] = Field(default_factory=list, max_length=10)
+    takeout: bool | None = None
+    delivery: bool | None = None
+    dine_in: bool | None = None
+    reservable: bool | None = None
+    serves_breakfast: bool | None = None
+    serves_lunch: bool | None = None
+    serves_dinner: bool | None = None
+    serves_beer: bool | None = None
+    serves_wine: bool | None = None
+    serves_vegetarian_food: bool | None = None
     accessibility_score: float | None = Field(default=None, ge=0.0, le=1.0)
     accessibility_warning: str | None = Field(default=None, max_length=240)
     local_factor: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -390,19 +410,27 @@ class PlaceDecisionTrace(BaseModel):
 # -- Google Places API (New) typed contract --
 
 # Provider contract version — bump when field mask or normalization semantics change.
-GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION = "v1"
+GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION = "v2"
 
 # Field mask covering every rich field consumed by normalize_place().
 # Google Places API (New) requires explicit field masks for billing — fields not
 # listed here are omitted from the response and cannot be normalized.
 GOOGLE_PLACES_FIELD_MASK = (
     "places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,"
-    "places.location,places.types,places.primaryType,"
+    "places.location,places.types,places.primaryType,places.primaryTypeDisplayName,"
     "places.rating,places.userRatingCount,places.priceLevel,"
-    "places.regularOpeningHours,places.currentOpeningHours,"
-    "places.businessStatus,places.accessibilityOptions,"
-    "places.nationalPhoneNumber,places.internationalPhoneNumber,"
+    "places.currentOpeningHours,places.businessStatus,places.accessibilityOptions,"
     "places.googleMapsUri,places.websiteUri"
+)
+
+GOOGLE_PLACE_DETAILS_FIELD_MASK = (
+    "id,displayName,formattedAddress,shortFormattedAddress,location,types,"
+    "primaryType,primaryTypeDisplayName,rating,userRatingCount,priceLevel,"
+    "regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,"
+    "businessStatus,accessibilityOptions,nationalPhoneNumber,internationalPhoneNumber,"
+    "googleMapsUri,websiteUri,editorialSummary,generativeSummary,reviewSummary,reviews,photos,"
+    "paymentOptions,parkingOptions,takeout,delivery,dineIn,reservable,"
+    "servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesVegetarianFood"
 )
 
 

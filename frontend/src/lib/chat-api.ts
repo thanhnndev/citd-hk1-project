@@ -62,6 +62,7 @@ export interface PlaceExplanation {
   provider_status: string | null;
   /** Normalized candidate/result fields used to build this explanation. */
   evidence_fields_used: string[];
+  detail_highlights: string[];
 }
 
 export interface PlaceResult {
@@ -71,11 +72,22 @@ export interface PlaceResult {
   location?: LatLng | null;
   types: string[];
   primary_type?: string | null;
+  primary_type_display_name?: string | null;
   rating?: number | null;
   user_rating_count?: number | null;
   price_level?: number | null;
   open_now?: boolean | null;
   business_status?: string | null;
+  current_opening_hours?: Record<string, unknown> | null;
+  regular_opening_hours?: Record<string, unknown> | null;
+  payment_options: Record<string, boolean>;
+  parking_options: Record<string, boolean>;
+  editorial_summary?: string | null;
+  generative_summary?: string | null;
+  review_summary?: string | null;
+  reviews: Record<string, unknown>[];
+  photos: string[];
+  service_options: Record<string, boolean | null>;
   local_factor: number | null;
   final_score: number;
   score_breakdown: ScoreBreakdown;

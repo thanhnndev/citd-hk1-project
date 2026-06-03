@@ -948,3 +948,56 @@ class TestNoRagFallback:
         dump = response.model_dump_json()
         assert "citation" not in dump.lower()
         assert "rag" not in dump.lower()
+
+@pytest.mark.asyncio
+async def test_text_search_hydrates_top_candidates_with_place_details():
+    search_payload = {"places": [google_place(id="rich_1", displayName={"text": "Rich Search"})]}
+    detail_payload = google_place(
+        id="rich_1",
+        displayName={"text": "Rich Detail"},
+        primaryTypeDisplayName={"text": "Coffee shop"},
+        editorialSummary={"text": "A locally loved coffee stop near Ham Ninh."},
+        paymentOptions={"acceptsCreditCards": True, "acceptsCashOnly": False},
+        parkingOptions={"freeParkingLot": True},
+        takeout=True,
+        delivery=False,
+        dineIn=True,
+        reservable=True,
+        servesVegetarianFood=True,
+        reviews=[{"rating": 5, "text": {"text": "Great local coffee."}, "authorAttribution": {"displayName": "A reviewer"}}],
+        photos=[{"name": "places/rich_1/photos/photo_a"}],
+    )
+    class SplitClient:
+        def __init__(self):
+            self.post_calls = []
+            self.get_calls = []
+
+        async def post(self, path: str, *, json: dict, headers: dict) -> FakeResponse:
+            self.post_calls.append((path, json, headers))
+            return FakeResponse(payload=search_payload)
+
+        async def get(self, path: str, *, headers: dict) -> FakeResponse:
+            self.get_calls.append((path, headers))
+            return FakeResponse(payload=detail_payload)
+
+    client = SplitClient()
+    service = GooglePlacesService(settings=settings(), client=client)
+
+    response = await service.text_search(PlaceSearchRequest(query="coffee", max_result_count=1))
+
+    assert response.status == PlaceToolStatus.OK
+    assert len(client.get_calls) == 1
+    assert "id,displayName" in client.get_calls[0][1]["X-Goog-FieldMask"]
+    candidate = response.candidates[0]
+    assert candidate.display_name == "Rich Detail"
+    assert candidate.primary_type_display_name == "Coffee shop"
+    assert candidate.editorial_summary == "A locally loved coffee stop near Ham Ninh."
+    assert candidate.payment_options["acceptsCreditCards"] is True
+    assert candidate.parking_options["freeParkingLot"] is True
+    assert candidate.takeout is True
+    assert candidate.dine_in is True
+    assert candidate.reservable is True
+    assert candidate.serves_vegetarian_food is True
+    assert candidate.reviews[0]["text"] == "Great local coffee."
+    assert candidate.photos == ["places/rich_1/photos/photo_a"]
+    assert response.audit["details_hydrated"] == 1

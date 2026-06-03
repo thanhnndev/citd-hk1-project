@@ -224,6 +224,14 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
               {explanation.primary_reason}
             </p>
 
+            {explanation.detail_highlights?.length > 0 && (
+              <div className="space-y-1 rounded-lg border border-emerald-200/40 bg-emerald-50/70 p-2 text-[0.63rem] leading-snug text-emerald-900 dark:border-emerald-900/30 dark:bg-emerald-950/25 dark:text-emerald-200">
+                {explanation.detail_highlights.slice(0, 3).map((highlight) => (
+                  <div key={highlight} className="line-clamp-2">{highlight}</div>
+                ))}
+              </div>
+            )}
+
             {/* Micro highlights block */}
             <div className="space-y-1 text-[0.63rem] md:text-[0.68rem] text-muted-foreground">
               {/* Local context */}

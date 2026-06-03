@@ -69,6 +69,7 @@ class PlaceExplanation(BaseModel):
     provider_source: str | None = Field(default=None, max_length=64, description="Normalized provider/source label when available.")
     provider_status: str | None = Field(default=None, max_length=64, description="Normalized provider status when available.")
     evidence_fields_used: list[str] = Field(default_factory=list, max_length=20, description="Normalized candidate/result fields used to build this explanation.")
+    detail_highlights: list[str] = Field(default_factory=list, max_length=8, description="Human-friendly highlights derived from Place Details (New).")
 
 class PlaceResult(BaseModel):
     """
@@ -130,6 +131,10 @@ class PlaceResult(BaseModel):
         default=None,
         description="Provider-supplied primary place type when available.",
     )
+    primary_type_display_name: str | None = Field(
+        default=None,
+        description="Localized primary type label when available from Place Details.",
+    )
     rating: float | None = Field(
         default=None,
         ge=0.0,
@@ -155,6 +160,16 @@ class PlaceResult(BaseModel):
         default=None,
         description="Provider-supplied business status when available.",
     )
+    current_opening_hours: dict | None = Field(default=None, description="Current opening hours from Place Details when available.")
+    regular_opening_hours: dict | None = Field(default=None, description="Regular opening hours from Place Details when available.")
+    payment_options: dict[str, bool] = Field(default_factory=dict, description="Accepted payment options from Place Details.")
+    parking_options: dict[str, bool] = Field(default_factory=dict, description="Parking options from Place Details.")
+    editorial_summary: str | None = Field(default=None, description="Provider editorial summary, presented as-is when available.")
+    generative_summary: str | None = Field(default=None, description="Google AI-generated place summary when available.")
+    review_summary: str | None = Field(default=None, description="Google AI-generated review summary when available.")
+    reviews: list[dict] = Field(default_factory=list, description="Bounded provider reviews from Place Details.")
+    photos: list[str] = Field(default_factory=list, description="Bounded provider photo resource names from Place Details.")
+    service_options: dict[str, bool | None] = Field(default_factory=dict, description="Dining/service flags such as takeout, delivery, dine_in, reservable, serves_*.")
     local_factor: float | None = Field(
         default=None,
         description="Locality signal when available; null means provider metadata did not support a local ownership inference.",

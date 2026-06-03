@@ -33,6 +33,7 @@ import structlog
 from app.core.config import Settings, get_settings
 from app.models.places import (
     DEFAULT_SEARCH_RADIUS_METERS,
+    GOOGLE_PLACE_DETAILS_FIELD_MASK,
     GOOGLE_PLACES_FIELD_MASK,
     GOOGLE_PLACES_PROVIDER_CONTRACT_VERSION,
     HAM_NINH_CENTER,
@@ -189,10 +190,10 @@ class GooglePlacesService:
         key = self._settings.GOOGLE_PLACES_API_KEY.strip()
         return key if key else None
 
-    def _auth_headers(self, language_code: str = "en") -> dict[str, str]:
+    def _auth_headers(self, language_code: str = "en", field_mask: str = _DEFAULT_FIELD_MASK) -> dict[str, str]:
         headers = {
             "X-Goog-Api-Key": self._api_key() or "",
-            "X-Goog-FieldMask": _DEFAULT_FIELD_MASK,
+            "X-Goog-FieldMask": field_mask,
             "Content-Type": "application/json",
         }
         if language_code:
@@ -226,7 +227,7 @@ class GooglePlacesService:
             body=body,
             request=request,
             origin=request.location_bias,
-            metadata={"endpoint": "google_text_search", "radius_meters": request.radius_meters},
+            metadata={"endpoint": "google_text_search", "field_mask": GOOGLE_PLACES_FIELD_MASK, "radius_meters": request.radius_meters},
         )
 
     # -- Nearby Search (POST /v1/places:searchNearby) ---------------
@@ -255,6 +256,7 @@ class GooglePlacesService:
             origin=request.center,
             metadata={
                 "endpoint": "google_nearby_search",
+                "field_mask": GOOGLE_PLACES_FIELD_MASK,
                 "center": f"{request.center.lat},{request.center.lng}",
                 "radius_meters": request.radius_meters,
                 "included_type": request.included_type,
@@ -265,14 +267,14 @@ class GooglePlacesService:
 
     async def details(self, request: PlaceDetailsRequest) -> SearchPlacesToolResult:
         retrieved_at = datetime.now(UTC)
-        metadata = {"endpoint": "google_detail"}
+        metadata = {"endpoint": "google_detail", "field_mask": GOOGLE_PLACE_DETAILS_FIELD_MASK}
         api_key = self._api_key()
         if not api_key:
             return self._credential_error(request, retrieved_at, metadata)
 
         place_id = request.place_id.removeprefix("places/")
         path = f"{DETAILS_PATH}/{place_id}"
-        headers = self._auth_headers(request.language_code)
+        headers = self._auth_headers(request.language_code, GOOGLE_PLACE_DETAILS_FIELD_MASK)
 
         return await self._execute_details(
             operation="details",
@@ -342,6 +344,13 @@ class GooglePlacesService:
             if candidate:
                 candidates.append(candidate)
 
+        if candidates:
+            candidates, hydrated_count = await self._hydrate_search_candidates(
+                candidates, language_code=language_code, origin=origin
+            )
+            if hydrated_count:
+                metadata = {**metadata, "details_hydrated": hydrated_count}
+
         # Upsert successful results to cache (fire-and-forget — do not block response)
         if candidates:
             await self._try_cache_upsert(request, candidates)
@@ -349,6 +358,46 @@ class GooglePlacesService:
         if not candidates:
             return self._response(status=PlaceToolStatus.EMPTY, request=request, retrieved_at=retrieved_at, metadata={**metadata, "error_code": "no_results"})
         return self._response(status=PlaceToolStatus.OK, request=request, retrieved_at=retrieved_at, metadata=metadata, candidates=candidates)
+
+    async def _hydrate_search_candidates(
+        self,
+        candidates: list[PlaceCandidate],
+        *,
+        language_code: str,
+        origin: LatLng | None,
+        limit: int = 5,
+    ) -> tuple[list[PlaceCandidate], int]:
+        """Hydrate top search candidates with Place Details (New) rich fields.
+
+        Search stays lightweight; details are fetched only for the top few
+        candidates. Failures are ignored so provider details cannot break a
+        successful search result.
+        """
+        hydrated: list[PlaceCandidate] = []
+        hydrated_count = 0
+        for index, candidate in enumerate(candidates):
+            if index >= limit:
+                hydrated.append(candidate)
+                continue
+            try:
+                result = await self.details(
+                    PlaceDetailsRequest(place_id=candidate.place_id, language_code=language_code)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("google_place_details_hydrate_error", place_id=candidate.place_id, error_type=type(exc).__name__)
+                hydrated.append(candidate)
+                continue
+            if result.status == PlaceToolStatus.OK and result.candidates:
+                rich = result.candidates[0]
+                if origin and rich.location and rich.route_context is None:
+                    rich = rich.model_copy(update={
+                        "route_context": RouteContext(origin=origin, distance_meters=_haversine_meters(origin, rich.location))
+                    })
+                hydrated.append(_merge_place_candidate(candidate, rich))
+                hydrated_count += 1
+            else:
+                hydrated.append(candidate)
+        return hydrated, hydrated_count
 
     # -- Internal: details execution --------------------------------
 
@@ -631,18 +680,20 @@ class GooglePlacesService:
 
         audit: dict[str, Any] = {
                 "endpoint": metadata.get("endpoint", "unknown"),
-                "field_mask": GOOGLE_PLACES_FIELD_MASK,
+                "field_mask": metadata.get("field_mask", GOOGLE_PLACES_FIELD_MASK),
                 "fallback_reason": reason,
             }
         if "cache_result" in metadata:
             audit["cache_result"] = metadata["cache_result"]
         if "circuit_state" in metadata:
             audit["circuit_state"] = metadata["circuit_state"]
+        if "details_hydrated" in metadata:
+            audit["details_hydrated"] = metadata["details_hydrated"]
 
         # Build enriched request_metadata with full diagnostic keys
         request_metadata: dict[str, Any] = {
             "endpoint": metadata.get("endpoint", "unknown"),
-            "field_mask": GOOGLE_PLACES_FIELD_MASK,
+            "field_mask": metadata.get("field_mask", GOOGLE_PLACES_FIELD_MASK),
             "credential_status": "live",  # key was present but provider failed
             "provider_attempted": PlaceToolSource.GOOGLE_PLACES.value,
             "fallback_reason": reason,
@@ -707,7 +758,7 @@ class GooglePlacesService:
         # Build audit trail
         audit: dict[str, Any] = {
             "endpoint": metadata.get("endpoint", "unknown"),
-            "field_mask": GOOGLE_PLACES_FIELD_MASK,
+            "field_mask": metadata.get("field_mask", GOOGLE_PLACES_FIELD_MASK),
         }
         if "fallback_reason" in metadata:
             audit["fallback_reason"] = metadata["fallback_reason"]
@@ -717,6 +768,8 @@ class GooglePlacesService:
             audit["staleness_seconds"] = metadata["staleness_seconds"]
         if "circuit_state" in metadata:
             audit["circuit_state"] = metadata["circuit_state"]
+        if "details_hydrated" in metadata:
+            audit["details_hydrated"] = metadata["details_hydrated"]
 
         # Determine credential status for diagnostics
         api_key = self._api_key()
@@ -725,7 +778,7 @@ class GooglePlacesService:
         # Build enriched request_metadata with full diagnostic keys
         request_metadata: dict[str, Any] = {
             "endpoint": metadata.get("endpoint", "unknown"),
-            "field_mask": GOOGLE_PLACES_FIELD_MASK,
+            "field_mask": metadata.get("field_mask", GOOGLE_PLACES_FIELD_MASK),
             "credential_status": credential_status,
             "provider_attempted": PlaceToolSource.GOOGLE_PLACES.value,
             "result_count": len(candidates) if candidates else 0,
@@ -792,6 +845,7 @@ def normalize_place(place: dict[str, Any], *, origin: LatLng | None = None) -> P
         display_name=display_name,
         types=types,
         primary_type=_string(place.get("primaryType")) or (types[0] if types else None),
+        primary_type_display_name=_display_name(place.get("primaryTypeDisplayName")),
         formatted_address=_string(place.get("formattedAddress")),
         short_formatted_address=_string(place.get("shortFormattedAddress")),
         location=location,
@@ -800,6 +854,25 @@ def normalize_place(place: dict[str, Any], *, origin: LatLng | None = None) -> P
         price_level=_price_level_google(place.get("priceLevel")),
         open_now=_open_now_google(place),
         business_status=_string(place.get("businessStatus")),
+        current_opening_hours=_safe_dict(place.get("currentOpeningHours")),
+        regular_opening_hours=_safe_dict(place.get("regularOpeningHours")),
+        payment_options=_bool_dict(place.get("paymentOptions")),
+        parking_options=_bool_dict(place.get("parkingOptions")),
+        editorial_summary=_localized_text(place.get("editorialSummary")),
+        generative_summary=_summary_text(place.get("generativeSummary")),
+        review_summary=_summary_text(place.get("reviewSummary")),
+        reviews=_reviews(place.get("reviews")),
+        photos=_photos(place.get("photos")),
+        takeout=_bool_or_none(place.get("takeout")),
+        delivery=_bool_or_none(place.get("delivery")),
+        dine_in=_bool_or_none(place.get("dineIn")),
+        reservable=_bool_or_none(place.get("reservable")),
+        serves_breakfast=_bool_or_none(place.get("servesBreakfast")),
+        serves_lunch=_bool_or_none(place.get("servesLunch")),
+        serves_dinner=_bool_or_none(place.get("servesDinner")),
+        serves_beer=_bool_or_none(place.get("servesBeer")),
+        serves_wine=_bool_or_none(place.get("servesWine")),
+        serves_vegetarian_food=_bool_or_none(place.get("servesVegetarianFood")),
         accessibility_options=dict(accessibility),
         national_phone_number=_string(place.get("nationalPhoneNumber")),
         international_phone_number=_string(place.get("internationalPhoneNumber")),
@@ -809,6 +882,63 @@ def normalize_place(place: dict[str, Any], *, origin: LatLng | None = None) -> P
         route_context=RouteContext(origin=origin, distance_meters=distance_meters) if distance_meters is not None else None,
     )
 
+
+def _safe_dict(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+def _bool_dict(value: Any) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): v for k, v in value.items() if isinstance(v, bool)}
+
+def _bool_or_none(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+def _localized_text(value: Any) -> str | None:
+    if isinstance(value, dict):
+        return _string(value.get("text"))
+    return _string(value)
+
+def _summary_text(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    return _localized_text(value.get("overview") or value.get("summary") or value.get("description") or value)
+
+def _reviews(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    reviews: list[dict[str, Any]] = []
+    for item in value[:5]:
+        if not isinstance(item, dict):
+            continue
+        text = _localized_text(item.get("text") or item.get("originalText"))
+        author = _string(item.get("authorAttribution", {}).get("displayName")) if isinstance(item.get("authorAttribution"), dict) else None
+        reviews.append({
+            "rating": _float(item.get("rating")),
+            "text": text[:500] if text else None,
+            "author": author,
+            "relative_publish_time": _string(item.get("relativePublishTimeDescription")),
+        })
+    return reviews
+
+def _photos(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value[:10]:
+        if isinstance(item, dict):
+            name = _string(item.get("name"))
+            if name:
+                names.append(name)
+    return names
+
+def _merge_place_candidate(base: PlaceCandidate, details: PlaceCandidate) -> PlaceCandidate:
+    data = base.model_dump()
+    detail_data = details.model_dump()
+    for key, value in detail_data.items():
+        if value not in (None, [], {}):
+            data[key] = value
+    return PlaceCandidate.model_validate(data)
 
 def _extract_places_list(payload: dict[str, Any]) -> list[Any] | None:
     """Extract the places array from Google Places API (New) response."""

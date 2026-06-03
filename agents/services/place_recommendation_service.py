@@ -557,11 +557,22 @@ def _reranked_results(
                 location=candidate.location,
                 types=candidate.types,
                 primary_type=candidate.primary_type,
+                primary_type_display_name=candidate.primary_type_display_name,
                 rating=candidate.rating,
                 user_rating_count=candidate.user_rating_count,
                 price_level=candidate.price_level,
                 open_now=candidate.open_now,
                 business_status=candidate.business_status,
+                current_opening_hours=candidate.current_opening_hours,
+                regular_opening_hours=candidate.regular_opening_hours,
+                payment_options=candidate.payment_options,
+                parking_options=candidate.parking_options,
+                editorial_summary=candidate.editorial_summary,
+                generative_summary=candidate.generative_summary,
+                review_summary=candidate.review_summary,
+                reviews=candidate.reviews,
+                photos=candidate.photos,
+                service_options=_service_options(candidate),
                 local_factor=candidate.local_factor,
                 final_score=breakdown.final_score,
                 score_breakdown=breakdown,
@@ -636,11 +647,22 @@ def _grounded_results(
                 location=candidate.location,
                 types=candidate.types,
                 primary_type=candidate.primary_type,
+                primary_type_display_name=candidate.primary_type_display_name,
                 rating=candidate.rating,
                 user_rating_count=candidate.user_rating_count,
                 price_level=candidate.price_level,
                 open_now=candidate.open_now,
                 business_status=candidate.business_status,
+                current_opening_hours=candidate.current_opening_hours,
+                regular_opening_hours=candidate.regular_opening_hours,
+                payment_options=candidate.payment_options,
+                parking_options=candidate.parking_options,
+                editorial_summary=candidate.editorial_summary,
+                generative_summary=candidate.generative_summary,
+                review_summary=candidate.review_summary,
+                reviews=candidate.reviews,
+                photos=candidate.photos,
+                service_options=_service_options(candidate),
                 local_factor=candidate.local_factor,
                 final_score=0.5,
                 score_breakdown=breakdown,
@@ -664,6 +686,48 @@ def _grounded_results(
 
     return results
 
+
+def _service_options(candidate: PlaceCandidate) -> dict[str, bool | None]:
+    return {
+        "takeout": candidate.takeout,
+        "delivery": candidate.delivery,
+        "dine_in": candidate.dine_in,
+        "reservable": candidate.reservable,
+        "serves_breakfast": candidate.serves_breakfast,
+        "serves_lunch": candidate.serves_lunch,
+        "serves_dinner": candidate.serves_dinner,
+        "serves_beer": candidate.serves_beer,
+        "serves_wine": candidate.serves_wine,
+        "serves_vegetarian_food": candidate.serves_vegetarian_food,
+    }
+
+def _detail_highlights(candidate: PlaceCandidate) -> list[str]:
+    highlights: list[str] = []
+    if candidate.editorial_summary:
+        highlights.append(candidate.editorial_summary[:180])
+    elif candidate.generative_summary:
+        highlights.append(candidate.generative_summary[:180])
+    elif candidate.review_summary:
+        highlights.append(candidate.review_summary[:180])
+    service_labels = {
+        "takeout": "takeout",
+        "delivery": "delivery",
+        "dine_in": "dine-in",
+        "reservable": "reservations",
+        "serves_vegetarian_food": "vegetarian options",
+    }
+    for key, label in service_labels.items():
+        if getattr(candidate, key) is True:
+            highlights.append(label)
+    if candidate.payment_options:
+        payments = ", ".join(k for k, v in candidate.payment_options.items() if v)
+        if payments:
+            highlights.append(f"payments: {payments}")
+    if candidate.parking_options:
+        parking = ", ".join(k for k, v in candidate.parking_options.items() if v)
+        if parking:
+            highlights.append(f"parking: {parking}")
+    return highlights[:8]
 
 def _redact_text(value: str, *, max_length: int = 240) -> str:
     """Strip API-key-like tokens, phone numbers, and truncate to bounded length.
@@ -798,6 +862,9 @@ def _build_place_explanation(
     if candidate.primary_type:
         matched.append(f"type:{_redact_text(candidate.primary_type, max_length=40)}")
         evidence.append("primary_type")
+    if candidate.primary_type_display_name:
+        matched.append(f"type_label:{_redact_text(candidate.primary_type_display_name, max_length=40)}")
+        evidence.append("primary_type_display_name")
     elif candidate.types:
         matched.append(f"type:{_redact_text(candidate.types[0], max_length=40)}")
         evidence.append("types")
@@ -805,6 +872,9 @@ def _build_place_explanation(
     if candidate.price_level is not None:
         matched.append(f"price_level:{candidate.price_level}")
         evidence.append("price_level")
+    detail_highlights = _detail_highlights(candidate)
+    if detail_highlights:
+        evidence.append("place_details")
     if candidate.rating is not None:
         matched.append("provider_rating_available")
         evidence.append("rating")
