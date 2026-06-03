@@ -11,6 +11,7 @@ import asyncpg
 import structlog
 
 from agents.graph.followup import FollowUpContext
+from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 
 logger = structlog.get_logger(__name__)
 
@@ -218,15 +219,56 @@ class PostgresAgentCheckpointer:
                     "SELECT context_json FROM agent_session_followup_context WHERE session_id = $1 ORDER BY id DESC LIMIT 1",
                     session_id,
                 )
+                memory_rows = await self._load_place_memory_rows(conn, session_id)
         except Exception:
             return None
-        if row is None:
-            return None
+        ctx: FollowUpContext | None = None
+        if row is not None:
+            try:
+                data = json.loads(row) if isinstance(row, str) else row
+                ctx = FollowUpContext.from_dict(data)
+            except (json.JSONDecodeError, TypeError):
+                ctx = None
+        if memory_rows:
+            ctx = self._context_from_place_memories(session_id, memory_rows, ctx)
+        return ctx
+
+    async def _load_place_memory_rows(self, conn: Any, session_id: str) -> list[Any]:
+        fetch = getattr(conn, "fetch", None)
+        if not callable(fetch):
+            return []
         try:
-            data = json.loads(row) if isinstance(row, str) else row
-            return FollowUpContext.from_dict(data)
-        except (json.JSONDecodeError, TypeError):
-            return None
+            rows = await fetch(
+                """SELECT place_id, display_name, rank, rating, price_level, reviews, opening_hours
+                FROM agent_place_memories
+                WHERE session_id = $1
+                ORDER BY rank ASC, last_seen_at DESC
+                LIMIT 10""",
+                session_id,
+            )
+        except Exception:
+            return []
+        return [row for row in rows if isinstance(row, dict) and "place_id" in row and "display_name" in row]
+
+    def _context_from_place_memories(self, session_id: str, rows: list[Any], base: FollowUpContext | None) -> FollowUpContext:
+        ctx = base or FollowUpContext(session_id=session_id, intent=PLACE_RECOMMENDATION_INTENT)
+        ctx.session_id = ctx.session_id or session_id
+        ctx.intent = ctx.intent or PLACE_RECOMMENDATION_INTENT
+        ctx.place_ids = [str(row.get("place_id") or "") for row in rows]
+        ctx.place_display_names = [str(row.get("display_name") or row.get("place_id") or "") for row in rows]
+        ctx.place_ratings = [float(row["rating"]) for row in rows if row.get("rating") is not None]
+        ctx.place_price_levels = [int(row["price_level"]) for row in rows if row.get("price_level") is not None]
+        ctx.place_reviews = [self._json_value(row.get("reviews"), []) for row in rows]
+        ctx.place_hours = [self._json_value(row.get("opening_hours"), {}) for row in rows]
+        return ctx
+
+    def _json_value(self, value: Any, default: Any) -> Any:
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return default
+        return value if value is not None else default
 
     async def save_context(self, session_id: str, ctx: FollowUpContext) -> None:
         async with self._pool.acquire() as conn:

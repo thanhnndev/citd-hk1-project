@@ -690,6 +690,51 @@ class TestPostgresCheckpointerContextContract:
 # Decision label coverage — all four labels must appear in test assertions
 # ---------------------------------------------------------------------------
 
+
+    @pytest.mark.asyncio
+    async def test_load_context_prefers_place_memory_store_over_snapshot(self) -> None:
+        class FakeConn:
+            async def fetchval(self, query, *args):
+                return {
+                    "session_id": "s1",
+                    "intent": PLACE_RECOMMENDATION_INTENT,
+                    "place_ids": ["p-old"],
+                    "place_display_names": ["Old Place"],
+                }
+
+            async def fetch(self, query, *args):
+                if "agent_place_memories" not in query:
+                    return []
+                return [
+                    {
+                        "place_id": "p2",
+                        "display_name": "Nhà Bè Hải sản Ngọc Hân",
+                        "rank": 2,
+                        "rating": 5.0,
+                        "price_level": 2,
+                        "reviews": [{"rating": 5, "text": "Hải sản tươi."}],
+                        "opening_hours": {"weekdayDescriptions": ["Thứ Hai: 8:00-22:00"]},
+                    }
+                ]
+
+        class FakeAcquire:
+            async def __aenter__(self):
+                return FakeConn()
+            async def __aexit__(self, *args):
+                return False
+
+        class FakePool:
+            def acquire(self):
+                return FakeAcquire()
+
+        cp = PostgresAgentCheckpointer(FakePool())
+        loaded = await cp.load_context("s1")
+
+        assert loaded is not None
+        assert loaded.place_ids == ["p2"]
+        assert loaded.place_display_names == ["Nhà Bè Hải sản Ngọc Hân"]
+        assert loaded.place_reviews[0][0]["text"] == "Hải sản tươi."
+
 class TestAllDecisionLabelsCovered:
     """Integration-style test ensuring all four decision labels are
     exercised by the test suite."""
