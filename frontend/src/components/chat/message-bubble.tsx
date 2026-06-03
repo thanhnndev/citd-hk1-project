@@ -4,7 +4,14 @@ import { CitationCard } from "./citation-card";
 import { PlaceCard } from "./place-card";
 import { MessageActions } from "./message-actions";
 import { AccessibilityBadge } from "@/components/reasoning/accessibility-badge";
-import { Bot, CheckCircle2, Clock3, Loader2, UserRound, ArrowRight } from "lucide-react";
+import {
+  Bot,
+  CheckCircle2,
+  Clock3,
+  Loader2,
+  UserRound,
+  ArrowRight,
+} from "lucide-react";
 import type { ChatStreamStatus, Citation, PlaceResult } from "@/lib/chat-api";
 
 export type MessageStatus = "submitted" | "streaming" | "complete";
@@ -79,10 +86,14 @@ export function MessageBubble({
   /** Build a compact post-response summary from status history + data signals. */
   const postResponseSummary = (() => {
     if (!hasStatusHistory || status !== "complete") return null;
-    const lastPhase = streamStatusLabels?.[statusHistory[statusHistory.length - 1]];
+    const lastPhase =
+      streamStatusLabels?.[statusHistory[statusHistory.length - 1]];
     const parts: string[] = [];
     if (lastPhase) parts.push(lastPhase.replace(/\.\.\.$/, ""));
-    if (citations && citations.length > 0) parts.push(`${citations.length} ${sourcesLabel?.toLowerCase() ?? "sources"}`);
+    if (citations && citations.length > 0)
+      parts.push(
+        `${citations.length} ${sourcesLabel?.toLowerCase() ?? "sources"}`,
+      );
     if (places && places.length > 0) parts.push(`${places.length} places`);
     if (fallback) parts.push("fallback");
     if (cacheHit) parts.push("cache");
@@ -90,7 +101,9 @@ export function MessageBubble({
   })();
 
   return (
-    <article className={`flex gap-2.5 animate-slideUp transition-all duration-200 sm:gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+    <article
+      className={`flex gap-2.5 animate-slideUp transition-all duration-200 sm:gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+    >
       {/* Compact avatar — distinct per role */}
       <div
         className={`mt-1 grid size-7 shrink-0 place-items-center rounded-full shadow-sm ring-1 transition-colors sm:size-8 ${
@@ -100,13 +113,23 @@ export function MessageBubble({
         }`}
         aria-hidden="true"
       >
-        {isUser ? <UserRound className="size-3.5 sm:size-4" /> : <Bot className="size-3.5 sm:size-4" />}
+        {isUser ? (
+          <UserRound className="size-3.5 sm:size-4" />
+        ) : (
+          <Bot className="size-3.5 sm:size-4" />
+        )}
       </div>
 
-      <div className={`flex min-w-0 max-w-[86%] flex-col md:max-w-[74%] ${isUser ? "items-end" : "items-start"}`}>
+      <div
+        className={`flex min-w-0 max-w-[86%] flex-col md:max-w-[74%] ${isUser ? "items-end" : "items-start"}`}
+      >
         {/* Sender label + status badge */}
-        <div className={`mb-1 flex items-center gap-2 text-[0.7rem] ${isUser ? "justify-end text-[#0b5f63]" : "text-[#4d6868]"}`}>
-          <span className="font-semibold">{isUser ? userLabel : assistantLabel}</span>
+        <div
+          className={`mb-1 flex items-center gap-2 text-[0.7rem] ${isUser ? "justify-end text-[#0b5f63]" : "text-[#4d6868]"}`}
+        >
+          <span className="font-semibold">
+            {isUser ? userLabel : assistantLabel}
+          </span>
           {showComplete && hasSources && (
             <span className="inline-flex items-center gap-1 text-[#6b7f7e]">
               <CheckCircle2 className="size-3" />
@@ -123,34 +146,49 @@ export function MessageBubble({
               : "rounded-tl-md border border-white/80 bg-[#fffdf8]/92 text-[#173a3b] shadow-slate-900/8 backdrop-blur"
           }`}
         >
-          <div className={`whitespace-pre-wrap text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7 ${isUser ? "text-white" : ""}`}>
-            {content || (
+          <div
+            className={`whitespace-pre-wrap text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7 ${isUser ? "text-white" : ""}`}
+          >
+            {content ? (
+              <RichMessageContent
+                content={content}
+                citations={isUser ? undefined : citations}
+              />
+            ) : (
               <span className="inline-flex items-center gap-2 text-[#4d6868]">
                 <TypingDots />
                 <span className="text-sm">{typingLabel}</span>
               </span>
             )}
             {!isUser && status === "streaming" && content && (
-              <span className="ml-1 inline-block h-4 w-0.5 translate-y-0.5 animate-blink rounded-full bg-[#0b5f63]" aria-hidden="true" />
+              <span
+                className="ml-1 inline-block h-4 w-0.5 translate-y-0.5 animate-blink rounded-full bg-[#0b5f63]"
+                aria-hidden="true"
+              />
             )}
           </div>
 
           {/* Hover actions — copy, retry */}
           {!isUser && !isPending && content && (
             <div className="absolute -bottom-3 right-3 rounded-full border border-slate-200 bg-white opacity-0 shadow-sm transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
-              <MessageActions content={content} onRetry={onRetry} translations={actionTranslations} />
+              <MessageActions
+                content={content}
+                onRetry={onRetry}
+                translations={actionTranslations}
+              />
             </div>
           )}
 
           {/* Guardrail/fallback/trace badges */}
-          {!isUser && (guardrailStatus || fallback || langfuseTraceId || cacheHit) && (
-            <AccessibilityBadge
-              guardrailStatus={guardrailStatus}
-              fallback={fallback}
-              langfuseTraceId={langfuseTraceId}
-              cacheHit={cacheHit}
-            />
-          )}
+          {!isUser &&
+            (guardrailStatus || fallback || langfuseTraceId || cacheHit) && (
+              <AccessibilityBadge
+                guardrailStatus={guardrailStatus}
+                fallback={fallback}
+                langfuseTraceId={langfuseTraceId}
+                cacheHit={cacheHit}
+              />
+            )}
         </div>
 
         {/* Thinking timeline — shown during streaming and retained after completion */}
@@ -164,16 +202,23 @@ export function MessageBubble({
             aria-label="Processing steps"
           >
             <div className="flex items-center gap-1.5">
-              {isStreaming && <Loader2 className="size-2.5 animate-spin shrink-0" />}
+              {isStreaming && (
+                <Loader2 className="size-2.5 animate-spin shrink-0" />
+              )}
               <span className="font-semibold uppercase tracking-wider opacity-70">
                 {isStreaming ? "Processing" : "Completed via"}
               </span>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5">
               {statusHistory.map((s, i) => (
-                <span key={`${s}-${i}`} className="inline-flex items-center gap-1">
+                <span
+                  key={`${s}-${i}`}
+                  className="inline-flex items-center gap-1"
+                >
                   {i > 0 && <ArrowRight className="size-2 opacity-40" />}
-                  <span>{streamStatusLabels[s]?.replace(/\.\.\.$/, "") ?? s}</span>
+                  <span>
+                    {streamStatusLabels[s]?.replace(/\.\.\.$/, "") ?? s}
+                  </span>
                 </span>
               ))}
             </div>
@@ -187,13 +232,18 @@ export function MessageBubble({
 
         {/* Citations — collapsible sources drawer */}
         {!isUser && hasSources && (
-          <details className="mt-3 max-w-full rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-2 shadow-sm" aria-label={sourcesLabel}>
+          <details
+            className="mt-3 max-w-full rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-2 shadow-sm"
+            aria-label={sourcesLabel}
+          >
             <summary className="cursor-pointer list-none rounded-xl px-2 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[#0b5f63] transition-colors hover:bg-white/70">
               {sourcesLabel} ({citations!.length})
             </summary>
             <div className="mt-2 grid max-w-full gap-2 overflow-hidden">
               {citations!.map((citation, i) => (
-                <CitationCard key={`${citation.source}-${i}`} citation={citation} index={i + 1} />
+                <div key={`${citation.source}-${i}`} id={citationAnchorId(i)}>
+                  <CitationCard citation={citation} index={i + 1} />
+                </div>
               ))}
             </div>
           </details>
@@ -201,7 +251,11 @@ export function MessageBubble({
 
         {/* Place cards — horizontal scroll, bounded at top 5 */}
         {!isUser && places && places.length > 0 && placeTranslations && (
-          <section className="mt-3 max-w-full overflow-hidden rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-3 shadow-sm" role="region" aria-label={placeTranslations.placeResultsHeading}>
+          <section
+            className="mt-3 max-w-full overflow-hidden rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-3 shadow-sm"
+            role="region"
+            aria-label={placeTranslations.placeResultsHeading}
+          >
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#0b5f63]">
               {placeTranslations.placeResultsHeading}
             </p>
@@ -211,7 +265,11 @@ export function MessageBubble({
               style={{ scrollbarWidth: "thin" }}
             >
               {places.slice(0, 5).map((place) => (
-                <PlaceCard key={place.place_id} place={place} translations={placeTranslations} />
+                <PlaceCard
+                  key={place.place_id}
+                  place={place}
+                  translations={placeTranslations}
+                />
               ))}
             </div>
           </section>
@@ -221,12 +279,80 @@ export function MessageBubble({
   );
 }
 
+function citationAnchorId(index: number) {
+  return `source-${index + 1}`;
+}
+
+function RichMessageContent({
+  content,
+  citations,
+}: {
+  content: string;
+  citations?: Citation[];
+}) {
+  if (!citations?.length) return <>{content}</>;
+
+  const parts = content.split(/(\[\d+\])/g);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const match = /^\[(\d+)\]$/.exec(part);
+        if (!match) return <span key={`${part}-${index}`}>{part}</span>;
+
+        const citationIndex = Number(match[1]) - 1;
+        const citation = citations[citationIndex];
+        if (!citation) return <span key={`${part}-${index}`}>{part}</span>;
+
+        const className =
+          "mx-0.5 inline-flex translate-y-[-0.08em] items-center rounded-full border border-[#0b5f63]/20 bg-[#0b5f63]/8 px-1.5 py-0.5 text-[0.68em] font-bold leading-none text-[#0b5f63] underline-offset-2 transition-colors hover:border-[#0b5f63]/40 hover:bg-[#0b5f63]/14 focus:outline-none focus:ring-2 focus:ring-[#0b5f63]/25";
+
+        if (citation.url) {
+          return (
+            <a
+              key={`${part}-${index}`}
+              href={citation.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={citation.source}
+              aria-label={`Open source ${match[1]}: ${citation.source}`}
+              className={className}
+            >
+              {part}
+            </a>
+          );
+        }
+
+        return (
+          <a
+            key={`${part}-${index}`}
+            href={`#${citationAnchorId(citationIndex)}`}
+            title={citation.source}
+            aria-label={`View source ${match[1]}: ${citation.source}`}
+            className={className}
+          >
+            {part}
+          </a>
+        );
+      })}
+    </>
+  );
+}
+
 function TypingDots() {
   return (
     <span className="inline-flex items-center gap-1" aria-hidden="true">
-      <span className="h-1.5 w-1.5 rounded-full bg-[#0b5f63]/70 animate-bounce" style={{ animationDelay: "0ms" }} />
-      <span className="h-1.5 w-1.5 rounded-full bg-[#0b5f63]/70 animate-bounce" style={{ animationDelay: "150ms" }} />
-      <span className="h-1.5 w-1.5 rounded-full bg-[#0b5f63]/70 animate-bounce" style={{ animationDelay: "300ms" }} />
+      <span
+        className="h-1.5 w-1.5 rounded-full bg-[#0b5f63]/70 animate-bounce"
+        style={{ animationDelay: "0ms" }}
+      />
+      <span
+        className="h-1.5 w-1.5 rounded-full bg-[#0b5f63]/70 animate-bounce"
+        style={{ animationDelay: "150ms" }}
+      />
+      <span
+        className="h-1.5 w-1.5 rounded-full bg-[#0b5f63]/70 animate-bounce"
+        style={{ animationDelay: "300ms" }}
+      />
     </span>
   );
 }

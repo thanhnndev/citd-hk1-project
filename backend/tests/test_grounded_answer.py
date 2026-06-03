@@ -197,7 +197,7 @@ class TestComposeAnswerVi:
     def test_single_chunk(self):
         chunks = [_make_chunk(title="Source A", text="Content about A.")]
         result = compose_answer_vi("test", chunks)
-        assert result.startswith("Về Hàm Ninh, các nguồn hiện có cho thấy:")
+        assert result.startswith("Về test, các nguồn hiện có cho thấy:")
         assert "Content about A" in result
 
     def test_multiple_chunks(self):
@@ -206,7 +206,7 @@ class TestComposeAnswerVi:
             _make_chunk(chunk_id="c2", title="Source B", text="Content B."),
         ]
         result = compose_answer_vi("test", chunks)
-        assert result.startswith("Về Hàm Ninh, các nguồn hiện có cho thấy:")
+        assert result.startswith("Về test, các nguồn hiện có cho thấy:")
         assert "Content A" in result
         assert "Content B" in result
 
@@ -223,7 +223,7 @@ class TestComposeAnswerEn:
     def test_single_chunk(self):
         chunks = [_make_chunk(title="Nguồn Việt", text="Nội dung tiếng Việt.")]
         result = compose_answer_en("test", chunks)
-        assert "About Ham Ninh" in result
+        assert "About test" in result
         assert "Nội dung tiếng Việt" in result
 
     def test_multiple_chunks(self):
@@ -232,7 +232,7 @@ class TestComposeAnswerEn:
             _make_chunk(chunk_id="c2", title="Nguồn B", text="Nội dung B."),
         ]
         result = compose_answer_en("test", chunks)
-        assert result.startswith("About Ham Ninh")
+        assert result.startswith("About test")
         assert "Nội dung A" in result
         assert "Nội dung B" in result
 

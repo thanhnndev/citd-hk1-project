@@ -204,25 +204,36 @@ def _excerpt(text: str, max_chars: int = _EXCERPT_MAX_CHARS) -> str:
 
 
 def _topic_hint(query: str, language: str) -> str:
-    text = query.lower()
-    if any(term in text for term in ("ẩm thực", "món", "hải sản", "food", "cuisine", "local food")):
-        return "ẩm thực địa phương" if language == "vi" else "local food"
-    if any(term in text for term in ("lịch sử", "history")):
-        return "lịch sử Hàm Ninh" if language == "vi" else "Ham Ninh history"
-    if any(term in text for term in ("văn hóa", "văn hoá", "culture")):
-        return "văn hóa Hàm Ninh" if language == "vi" else "Ham Ninh culture"
-    return "Hàm Ninh" if language == "vi" else "Ham Ninh"
+    """Derive a lightweight topic label from the query without case routing."""
+    cleaned = " ".join((query or "").strip().split())
+    if not cleaned:
+        return "Hàm Ninh" if language == "vi" else "Ham Ninh"
+    lowered = cleaned.lower()
+    prefixes = (
+        "kể về ", "nói về ", "hỏi thêm về ", "tìm hiểu về ", "giới thiệu về ",
+        "tell me about ", "talk about ", "learn about ", "more about ",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            topic = cleaned[len(prefix):].strip(" ?.!")
+            return topic[:80] if topic else ("Hàm Ninh" if language == "vi" else "Ham Ninh")
+    return cleaned[:80]
 
-def _compact_evidence(results: list[RAGChunk], max_items: int = 5) -> list[tuple[str, str]]:
+def _final_sentence(language: str) -> str:
+    if language == "vi":
+        return "Tóm lại, câu trả lời được rút ra từ các nguồn đã tìm thấy; bạn có thể hỏi tiếp để đào sâu một ý cụ thể."
+    return "In short, the answer is grounded in the retrieved sources; you can ask a follow-up to explore any specific point."
+
+def _compact_evidence(results: list[RAGChunk], max_items: int = 5) -> list[tuple[int, str, str]]:
     seen: set[str] = set()
-    items: list[tuple[str, str]] = []
-    for chunk in results:
+    items: list[tuple[int, str, str]] = []
+    for source_index, chunk in enumerate(results, start=1):
         excerpt = _excerpt(chunk.text, 220).strip()
         key = excerpt.lower()
         if not excerpt or key in seen:
             continue
         seen.add(key)
-        items.append((chunk.title, excerpt))
+        items.append((source_index, chunk.title, excerpt))
         if len(items) >= max_items:
             break
     return items
@@ -235,9 +246,8 @@ def compose_answer_vi(query: str, results: list[RAGChunk]) -> str:
 
     topic = _topic_hint(query, "vi")
     intro = f"Về {topic}, các nguồn hiện có cho thấy:"
-    bullets = [f"- {excerpt}" for _, excerpt in evidence[:4]]
-    closing = "Tóm lại, điểm nổi bật là hải sản tươi, cách chế biến dân dã và trải nghiệm ăn uống gắn với đời sống làng chài." if "ẩm thực" in topic else "Tóm lại, đây là một chủ đề gắn với đời sống địa phương Hàm Ninh; bạn có thể hỏi tiếp về món ăn, nghề biển, lịch sử hoặc trải nghiệm tham quan."
-    return "\n".join([intro, *bullets, closing])
+    bullets = [f"- {excerpt} [{source_index}]" for source_index, _, excerpt in evidence[:4]]
+    return "\n".join([intro, *bullets, _final_sentence("vi")])
 
 def compose_answer_en(query: str, results: list[RAGChunk]) -> str:
     """Compose a readable English answer from Vietnamese source chunks."""
@@ -250,9 +260,8 @@ def compose_answer_en(query: str, results: list[RAGChunk]) -> str:
 
     topic = _topic_hint(query, "en")
     intro = f"About {topic}, the available sources indicate:"
-    bullets = [f"- {excerpt}" for _, excerpt in evidence[:4]]
-    closing = "In short, the strongest theme is fresh seafood, simple local preparation, and dining experiences tied to fishing-village life." if "food" in topic else "In short, this topic is tied to Ham Ninh local life; you can ask a follow-up about food, fishing livelihoods, history, or visit tips."
-    return "\n".join([intro, *bullets, closing])
+    bullets = [f"- {excerpt} [{source_index}]" for source_index, _, excerpt in evidence[:4]]
+    return "\n".join([intro, *bullets, _final_sentence("en")])
 
 # ---------------------------------------------------------------------------
 # No-evidence messages (honest — zero fabricated claims)
