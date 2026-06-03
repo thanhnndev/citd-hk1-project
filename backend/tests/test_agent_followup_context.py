@@ -25,6 +25,7 @@ from agents.graph.agent_service import (
     InMemoryAgentCheckpointer,
     PostgresAgentCheckpointer,
     _build_followup_context,
+    _compose_followup_answer,
     _is_ambiguous_pronoun_followup,
     _matches_structured_context,
     resolve_followup_decision,
@@ -1487,3 +1488,16 @@ class TestAgentServiceFollowupResolution:
             language="vi",
         )
         assert response.intent == "followup_contextual"
+
+def test_specific_place_review_followup_uses_matching_place_not_first_place() -> None:
+    ctx = FollowUpContext(
+        session_id="s-review",
+        intent=PLACE_RECOMMENDATION_INTENT,
+        place_display_names=["Nhà bè Thảo Nhi", "Nhà Bè Hải sản ngọc hân"],
+        place_ids=["p1", "p2"],
+        place_reviews=[[], [{"rating": 5, "text": "Hải sản tươi, phục vụ nhanh."}]],
+    )
+    answer = _compose_followup_answer("show 1 vài review của nhà bè hải sản ngọc hân", ctx, "vi")
+    assert "ngọc hân" in answer.lower()
+    assert "Hải sản tươi" in answer
+    assert "Thảo Nhi" not in answer

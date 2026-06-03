@@ -39,6 +39,8 @@ class FollowUpContext:
     place_display_names: list[str] = field(default_factory=list)
     place_ratings: list[float] = field(default_factory=list)
     place_price_levels: list[int] = field(default_factory=list)
+    place_reviews: list[list[dict[str, Any]]] = field(default_factory=list)
+    place_hours: list[dict[str, Any]] = field(default_factory=list)
     has_citations: bool = False
     citation_sources: list[str] = field(default_factory=list)
     reasoning_log_summary: str | None = None
@@ -57,6 +59,8 @@ class FollowUpContext:
             "place_display_names": self.place_display_names,
             "place_ratings": self.place_ratings,
             "place_price_levels": self.place_price_levels,
+            "place_reviews": self.place_reviews,
+            "place_hours": self.place_hours,
             "has_citations": self.has_citations,
             "citation_sources": self.citation_sources,
             "reasoning_log_summary": self.reasoning_log_summary,
@@ -92,6 +96,8 @@ class FollowUpContext:
                 place_display_names=_safe_list(data.get("place_display_names")),
                 place_ratings=_safe_float_list(data.get("place_ratings")),
                 place_price_levels=_safe_int_list(data.get("place_price_levels")),
+                place_reviews=data.get("place_reviews") if isinstance(data.get("place_reviews"), list) else [],
+                place_hours=data.get("place_hours") if isinstance(data.get("place_hours"), list) else [],
                 has_citations=bool(data.get("has_citations")),
                 citation_sources=_safe_list(data.get("citation_sources")),
                 reasoning_log_summary=data.get("reasoning_log_summary"),
@@ -110,6 +116,8 @@ class FollowUpContext:
         return bool(
             self.place_ids
             or self.place_display_names
+            or self.place_reviews
+            or self.place_hours
             or self.citation_sources
             or self.reasoning_log_summary
             or self.score_breakdown_keys
@@ -181,8 +189,8 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
     # uniquely identify a specific venue. Kept conservative — only words that
     # are nearly always generic (not distinctive like "hải sản" or "ngọc lan").
     _skip_tokens = frozenset({
-        "quán", "nhà", "hàng", "khách", "sạn",
-        "homestay", "hotel", "restaurant",
+        "quán", "nhà", "hàng", "khách", "sạn", "bè", "hải", "sản",
+        "homestay", "hotel", "restaurant", "seafood",
         "ăn", "uống", "nghỉ", "dưỡng", "resort",
     })
     generic_query_tokens = {
@@ -198,10 +206,10 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
             continue
         tokens = [t for t in normalized.split() if len(t) > 1 and t not in _skip_tokens]
         if not tokens:
-            # All tokens are skip words — only match if the full normalized
-            # name appears as a substring (for names like "Quán Hải Sản" where
-            # every token is a skip word)
-            if normalized in text:
+            # If the place name is entirely generic descriptors, only match
+            # descriptor overlap when the message is framed as a follow-up.
+            name_tokens = [t for t in normalized.split() if len(t) > 1]
+            if normalized in text or (name_tokens and any(t in text for t in name_tokens)):
                 return True
             continue
         matched = [token for token in tokens if token in text]
@@ -258,6 +266,8 @@ def _build_followup_context(response: ChatResponse) -> FollowUpContext:
     place_names = [p.display_name for p in response.places[:10]]
     place_ratings = [float(p.rating or 0.0) for p in response.places[:10]]
     place_price_levels = [int(p.price_level or 0) for p in response.places[:10]]
+    place_reviews = [p.reviews[:3] for p in response.places[:10]]
+    place_hours = [p.current_opening_hours or p.regular_opening_hours or {} for p in response.places[:10]]
     citation_sources = [c.source for c in response.citations[:5]]
 
     score_keys: list[str] = []
@@ -275,6 +285,8 @@ def _build_followup_context(response: ChatResponse) -> FollowUpContext:
         place_display_names=place_names,
         place_ratings=place_ratings,
         place_price_levels=place_price_levels,
+        place_reviews=place_reviews,
+        place_hours=place_hours,
         has_citations=bool(response.citations),
         citation_sources=citation_sources,
         reasoning_log_summary=(response.reasoning_log or "")[:500] if response.reasoning_log else None,
@@ -298,22 +310,49 @@ def compose_followup_answer(
     """
     text = _norm(message)
 
-    # Place name reference → give what we know about that place
-    for name in context.place_display_names:
+    # Place name reference -> answer specific review/hours follow-ups from stored details.
+    matched_index: int | None = None
+    best_score = 0
+    skip_tokens = {"quán", "nhà", "hàng", "bè", "hải", "sản", "restaurant", "seafood"}
+    for index, name in enumerate(context.place_display_names):
         normalized = _norm(name)
-        if not normalized:
-            continue
-        for token in normalized.split():
-            if len(token) > 1 and token in text:
-                if language == "vi":
-                    return (
-                        f"Về {name}: mình đã gợi ý địa điểm này trước đó. "
-                        f"Bạn cần thông tin cụ thể nào (giờ mở cửa, đánh giá, đường đi)?"
-                    )
-                return (
-                    f"About {name}: I recommended this venue earlier. "
-                    f"What specific info do you need (hours, reviews, directions)?"
-                )
+        tokens = [t for t in normalized.split() if len(t) > 1 and t not in skip_tokens]
+        score = sum(1 for token in tokens if token in text)
+        if normalized and normalized in text:
+            score += 10
+        if score > best_score:
+            best_score = score
+            matched_index = index
+
+    if matched_index is not None and best_score > 0:
+        name = context.place_display_names[matched_index]
+        wants_reviews = any(term in text for term in ("review", "đánh giá", "nhận xét", "bình luận"))
+        wants_hours = any(term in text for term in ("giờ", "mở cửa", "open", "hours"))
+        if wants_reviews:
+            reviews = context.place_reviews[matched_index] if matched_index < len(context.place_reviews) else []
+            lines = []
+            for review in reviews[:3]:
+                rating = review.get("rating")
+                body = review.get("text")
+                if body:
+                    prefix = f"{rating}⭐: " if rating else "- "
+                    lines.append(prefix + str(body))
+            if lines:
+                return (f"Một vài review về {name}:\n" + "\n".join(lines)) if language == "vi" else (f"A few reviews for {name}:\n" + "\n".join(lines))
+            return f"Mình chưa có nội dung review cụ thể cho {name} trong dữ liệu hiện có." if language == "vi" else f"I do not have review text for {name} in the current data."
+        if wants_hours:
+            hours = context.place_hours[matched_index] if matched_index < len(context.place_hours) else {}
+            descriptions = hours.get("weekdayDescriptions") or hours.get("weekday_descriptions") or []
+            open_now = hours.get("openNow")
+            if descriptions:
+                return (f"Giờ mở cửa của {name}:\n" + "\n".join(str(item) for item in descriptions[:7])) if language == "vi" else (f"Opening hours for {name}:\n" + "\n".join(str(item) for item in descriptions[:7]))
+            if isinstance(open_now, bool):
+                status = "đang mở cửa" if open_now else "hiện không mở cửa"
+                return f"{name} {status}, nhưng mình chưa có lịch giờ chi tiết." if language == "vi" else f"{name} is {'open now' if open_now else 'not open now'}, but I do not have detailed hours."
+            return f"Về {name}: mình đã gợi ý địa điểm này trước đó, nhưng chưa có giờ mở cửa chi tiết." if language == "vi" else f"About {name}: I recommended it earlier, but I do not have detailed opening hours."
+        if language == "vi":
+            return f"Về {name}: bạn muốn xem review, giờ mở cửa, đường đi hay lý do xếp hạng?"
+        return f"About {name}: do you want reviews, opening hours, directions, or ranking reasons?"
 
     # Score / ranking reference
     if context.score_breakdown_keys and any(
