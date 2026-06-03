@@ -197,7 +197,7 @@ class TestComposeAnswerVi:
     def test_single_chunk(self):
         chunks = [_make_chunk(title="Source A", text="Content about A.")]
         result = compose_answer_vi("test", chunks)
-        assert result.startswith("Theo Source A:")
+        assert result.startswith("Về Hàm Ninh, các nguồn hiện có cho thấy:")
         assert "Content about A" in result
 
     def test_multiple_chunks(self):
@@ -206,9 +206,9 @@ class TestComposeAnswerVi:
             _make_chunk(chunk_id="c2", title="Source B", text="Content B."),
         ]
         result = compose_answer_vi("test", chunks)
-        assert result.startswith("Dựa trên thông tin thu thập được:")
-        assert "Source A" in result
-        assert "Source B" in result
+        assert result.startswith("Về Hàm Ninh, các nguồn hiện có cho thấy:")
+        assert "Content A" in result
+        assert "Content B" in result
 
     def test_empty_results(self):
         result = compose_answer_vi("test", [])
@@ -223,7 +223,8 @@ class TestComposeAnswerEn:
     def test_single_chunk(self):
         chunks = [_make_chunk(title="Nguồn Việt", text="Nội dung tiếng Việt.")]
         result = compose_answer_en("test", chunks)
-        assert "Based on Vietnamese source material from Nguồn Việt" in result
+        assert "About Ham Ninh" in result
+        assert "Nội dung tiếng Việt" in result
 
     def test_multiple_chunks(self):
         chunks = [
@@ -231,9 +232,9 @@ class TestComposeAnswerEn:
             _make_chunk(chunk_id="c2", title="Nguồn B", text="Nội dung B."),
         ]
         result = compose_answer_en("test", chunks)
-        assert "Based on Vietnamese source material:" in result
-        assert "Nguồn A" in result
-        assert "Nguồn B" in result
+        assert result.startswith("About Ham Ninh")
+        assert "Nội dung A" in result
+        assert "Nội dung B" in result
 
     def test_empty_results(self):
         result = compose_answer_en("test", [])

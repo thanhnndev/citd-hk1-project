@@ -203,59 +203,56 @@ def _excerpt(text: str, max_chars: int = _EXCERPT_MAX_CHARS) -> str:
     return truncated + "..."
 
 
+def _topic_hint(query: str, language: str) -> str:
+    text = query.lower()
+    if any(term in text for term in ("ẩm thực", "món", "hải sản", "food", "cuisine", "local food")):
+        return "ẩm thực địa phương" if language == "vi" else "local food"
+    if any(term in text for term in ("lịch sử", "history")):
+        return "lịch sử Hàm Ninh" if language == "vi" else "Ham Ninh history"
+    if any(term in text for term in ("văn hóa", "văn hoá", "culture")):
+        return "văn hóa Hàm Ninh" if language == "vi" else "Ham Ninh culture"
+    return "Hàm Ninh" if language == "vi" else "Ham Ninh"
+
+def _compact_evidence(results: list[RAGChunk], max_items: int = 5) -> list[tuple[str, str]]:
+    seen: set[str] = set()
+    items: list[tuple[str, str]] = []
+    for chunk in results:
+        excerpt = _excerpt(chunk.text, 220).strip()
+        key = excerpt.lower()
+        if not excerpt or key in seen:
+            continue
+        seen.add(key)
+        items.append((chunk.title, excerpt))
+        if len(items) >= max_items:
+            break
+    return items
+
 def compose_answer_vi(query: str, results: list[RAGChunk]) -> str:
-    """Compose a Vietnamese answer from retrieved chunks.
-
-    Format:
-    - Single chunk: "Theo {source}: {excerpt}"
-    - Multiple chunks (up to 3): paragraph combining excerpts with context.
-    """
-    top = results[:3]
-
-    if len(top) == 0:
+    """Compose a readable Vietnamese answer from retrieved chunks."""
+    evidence = _compact_evidence(results)
+    if not evidence:
         return "Hiện tại nguồn dữ liệu chưa có thông tin đầy đủ để trả lời câu hỏi này."
 
-    if len(top) == 1:
-        chunk = top[0]
-        excerpt = _excerpt(chunk.text)
-        return f"Theo {chunk.title}: {excerpt}"
-
-    # Multiple chunks — build a coherent paragraph
-    parts: list[str] = []
-    for chunk in top:
-        excerpt = _excerpt(chunk.text)
-        parts.append(f"{chunk.title}: {excerpt}")
-
-    combined = ". ".join(parts)
-    return f"Dựa trên thông tin thu thập được: {combined}."
-
+    topic = _topic_hint(query, "vi")
+    intro = f"Về {topic}, các nguồn hiện có cho thấy:"
+    bullets = [f"- {excerpt}" for _, excerpt in evidence[:4]]
+    closing = "Tóm lại, điểm nổi bật là hải sản tươi, cách chế biến dân dã và trải nghiệm ăn uống gắn với đời sống làng chài." if "ẩm thực" in topic else "Tóm lại, đây là một chủ đề gắn với đời sống địa phương Hàm Ninh; bạn có thể hỏi tiếp về món ăn, nghề biển, lịch sử hoặc trải nghiệm tham quan."
+    return "\n".join([intro, *bullets, closing])
 
 def compose_answer_en(query: str, results: list[RAGChunk]) -> str:
-    """Compose an English answer from Vietnamese source chunks.
-
-    Acknowledges the Vietnamese source material with English framing.
-    """
-    top = results[:3]
-
-    if len(top) == 0:
+    """Compose a readable English answer from Vietnamese source chunks."""
+    evidence = _compact_evidence(results)
+    if not evidence:
         return (
             "Currently, our data sources do not have sufficient information "
             "to answer this question."
         )
 
-    if len(top) == 1:
-        chunk = top[0]
-        excerpt = _excerpt(chunk.text)
-        return f"Based on Vietnamese source material from {chunk.title}: {excerpt}"
-
-    parts: list[str] = []
-    for chunk in top:
-        excerpt = _excerpt(chunk.text)
-        parts.append(f"From {chunk.title}: {excerpt}")
-
-    combined = ". ".join(parts)
-    return f"Based on Vietnamese source material: {combined}."
-
+    topic = _topic_hint(query, "en")
+    intro = f"About {topic}, the available sources indicate:"
+    bullets = [f"- {excerpt}" for _, excerpt in evidence[:4]]
+    closing = "In short, the strongest theme is fresh seafood, simple local preparation, and dining experiences tied to fishing-village life." if "food" in topic else "In short, this topic is tied to Ham Ninh local life; you can ask a follow-up about food, fishing livelihoods, history, or visit tips."
+    return "\n".join([intro, *bullets, closing])
 
 # ---------------------------------------------------------------------------
 # No-evidence messages (honest — zero fabricated claims)
