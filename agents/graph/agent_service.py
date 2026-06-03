@@ -51,6 +51,7 @@ from agents.graph.followup import (
     _build_followup_context,
     _is_ambiguous_pronoun_followup,
     _matches_structured_context,
+    _is_knowledge_topic_followup,
     compose_followup_answer as _compose_followup_answer,
     resolve_followup_before_tool_routing as _resolve_followup_before_tool_routing_impl,
     resolve_followup_decision,
@@ -176,9 +177,9 @@ class AgentService:
             await self._save_turn(session_id, message, response.message, response)
             return
         # Expose context source in streaming for observability (R052)
-        if state.get("context_source") == "structured_context":
+        if state.get("followup_decision") == "structured_context":
             yield "[STATUS] using_context"
-        elif state.get("context_source") == "history_context":
+        elif state.get("followup_decision") == "history_context":
             yield "[STATUS] using_history"
         else:
             yield "[STATUS] understanding"
@@ -387,6 +388,9 @@ class AgentService:
             state["response_text"] = _direct_answer(state["message"], state.get("history", []), state["language"])
             state["intent"] = "conversational"
             return True
+        if action == "knowledge" and self._is_contextual_knowledge_followup(state):
+            await self._search_knowledge_tool(state, self._contextual_knowledge_query(state))
+            return True
         if action == "clarify":
             state["response_text"] = _clarify_message(state["language"])
             state["intent"] = "clarification"
@@ -414,12 +418,21 @@ class AgentService:
                 state["response_text"] = _place_unavailable_message(state["language"])
             return state
         if action == "knowledge":
-            await self._search_knowledge_tool(state, state["message"])
-            state["response_text"] = _knowledge_fallback_answer(state)
+            await self._search_knowledge_tool(state, self._contextual_knowledge_query(state))
             return state
         state["response_text"] = _clarify_message(state["language"])
         state["intent"] = "clarification"
         return state
+
+    def _is_contextual_knowledge_followup(self, state: AgentState) -> bool:
+        context = state.get("prior_context")
+        return isinstance(context, FollowUpContext) and _is_knowledge_topic_followup(state["message"].lower(), context)
+
+    def _contextual_knowledge_query(self, state: AgentState) -> str:
+        context = state.get("prior_context")
+        if self._is_contextual_knowledge_followup(state) and isinstance(context, FollowUpContext):
+            return context.last_user_topic or state["message"]
+        return state["message"]
 
     async def _search_knowledge_tool(self, state: AgentState, query: str) -> str:
         chunks: list[RAGChunk] = []
@@ -530,6 +543,8 @@ class AgentService:
     async def _save_turn(self, session_id: str, message: str, answer: str, response: ChatResponse | None = None) -> None:
         try:
             ctx = _build_followup_context(response) if response is not None else None
+            if ctx is not None:
+                ctx.last_user_topic = message
             if hasattr(self._checkpointer, "save_turn_with_context"):
                 await self._checkpointer.save_turn_with_context(session_id, message, answer, ctx)
             else:

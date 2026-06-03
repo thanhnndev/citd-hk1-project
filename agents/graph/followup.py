@@ -83,6 +83,7 @@ class FollowUpContext:
     has_citations: bool = False
     citation_sources: list[str] = field(default_factory=list)
     reasoning_log_summary: str | None = None
+    last_user_topic: str | None = None
     score_breakdown_keys: list[str] = field(default_factory=list)
     provider_source: str | None = None
     provider_status: str | None = None
@@ -103,6 +104,7 @@ class FollowUpContext:
             "has_citations": self.has_citations,
             "citation_sources": self.citation_sources,
             "reasoning_log_summary": self.reasoning_log_summary,
+            "last_user_topic": self.last_user_topic,
             "score_breakdown_keys": self.score_breakdown_keys,
             "provider_source": self.provider_source,
             "provider_status": self.provider_status,
@@ -140,6 +142,7 @@ class FollowUpContext:
                 has_citations=bool(data.get("has_citations")),
                 citation_sources=_safe_list(data.get("citation_sources")),
                 reasoning_log_summary=data.get("reasoning_log_summary"),
+                last_user_topic=data.get("last_user_topic"),
                 score_breakdown_keys=_safe_list(data.get("score_breakdown_keys")),
                 provider_source=data.get("provider_source"),
                 provider_status=data.get("provider_status"),
@@ -159,6 +162,7 @@ class FollowUpContext:
             or self.place_hours
             or self.citation_sources
             or self.reasoning_log_summary
+            or self.last_user_topic
             or self.score_breakdown_keys
             or self.provider_source
         )
@@ -248,6 +252,8 @@ def resolve_followup_decision(
 
     # 2. Try structured context for genuine follow-ups.
     if context and context.is_populated:
+        if _is_knowledge_topic_followup(text, context):
+            return "insufficient_context"
         resolution = _resolve_place_followup(message, context)
         if resolution.decision == "structured_context":
             return "structured_context"
@@ -276,6 +282,14 @@ def resolve_followup_decision(
 
     return "clarification_needed"
 
+
+def _is_knowledge_topic_followup(text: str, context: FollowUpContext) -> bool:
+    if context.intent not in {"cultural_query", "knowledge", "followup_history"}:
+        return False
+    return any(term in text for term in (
+        "hỏi thêm", "chủ đề này", "nói thêm", "kể thêm", "tiếp tục",
+        "more about this", "follow up", "tell me more"
+    ))
 
 def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
     """Check if the follow-up message references entities in the structured context.

@@ -240,7 +240,7 @@ async def test_agent_returns_honest_no_evidence_when_retrieval_empty(ham_ninh_ch
     # Empty retrieval → honest no-evidence message
     assert response.citations == []
     # The knowledge fallback answer for empty citations in English
-    assert "do not have enough" in response.message.lower() or "not enough" in response.message.lower()
+    assert "do not have enough" in response.message.lower() or "not enough" in response.message.lower() or "not have sufficient" in response.message.lower()
 
 
 @pytest.mark.asyncio
@@ -751,3 +751,37 @@ async def test_agent_routes_vietnamese_variant_culture_to_knowledge(ham_ninh_chu
     assert response.places == []
     assert retriever.queries == ["tôi muốn hiểu về văn hoá hàm ninh"]
     assert response.citations
+
+@pytest.mark.asyncio
+async def test_knowledge_followup_retrieves_with_prior_topic_not_generic_button_text(ham_ninh_chunk):
+    from agents.graph.agent_service import FollowUpContext
+
+    checkpointer = InMemoryAgentCheckpointer()
+    prior = FollowUpContext(
+        session_id="s-knowledge-followup",
+        intent="cultural_query",
+        has_citations=True,
+        citation_sources=["Ẩm thực Hàm Ninh"],
+        last_user_topic="Kể về ẩm thực địa phương",
+    )
+    await checkpointer.save_context("s-knowledge-followup", prior)
+    await checkpointer.save_turn("s-knowledge-followup", "Kể về ẩm thực địa phương", "Ẩm thực Hàm Ninh...")
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        llm_service=None,
+        checkpointer=checkpointer,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-knowledge-followup",
+        message="Hỏi thêm về chủ đề này",
+        language="vi",
+    )
+
+    assert retriever.queries[-1] == "Kể về ẩm thực địa phương"
+    assert response.intent == "cultural_query"
+    assert response.citations
+    assert "Mình có thể giúp" not in response.message
+

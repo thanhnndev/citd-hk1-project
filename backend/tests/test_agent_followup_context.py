@@ -1546,3 +1546,22 @@ def test_specific_place_review_followup_uses_matching_place_not_first_place() ->
     assert "ngọc hân" in answer.lower()
     assert "Hải sản tươi" in answer
     assert "Thảo Nhi" not in answer
+
+
+def test_knowledge_topic_followup_routes_to_knowledge_not_structured_context() -> None:
+    ctx = FollowUpContext(
+        session_id="s-food",
+        intent="cultural_query",
+        has_citations=True,
+        citation_sources=["Ẩm thực Hàm Ninh"],
+        last_user_topic="Kể về ẩm thực địa phương",
+    )
+
+    decision = resolve_followup_decision(
+        "Hỏi thêm về chủ đề này",
+        ctx,
+        history=[{"role": "assistant", "content": "Ẩm thực Hàm Ninh có hải sản tươi."}],
+    )
+
+    assert decision == "insufficient_context"
+

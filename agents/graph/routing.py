@@ -21,7 +21,9 @@ def _fallback_action(message: str, history: list[dict[str, str]]) -> Literal["di
     if _is_followup(text, history):
         if _is_place_or_route(text):
             return "places"
-        return "direct"
+        if any(term in text for term in ("ví dụ", "cụ thể", "example", "tươi ngon", "đồ ngon", "món ngon")):
+            return "direct"
+        return "knowledge"
     if _is_ambiguous_route(text):
         return "clarify"
     if _is_knowledge_query(text):
@@ -46,6 +48,7 @@ def _is_followup(text: str, history: list[dict[str, str]]) -> bool:
     return (
         text in {"?", "??", "là sao", "ý là sao", "gì", "4 nhóm gì", "4 nhom gi"}
         or any(term in text for term in ("ví dụ", "cụ thể", "example"))
+        or any(term in text for term in ("hỏi thêm", "chủ đề này", "nói thêm", "kể thêm", "tiếp tục", "more about this", "follow up"))
         or (any(term in text for term in ("tươi ngon", "đồ ngon", "món ngon")) and len(text.split()) <= 6)
     )
 
