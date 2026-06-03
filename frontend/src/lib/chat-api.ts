@@ -76,7 +76,7 @@ export interface PlaceResult {
   price_level?: number | null;
   open_now?: boolean | null;
   business_status?: string | null;
-  local_factor: number;
+  local_factor: number | null;
   final_score: number;
   score_breakdown: ScoreBreakdown;
   accessibility_score?: number | null;

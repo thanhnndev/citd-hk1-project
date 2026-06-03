@@ -243,7 +243,7 @@ function PlaceDetail({ place, translations }: { place: PlaceResult; translations
           <Detail label={translations.accessibility} value={accessibility === null ? (place.accessibility_warning ?? translations.unknown) : `${accessibility}%`} />
         </dl>
         <div className="flex flex-wrap items-center gap-3">
-          <Badge variant="secondary">local_factor {place.local_factor.toFixed(2)}</Badge>
+          <Badge variant="secondary">local_factor {place.local_factor == null ? translations.unknown : place.local_factor.toFixed(2)}</Badge>
           <Badge variant="secondary">final_score {place.final_score.toFixed(2)}</Badge>
           {place.map_uri ? (
             <Button asChild variant="outline" className="rounded-2xl">

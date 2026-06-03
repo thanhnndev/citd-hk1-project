@@ -18,6 +18,7 @@ import structlog
 
 from app.models.rag import RAGChunk
 from app.models.response import ChatResponse, Citation
+from agents.guardrails.grounded_answer import GroundedAnswerService
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 from agents.tools.retriever import Retriever
 
@@ -267,6 +268,8 @@ class AgentService:
             "intent": None,
             "response_text": "",
             "places_response_ready": False,
+            "knowledge_response_ready": False,
+            "knowledge_chunks": [],
             "prior_context": prior_context,
             "followup_decision": followup_decision,
             "context_source": context_source,
@@ -277,7 +280,7 @@ class AgentService:
         for _ in range(3):
             # Place tool may have already produced a deterministic response;
             # skip the LLM to avoid overwriting response_text.
-            if state.get("places_response_ready"):
+            if state.get("places_response_ready") or state.get("knowledge_response_ready"):
                 return state
             state = await asyncio.wait_for(self._llm_call_node(state), timeout=NODE_TIMEOUT_LLM)
             if self._should_continue(state) == END:
@@ -289,7 +292,7 @@ class AgentService:
 
     async def _run_streaming_tool_loop(self, state: AgentState) -> AsyncGenerator[str | AgentState, None]:
         for _ in range(3):
-            if state.get("places_response_ready"):
+            if state.get("places_response_ready") or state.get("knowledge_response_ready"):
                 yield state
                 return
             state = await asyncio.wait_for(self._llm_call_node(state), timeout=NODE_TIMEOUT_LLM)
@@ -369,7 +372,7 @@ class AgentService:
         return normalized
 
     def _should_continue(self, state: AgentState) -> Literal["tool_node", "__end__"]:
-        if state.get("places_response_ready"):
+        if state.get("places_response_ready") or state.get("knowledge_response_ready"):
             return END
         return "tool_node" if state.get("tool_calls") else END
 
@@ -434,7 +437,27 @@ class AgentService:
             result, citations = self._retriever.search_with_citations(query, top_k=5)
             chunks = result.chunks
         state["citations"] = citations[:5]
+        state["knowledge_chunks"] = chunks[:5]
         state["intent"] = "cultural_query"
+        if self._llm_service is not None:
+            try:
+                answer = await self._llm_service.answer(
+                    chunks=chunks[:5],
+                    citations=citations[:5],
+                    query=query,
+                    language=state["language"],
+                    session_id=state["session_id"],
+                )
+                state["response_text"] = answer.message
+                state["fallback"] = answer.fallback
+                state["knowledge_response_ready"] = True
+            except Exception as exc:
+                logger.warning("agent.knowledge_llm_error", session_id=state["session_id"], reason=type(exc).__name__)
+        if not state.get("response_text"):
+            state["response_text"] = GroundedAnswerService(self._retriever).answer_from_chunks(
+                chunks[:5], citations[:5], query, state["language"], state["session_id"]
+            ).message
+            state["knowledge_response_ready"] = True
         return json.dumps({"status": "ok", "results": [_chunk_payload(c, i + 1) for i, c in enumerate(chunks[:5])]}, ensure_ascii=False)
 
     async def _search_places_tool(self, state: AgentState, query: str) -> str:

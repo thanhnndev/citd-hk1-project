@@ -562,9 +562,7 @@ def _reranked_results(
                 price_level=candidate.price_level,
                 open_now=candidate.open_now,
                 business_status=candidate.business_status,
-                local_factor=candidate.local_factor
-                if candidate.local_factor is not None
-                else 0.5,
+                local_factor=candidate.local_factor,
                 final_score=breakdown.final_score,
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
@@ -643,9 +641,7 @@ def _grounded_results(
                 price_level=candidate.price_level,
                 open_now=candidate.open_now,
                 business_status=candidate.business_status,
-                local_factor=candidate.local_factor
-                if candidate.local_factor is not None
-                else 0.5,
+                local_factor=candidate.local_factor,
                 final_score=0.5,
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,

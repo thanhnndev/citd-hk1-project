@@ -21,7 +21,7 @@ interface PlaceCardProps {
 
 /** User-facing labels for the 5 score axes shown in the UI. */
 const AXIS_LABELS: Record<string, string> = {
-  tree1_locality: "Local",
+  tree1_locality: "Local signal",
   tree2_proximity: "Proximity",
   tree3_quality: "Quality",
   delta1_fairness: "Fairness",
@@ -160,7 +160,8 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
   const { score_breakdown, explanation } = place;
   const hasScoreAxes = score_breakdown && typeof score_breakdown.tree1_locality === "number";
   const hasExplanation = explanation && explanation.primary_reason;
-  
+  const localFactorKnown = typeof place.local_factor === "number";
+
   const isVi = translations.scoreLabel?.toLowerCase().includes("điểm") || false;
 
   return (
@@ -289,10 +290,18 @@ export function PlaceCard({ place, translations }: PlaceCardProps) {
               <div className="text-[0.55rem] font-bold uppercase tracking-wider text-muted-foreground/80 mb-1">
                 {translations.scoreBreakdown ?? "Score Breakdown"}
               </div>
-              <ScoreAxis
-                label={AXIS_LABELS.tree1_locality}
-                value={score_breakdown.tree1_locality}
-              />
+              {localFactorKnown ? (
+                <ScoreAxis
+                  label={AXIS_LABELS.tree1_locality}
+                  value={score_breakdown.tree1_locality}
+                />
+              ) : (
+                <div className="rounded-md border border-amber-200/50 bg-amber-50 px-2 py-1 text-[0.6rem] leading-snug text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
+                  {isVi
+                    ? "Tín hiệu địa phương chưa có dữ liệu; hệ thống dùng mức trung lập 50% để không phạt/ưu ái sai."
+                    : "Local signal is unknown; ranking uses a neutral 50% placeholder to avoid unfair boost or penalty."}
+                </div>
+              )}
               <ScoreAxis
                 label={AXIS_LABELS.tree2_proximity}
                 value={score_breakdown.tree2_proximity}

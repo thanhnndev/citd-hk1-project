@@ -58,6 +58,8 @@ class AgentState(TypedDict, total=False):
     followup_decision: FollowUpDecision | None
     context_source: str | None
     tool_call_signatures: list[str]
+    knowledge_chunks: list[Any]
+    knowledge_response_ready: bool
 
 
 TOOLS = [

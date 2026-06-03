@@ -155,8 +155,9 @@ class PlaceResult(BaseModel):
         default=None,
         description="Provider-supplied business status when available.",
     )
-    local_factor: float = Field(
-        description="Locality signal — higher for locally-owned businesses.",
+    local_factor: float | None = Field(
+        default=None,
+        description="Locality signal when available; null means provider metadata did not support a local ownership inference.",
     )
     final_score: float = Field(
         description="Composite ranking score used for sorting results (0-1)."
