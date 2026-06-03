@@ -144,8 +144,7 @@ class AgentService:
         resolved = _resolve_followup_before_tool_routing(state, has_llm=(self._client is not None))
         if resolved is not None:
             response = self._response_from_state(resolved, started)
-            await self._save_followup_context(session_id, response)
-            await self._save_turn(session_id, message, response.message)
+            await self._save_turn(session_id, message, response.message, response)
             return response
         preflight_handled = await self._run_preflight_route(state)
         if preflight_handled:
@@ -155,9 +154,7 @@ class AgentService:
         else:
             state = await self._run_tool_loop(state)
         response = self._response_from_state(state, started)
-        # Persist structured follow-up context for next turn (R052)
-        await self._save_followup_context(session_id, response)
-        await self._save_turn(session_id, message, response.message)
+        await self._save_turn(session_id, message, response.message, response)
         return response
 
     async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
@@ -176,8 +173,7 @@ class AgentService:
                 yield "[STATUS] clarifying"
             yield resolved.get("response_text", "")
             response = self._response_from_state(resolved, started)
-            await self._save_followup_context(session_id, response)
-            await self._save_turn(session_id, message, response.message)
+            await self._save_turn(session_id, message, response.message, response)
             return
         # Expose context source in streaming for observability (R052)
         if state.get("context_source") == "structured_context":
@@ -218,9 +214,7 @@ class AgentService:
                         yield _status_for_state(state)
                         yield state["response_text"]
         response = self._response_from_state(state, started)
-        # Persist structured follow-up context for next turn (R052)
-        await self._save_followup_context(session_id, response)
-        await self._save_turn(session_id, message, response.message)
+        await self._save_turn(session_id, message, response.message, response)
         if response.places:
             yield f"[PLACES] {json.dumps([p.model_dump() for p in response.places], ensure_ascii=False)}"
         if response.citations:
@@ -533,9 +527,17 @@ class AgentService:
             decision_trace=state.get("decision_trace"),
         )
 
-    async def _save_turn(self, session_id: str, message: str, answer: str) -> None:
+    async def _save_turn(self, session_id: str, message: str, answer: str, response: ChatResponse | None = None) -> None:
         try:
-            await self._checkpointer.save_turn(session_id, message, answer)
+            ctx = _build_followup_context(response) if response is not None else None
+            if hasattr(self._checkpointer, "save_turn_with_context"):
+                await self._checkpointer.save_turn_with_context(session_id, message, answer, ctx)
+            else:
+                await self._checkpointer.save_turn(session_id, message, answer)
+                if ctx is not None and ctx.is_populated:
+                    await self._checkpointer.save_context(session_id, ctx)
+            if ctx is not None and ctx.is_populated:
+                logger.debug("agent.context_saved", session_id=session_id, intent=ctx.intent, places=len(ctx.place_ids))
         except Exception as exc:
             logger.warning("agent.checkpoint_save", session_id=session_id, reason=type(exc).__name__)
 
