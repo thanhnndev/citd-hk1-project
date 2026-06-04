@@ -46,11 +46,55 @@ from agents.services.place_recommendation_service import (
     _build_place_explanation,
     _compute_fairness_audit,
     _apply_preference_filters,
+    _apply_product_quality_filters,
+    _build_recommendation_frame,
     FAIRNESS_LOCAL_THRESHOLD,
 )
 from agents.ml.feature_extractor import FeatureExtractor
 from agents.ml.ensemble_reranker import EnsembleReranker
 
+
+
+
+def test_trip_goal_suppresses_non_destination_services_and_writes_user_facing_reasons() -> None:
+    candidates = [
+        _candidate(
+            place_id="places/shop",
+            display_name="Shop mẹ và bé Gà Con",
+            types=["child_care_agency", "store"],
+            rating=5.0,
+            user_rating_count=244,
+        ),
+        _candidate(
+            place_id="places/play",
+            display_name="Ice Jungle",
+            types=["amusement_park"],
+            rating=4.7,
+            user_rating_count=1009,
+        ),
+        _candidate(
+            place_id="places/food",
+            display_name="Bé Ghẹ Floating Restaurant",
+            types=["restaurant", "seafood_restaurant"],
+            rating=4.4,
+            user_rating_count=800,
+        ),
+    ]
+
+    frame = _build_recommendation_frame("Đi với trẻ em nên ghé đâu?")
+    filtered, removed = _apply_product_quality_filters(candidates, frame)
+
+    assert removed == 1
+    assert {c.display_name for c in filtered} == {"Ice Jungle", "Bé Ghẹ Floating Restaurant"}
+
+    results = _reranked_results(filtered, "Đi với trẻ em nên ghé đâu?", request=_request(query="Đi với trẻ em nên ghé đâu?"))
+
+    assert "Shop mẹ" not in [r.display_name for r in results]
+    assert all("dịch vụ/cửa hàng" in (r.explanation.primary_reason or "") for r in results)
+    assert {r.explanation.score_factors.get("recommendation_role") for r in results} <= {"visit", "eat"}
+    serialized = " ".join(r.explanation.primary_reason for r in results)
+    assert "payments:" not in serialized
+    assert "Provider Rating Available" not in serialized
 
 # ---------------------------------------------------------------------------
 # Test helpers

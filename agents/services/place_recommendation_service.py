@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import quote
@@ -294,9 +295,15 @@ class PlaceRecommendationService:
                 "error_type": type(exc).__name__,
             })
 
-        # Preference-aware post-provider filtering/reranking
+        # Preference-aware and product-intent filtering/reranking.
+        # This is not intent routing: the LLM already chose search_places.
+        # Here we protect end-user quality by suppressing provider candidates
+        # that are places data but not useful travel recommendations.
         pre_filter_count = len(candidates)
         candidates, filtered_count = _apply_preference_filters(candidates, request)
+        frame = _build_recommendation_frame(request.query)
+        candidates, product_filtered_count = _apply_product_quality_filters(candidates, frame)
+        filtered_count += product_filtered_count
 
         if filtered_count > 0 or preference_budget_applied or preference_accessibility_applied:
             tracer.emit("preference_filter_applied", PlaceAuditPhase.FILTER, detail={
@@ -305,6 +312,7 @@ class PlaceRecommendationService:
                 "filtered_count": filtered_count,
                 "budget_applied": preference_budget_applied,
                 "accessibility_applied": preference_accessibility_applied,
+                "product_filtered_count": product_filtered_count,
             })
         else:
             tracer.emit("preference_filter_skipped", PlaceAuditPhase.FILTER)
@@ -385,6 +393,7 @@ class PlaceRecommendationService:
                 is_commercial=_is_commercial_query(candidates),
                 language_code=request.language_code,
                 display_names=[place.display_name for place in places],
+                frame=frame,
             ),
             status=tool_response.status,
             source=tool_response.source,
@@ -589,6 +598,7 @@ def _reranked_results(
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
                     language=language,
+                    frame=_build_recommendation_frame(query),
                 ),
             )
         )
@@ -680,6 +690,7 @@ def _grounded_results(
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
                     language=language,
+                    frame=_build_recommendation_frame(request.query) if request else None,
                 ),
             )
         )
@@ -693,6 +704,7 @@ def _make_place_specific_reason(
     detail_highlights: list[str],
     fallback: bool,
     language: str,
+    frame: RecommendationFrame | None = None,
 ) -> str:
     type_label = candidate.primary_type_display_name or (candidate.primary_type or "place").replace("_", " ")
     rating_bits: list[str] = []
@@ -719,11 +731,15 @@ def _make_place_specific_reason(
     if candidate.price_level is not None:
         status_bits.append(("mức giá" if language == "vi" else "price level") + f" {candidate.price_level}")
 
+    if frame is not None:
+        suitability = _evaluate_candidate_suitability(candidate, frame)
+        return suitability.primary_reason_vi if language == "vi" else suitability.primary_reason_en
+
     if detail_highlights:
         lead = detail_highlights[0].rstrip(".")
         if language == "vi":
-            return f"{candidate.display_name} phù hợp vì hồ sơ địa điểm có mô tả riêng: {lead}."
-        return f"{candidate.display_name} fits because its place details include this specific context: {lead}."
+            return f"{candidate.display_name} có thông tin mô tả phù hợp với yêu cầu: {lead}."
+        return f"{candidate.display_name} has details that match the request: {lead}."
 
     joined_rating = ", ".join(rating_bits)
     joined_status = ", ".join(status_bits)
@@ -745,6 +761,147 @@ def _make_place_specific_reason(
     if fallback:
         pieces.append("kept from fallback place data")
     return "; ".join(pieces) + "."
+
+def _norm_query(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())
+
+@dataclass(frozen=True)
+class RecommendationFrame:
+    """Product-level interpretation of a place request.
+
+    This is intentionally broader than one query case. The LLM has already
+    selected the places tool; this frame describes what a useful end-user
+    recommendation must optimize for.
+    """
+
+    goal: str = "visit"
+    audience: str = "general"
+    desired_roles: frozenset[str] = field(default_factory=lambda: frozenset({"visit", "eat", "stay"}))
+    disallowed_roles: frozenset[str] = field(default_factory=lambda: frozenset({"service", "shop"}))
+    constraints: frozenset[str] = field(default_factory=frozenset)
+
+@dataclass(frozen=True)
+class CandidateSuitability:
+    role: str
+    score: float
+    primary_reason_vi: str
+    primary_reason_en: str
+    disqualified: bool = False
+    caveats_vi: tuple[str, ...] = ()
+    caveats_en: tuple[str, ...] = ()
+
+_VISIT_TYPES = frozenset({"tourist_attraction", "amusement_park", "museum", "park", "zoo", "aquarium", "waterfall"})
+_EAT_TYPES = frozenset({"restaurant", "seafood_restaurant", "vietnamese_restaurant", "food", "cafe", "coffee_shop"})
+_STAY_TYPES = frozenset({"lodging", "hotel", "resort", "guest_house", "bed_and_breakfast", "homestay"})
+_SHOP_TYPES = frozenset({"store", "shopping_mall", "clothing_store", "supermarket", "pharmacy"})
+_SERVICE_TYPES = frozenset({"child_care_agency", "day_care_center", "preschool", "school", "doctor", "hospital", "local_government_office", "real_estate_agency", "bank", "atm"})
+
+_GOAL_TERMS = {
+    "itinerary": ("lịch trình", "lich trinh", "ghé đâu", "ghe dau", "đi đâu", "di dau", "visit", "where should", "plan"),
+    "food": ("ăn", "an ", "quán", "quan", "nhà hàng", "nha hang", "hải sản", "hai san", "food", "restaurant", "seafood"),
+    "stay": ("homestay", "khách sạn", "khach san", "hotel", "stay", "lodging"),
+}
+_AUDIENCE_TERMS = {
+    "family": ("trẻ em", "tre em", "trẻ nhỏ", "tre nho", "em bé", "em be", "bé ", "be ", "gia đình", "gia dinh", "con nhỏ", "con nho", "kids", "children", "child", "family"),
+    "accessibility": ("xe lăn", "xe lan", "wheelchair", "accessible", "tiếp cận", "tiep can", "người già", "nguoi gia", "elderly"),
+}
+
+def _build_recommendation_frame(query: str) -> RecommendationFrame:
+    text = _norm_query(query)
+    goal = "visit"
+    if any(term in text for term in _GOAL_TERMS["food"]):
+        goal = "food"
+    if any(term in text for term in _GOAL_TERMS["stay"]):
+        goal = "stay"
+    if any(term in text for term in _GOAL_TERMS["itinerary"]):
+        goal = "itinerary"
+
+    audience = "general"
+    if any(term in text for term in _AUDIENCE_TERMS["family"]):
+        audience = "family"
+    elif any(term in text for term in _AUDIENCE_TERMS["accessibility"]):
+        audience = "accessibility"
+
+    desired_by_goal = {
+        "food": frozenset({"eat"}),
+        "stay": frozenset({"stay"}),
+        "itinerary": frozenset({"visit", "eat", "rest"}),
+        "visit": frozenset({"visit", "eat", "stay"}),
+    }
+    constraints: set[str] = set()
+    if audience == "family":
+        constraints.add("low_friction")
+    if audience == "accessibility":
+        constraints.add("accessibility")
+    return RecommendationFrame(
+        goal=goal,
+        audience=audience,
+        desired_roles=desired_by_goal.get(goal, frozenset({"visit", "eat", "stay"})),
+        constraints=frozenset(constraints),
+    )
+
+def _candidate_type_set(candidate: PlaceCandidate) -> set[str]:
+    return {str(t).lower() for t in ([candidate.primary_type] + list(candidate.types or [])) if t}
+
+def _candidate_role(candidate: PlaceCandidate) -> str:
+    types = _candidate_type_set(candidate)
+    if types & _SERVICE_TYPES:
+        return "service"
+    if types & _SHOP_TYPES:
+        return "shop"
+    if types & _EAT_TYPES:
+        return "eat"
+    if types & _STAY_TYPES:
+        return "stay"
+    if types & _VISIT_TYPES:
+        return "visit"
+    return "unknown"
+
+def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: RecommendationFrame) -> CandidateSuitability:
+    role = _candidate_role(candidate)
+    disqualified = role in frame.disallowed_roles or (role not in frame.desired_roles and frame.goal in {"food", "stay", "itinerary"})
+    score = 0.0
+    if role in frame.desired_roles:
+        score += 4.0
+    if role == "unknown":
+        score -= 1.0
+    if disqualified:
+        score -= 10.0
+    if candidate.rating is not None:
+        score += min(candidate.rating, 5.0) / 5.0
+    if candidate.user_rating_count:
+        score += min(candidate.user_rating_count, 1000) / 1500.0
+    if candidate.open_now is True:
+        score += 0.2
+    if "accessibility" in frame.constraints and candidate.accessibility_options and any(candidate.accessibility_options.values()):
+        score += 1.0
+    if "low_friction" in frame.constraints and candidate.route_context and candidate.route_context.duration_seconds is not None:
+        score -= min(candidate.route_context.duration_seconds / 5400.0, 1.0)
+
+    role_vi = {"visit": "điểm tham quan", "eat": "điểm ăn uống", "stay": "nơi lưu trú", "shop": "cửa hàng", "service": "dịch vụ", "unknown": "địa điểm"}.get(role, "địa điểm")
+    role_en = {"visit": "visit stop", "eat": "food stop", "stay": "place to stay", "shop": "shop", "service": "service", "unknown": "place"}.get(role, "place")
+    if disqualified:
+        return CandidateSuitability(
+            role=role,
+            score=score,
+            primary_reason_vi=f"{candidate.display_name} giống {role_vi} hơn là gợi ý phù hợp trực tiếp cho yêu cầu này.",
+            primary_reason_en=f"{candidate.display_name} looks more like a {role_en} than a direct fit for this request.",
+            disqualified=True,
+        )
+    reason_vi = f"{candidate.display_name} phù hợp như một {role_vi} cho mục tiêu chuyến đi."
+    reason_en = f"{candidate.display_name} fits as a {role_en} for this travel goal."
+    if frame.audience == "family":
+        reason_vi = f"{candidate.display_name} đáng cân nhắc cho nhóm đi cùng trẻ em vì vai trò chính là {role_vi}, không phải dịch vụ/cửa hàng ngoài mục đích tham quan."
+        reason_en = f"{candidate.display_name} is worth considering for a group with children because it functions as a {role_en}, not an unrelated shop or service."
+    return CandidateSuitability(role=role, score=score, primary_reason_vi=reason_vi, primary_reason_en=reason_en)
+
+def _apply_product_quality_filters(candidates: list[PlaceCandidate], frame: RecommendationFrame) -> tuple[list[PlaceCandidate], int]:
+    if not candidates:
+        return candidates, 0
+    evaluated = [(candidate, _evaluate_candidate_suitability(candidate, frame)) for candidate in candidates]
+    kept = [(candidate, suitability) for candidate, suitability in evaluated if not suitability.disqualified]
+    kept.sort(key=lambda item: item[1].score, reverse=True)
+    return [candidate for candidate, _ in kept], len(evaluated) - len(kept)
 
 def _service_options(candidate: PlaceCandidate) -> dict[str, bool | None]:
     return {
@@ -909,6 +1066,7 @@ def _build_place_explanation(
     budget_matched: bool = False,
     accessibility_matched: bool = False,
     language: str = "vi",
+    frame: RecommendationFrame | None = None,
 ) -> PlaceExplanation:
     """Create a redacted explanation from normalized candidate fields only.
 
@@ -986,11 +1144,13 @@ def _build_place_explanation(
             parts.append(f"{round(candidate.route_context.duration_seconds / 60)}min")
         route_summary = "route " + ", ".join(parts) if parts else "route metadata limited"
 
+    suitability = _evaluate_candidate_suitability(candidate, frame) if frame is not None else None
     primary_reason = _make_place_specific_reason(
         candidate=candidate,
         detail_highlights=detail_highlights,
         fallback=fallback,
         language=language,
+        frame=frame,
     )
     primary_reason = _redact_text(primary_reason)
 
@@ -1000,6 +1160,8 @@ def _build_place_explanation(
         "local_factor": round(local_factor, 4) if local_factor is not None else None,
         "rating": candidate.rating,
         "price_level": candidate.price_level,
+        "recommendation_role": suitability.role if suitability else None,
+        "suitability_score": round(suitability.score, 4) if suitability else None,
     }
 
     return PlaceExplanation(
@@ -1160,14 +1322,32 @@ def _message_for_status(
     is_commercial: bool = False,
     language_code: str = "vi",
     display_names: list[str] | None = None,
+    frame: RecommendationFrame | None = None,
 ) -> str:
     if status == PlaceToolStatus.OK:
         names = [name.strip() for name in (display_names or []) if name.strip()]
-        if names:
-            joined_names = "; ".join(f"{idx}. {name}" for idx, name in enumerate(names, start=1))
-            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh: {joined_names}. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
+        top_names = names[:3]
+        if frame and frame.goal == "itinerary":
+            if language_code == "en":
+                if top_names:
+                    joined = "; ".join(top_names)
+                    return f"For this trip goal, I would start with these easier options: {joined}. I kept the list short so you can compare quickly; open the cards for map and practical details."
+                return "I found a few possible stops for this trip goal. Open the cards to compare map and practical details."
+            if top_names:
+                joined = "; ".join(top_names)
+                return f"Với mục tiêu chuyến đi này, mình ưu tiên vài điểm dễ cân nhắc trước: {joined}. Mình rút gọn danh sách để bạn so sánh nhanh; mở từng thẻ để xem bản đồ và chi tiết thực tế."
+            return "Mình tìm được vài điểm có thể cân nhắc cho mục tiêu chuyến đi này. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+        if language_code == "en":
+            if top_names:
+                joined = "; ".join(top_names)
+                base = f"I found {result_count} relevant places around Ham Ninh. Start with: {joined}. Open the cards for map and practical details."
+            else:
+                base = f"I found {result_count} relevant places around Ham Ninh. Open the cards for map and practical details."
+        elif top_names:
+            joined = "; ".join(top_names)
+            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Nên bắt đầu với: {joined}. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
         else:
-            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn có thể mở từng thẻ địa điểm để xem bản đồ, điểm đánh giá và lý do xếp hạng."
+            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
         if is_commercial:
             return _cultural_preface(language_code) + base
         return base

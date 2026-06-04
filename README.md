@@ -18,7 +18,7 @@
 
 ## 📖 Giới thiệu
 
-Hàm Ninh AI Guide là hệ thống trợ lý AI đa tác nhân (Multi-Agent) kết hợp RAG và Ensemble Re-ranking để hỗ trợ du lịch bền vững tại làng chài Hàm Ninh, Phú Quốc, Kiên Giang.
+Hàm Ninh AI Guide là hệ thống trợ lý AI du lịch bền vững kết hợp LangGraph-style agent orchestration, RAG, Places tooling và product-level recommendation suitability để hỗ trợ người dùng cuối khám phá làng chài Hàm Ninh, Phú Quốc, Kiên Giang.
 
 Hệ thống giải quyết 2 vấn đề cốt lõi:
 - Các nền tảng lớn ưu tiên cơ sở có ngân sách marketing → tiểu thương địa phương bị thiệt thòi
@@ -28,8 +28,8 @@ Hệ thống giải quyết 2 vấn đề cốt lõi:
 
 ## 🤖 Kiến trúc hệ thống
 
-### Multi-Agent System
-Hệ thống gồm các tác nhân và service phối hợp qua LangGraph-style StateGraph, với phần orchestration đã được tách theo module để dễ maintain:
+### Agentic Chat System
+Hệ thống phối hợp LLM/tool-calling theo LangGraph-style StateGraph. LLM quyết định gọi tool hay trả lời trực tiếp; conditional edge chỉ kiểm tra tool calls. Các domain intent như văn hóa, địa điểm, hỏi đường không bị hard-route bằng keyword trước LLM.
 
 | Thành phần | Vai trò | File |
 |---|---|---|
@@ -37,9 +37,10 @@ Hệ thống gồm các tác nhân và service phối hợp qua LangGraph-style 
 | **Graph State & Tool Contract** | `AgentState`, timeout, tool schema, system prompt, optional LangGraph imports | `agents/graph/state.py` |
 | **Follow-up Context** | Lưu/khôi phục context hội thoại, resolve câu hỏi nối tiếp trước khi gọi tool | `agents/graph/followup.py` |
 | **Checkpointing** | In-memory/Postgres history + structured follow-up context persistence | `agents/graph/checkpointing.py` |
-| **Routing Helpers** | Deterministic intent routing, fallback answers, status/suggestion helpers | `agents/graph/routing.py` |
+| **Routing Helpers** | Safe conversational fallbacks, status/suggestion helpers; không hard-route domain intent | `agents/graph/routing.py` |
 | **GroundedAnswer** | Intent detection + grounded answers | `agents/guardrails/grounded_answer.py` |
 | **EnsembleReranker** | 3-tree Bagging + 2-step Boosting fairness | `agents/ml/ensemble_reranker.py` |
+| **PlaceRecommendationService** | Places provider candidates → recommendation frame → suitability → curated place results | `agents/services/place_recommendation_service.py` |
 
 ### RAG Pipeline
 1. Câu hỏi → embedding (OpenAI text-embedding-3-small)
@@ -47,8 +48,11 @@ Hệ thống gồm các tác nhân và service phối hợp qua LangGraph-style 
 3. LLM sinh câu trả lời với strict grounding (gpt-4o-mini)
 4. Trả về kèm citation nguồn
 
+### Places Recommendation Pipeline
+Provider Places chỉ trả candidates khớp truy vấn; hệ thống không xem đó là recommendation cuối cùng. `PlaceRecommendationService` xây `RecommendationFrame`, đánh giá `CandidateSuitability`, lọc các candidate không phù hợp vai trò chuyến đi, chạy ensemble reranking/fairness balancing, rồi tạo lý do gợi ý bằng ngôn ngữ người dùng cuối.
+
 ### Ensemble Re-ranking
-Kết hợp Bagging (3 Decision Trees song song) và Boosting (hiệu chỉnh tuần tự) để xếp hạng địa điểm theo 6 tiêu chí: rating, khoảng cách, giá cả, giờ mở cửa, local_factor, độ khớp.
+Kết hợp Bagging (3 Decision Trees song song) và Boosting (hiệu chỉnh tuần tự) để hỗ trợ xếp hạng địa điểm theo rating, khoảng cách, giá cả, giờ mở cửa, local_factor, độ khớp và các tín hiệu đã được chuẩn hóa. Tầng suitability/product curation đứng trước presentation để tránh trả raw provider dump cho người dùng.
 
 ---
 
@@ -159,6 +163,7 @@ citd-hk1-project/
 ## 📄 Tài liệu
 
 - [Requirements](docs/REQUIREMENTS.md)
+- [Agentic Recommendation Architecture](docs/AGENTIC-RECOMMENDATION-ARCHITECTURE.md)
 
 ---
 
