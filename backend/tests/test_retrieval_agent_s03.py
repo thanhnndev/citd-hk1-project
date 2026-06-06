@@ -635,36 +635,33 @@ class TestAgentServiceFallbackOnException:
         assert response.session_id == "test-exc-sess"
 
 
-class TestAgentServiceIsPlaceIntent:
-    """Test (e): AgentService._is_place_intent() correctly identifies
-    place-intent queries vs cultural queries."""
+class TestAgentServiceIntentRouting:
+    """Test soft routing: _answer_node uses intent to decide Places vs LLM.
+
+    restaurant_search/navigation → Places API enrichment (soft)
+    cultural_query/unknown → LLM with RAG context
+    """
 
     @pytest.mark.parametrize(
-        "message,expected",
+        "message,is_place",
         [
             ("recommend a restaurant in Hàm Ninh", True),
             ("gợi ý địa điểm Hàm Ninh", True),
             ("đề xuất nhà hàng Hàm Ninh", True),
+            ("kiếm nhà nghỉ tốt", True),
+            ("đường đi bến tàu", True),
             ("what is the history of Hàm Ninh?", False),
             ("làng chài Hàm Ninh có gì?", False),
-            ("How do I get to Hàm Ninh?", False),
+            ("chào bạn", False),  # conversational
         ],
     )
-    def test_is_place_intent(self, message, expected):
-        agent = AgentService(hybrid_retriever=None, retriever=None)
+    def test_routing_decision(self, message, is_place):
+        from agents.guardrails.grounded_answer import detect_intent
 
-        state: AgentState = {
-            "session_id": "test-intent-sess",
-            "message": message,
-            "language": "vi",
-            "history": [],
-            "retrieval_query": message,
-            "fallback_reason": None,
-            "intent": None,
-        }
-
-        result = agent._is_place_intent(state)
-        assert result is expected, f"Message '{message}' expected {expected}, got {result}"
+        intent = detect_intent(message)
+        place_intents = {"restaurant_search", "navigation"}
+        result = intent in place_intents
+        assert result is is_place, f"Message '{message}' intent={intent}, expected is_place={is_place}"
 
 
 class TestAgentServiceComposeFallback:

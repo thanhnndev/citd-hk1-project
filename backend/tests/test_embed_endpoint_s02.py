@@ -25,8 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 os.environ.setdefault("OPENAI_API_KEY", "fake-test-key")
-os.environ.setdefault("GOOGLE_PLACES_API_KEY", "fake-test-key")
-os.environ.setdefault("GOOGLE_ROUTES_API_KEY", "fake-test-key")
+os.environ.setdefault("GOONG_API_KEY", "fake-test-key")
 os.environ.setdefault("BACKEND_API_KEY", "test-admin-key")
 
 import httpx
@@ -86,6 +85,25 @@ async def client() -> httpx.AsyncClient:
 
 
 # ---------------------------------------------------------------------------
+# Auth bypass fixture — patches decode_access_token and sets up user_service
+# on app.state, matching the pattern used by other admin endpoint tests.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def auth_bypass():
+    """Bypass JWT auth by mocking decode_access_token + user_service."""
+    mock_user = MagicMock()
+    mock_user.id = "test-admin-user"
+    mock_user.is_active = True
+    mock_user_service = AsyncMock()
+    mock_user_service.get_by_id = AsyncMock(return_value=mock_user)
+    app.state.user_service = mock_user_service
+
+    with patch("app.middleware.auth.decode_access_token", return_value={"sub": "test-admin-user"}):
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -96,28 +114,26 @@ class TestEmbedEndpoint:
     async def test_embed_returns_stats_on_success(
         self,
         client: httpx.AsyncClient,
+        auth_bypass,
     ) -> None:
         """With mocked embeddings+Qdrant, endpoint returns 200 with correct stats."""
         fake_vecs = _fake_vectors(CORPUS_CHUNK_COUNT)
 
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=fake_vecs,
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=CORPUS_CHUNK_COUNT,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
-                    response = await client.post(
-                        "/admin/embed",
-                        headers={"X-API-Key": "test-admin-key"},
-                    )
+                    response = await client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 200, response.text
         body = response.json()
@@ -133,27 +149,25 @@ class TestEmbedEndpoint:
     async def test_embed_response_pydantic_model(
         self,
         client: httpx.AsyncClient,
+        auth_bypass,
     ) -> None:
         """Response body validates as EmbedResponse Pydantic model."""
         n = 3
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(n),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=n,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
-                    response = await client.post(
-                        "/admin/embed",
-                        headers={"X-API-Key": "test-admin-key"},
-                    )
+                    response = await client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 200
         EmbedResponse.model_validate(response.json())
@@ -162,30 +176,28 @@ class TestEmbedEndpoint:
     async def test_embed_openai_error_returns_502(
         self,
         client: httpx.AsyncClient,
+        auth_bypass,
     ) -> None:
         """OpenAI error returns 502 Bad Gateway with openai_dependency_failed."""
         import openai
 
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             side_effect=openai.OpenAIError("invalid api key"),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                 new_callable=AsyncMock,
             ):
-                response = await client.post(
-                    "/admin/embed",
-                    headers={"X-API-Key": "test-admin-key"},
-                )
+                response = await client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 502
         body = response.json()
         assert body.get("detail", {}).get("error") == "openai_dependency_failed"
 
     @pytest.mark.asyncio
-    async def test_embed_empty_corpus_returns_500(self) -> None:
+    async def test_embed_empty_corpus_returns_500(self, auth_bypass) -> None:
         """When corpus has no chunks, endpoint returns 500."""
         with patch(
             "app.routers.admin.load_proposition_corpus",
@@ -195,10 +207,7 @@ class TestEmbedEndpoint:
                 transport=httpx.ASGITransport(app=app),
                 base_url="http://test",
             ) as empty_client:
-                response = await empty_client.post(
-                    "/admin/embed",
-                    headers={"X-API-Key": "test-admin-key"},
-                )
+                response = await empty_client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 500
 
@@ -206,26 +215,24 @@ class TestEmbedEndpoint:
     async def test_embed_bm25_vectorizer_synced_to_app_state(
         self,
         client: httpx.AsyncClient,
+        auth_bypass,
     ) -> None:
         """After successful embed, app.state.bm25_vectorizer is set and usable."""
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(CORPUS_CHUNK_COUNT),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=CORPUS_CHUNK_COUNT,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
-                    response = await client.post(
-                        "/admin/embed",
-                        headers={"X-API-Key": "test-admin-key"},
-                    )
+                    response = await client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 200
         assert hasattr(app.state, "bm25_vectorizer")
@@ -251,30 +258,27 @@ class TestEmbedEndpoint:
         self,
         client: httpx.AsyncClient,
         capsys,
+        auth_bypass,
     ) -> None:
         """embed.done event is emitted after successful embed (verified via stdout)."""
         n = 3
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(n),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                 new_callable=AsyncMock,
                 return_value=n,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                    "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                     new_callable=AsyncMock,
                 ):
-                    response = await client.post(
-                        "/admin/embed",
-                        headers={"X-API-Key": "test-admin-key"},
-                    )
+                    response = await client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 200
-        # embed.done/embed.started appear in application stdout (structlog writes there)
         captured = capsys.readouterr()
         assert "embed.done" in captured.out or "embed.started" in captured.out
 
@@ -282,6 +286,7 @@ class TestEmbedEndpoint:
     async def test_embed_qdrant_error_returns_502(
         self,
         client: httpx.AsyncClient,
+        auth_bypass,
     ) -> None:
         """Qdrant error returns 502 Bad Gateway with qdrant_dependency_failed."""
         import httpx
@@ -294,23 +299,20 @@ class TestEmbedEndpoint:
             headers=httpx.Headers({"content-type": "text/plain"}),
         )
         with patch(
-            "app.services.embedding_service.EmbeddingService.embed_texts",
+            "agents.tools.embedding_service.EmbeddingService.embed_texts",
             new_callable=AsyncMock,
             return_value=_fake_vectors(CORPUS_CHUNK_COUNT),
         ):
             with patch(
-                "app.services.qdrant_service.QdrantService.ensure_hybrid_collection",
+                "agents.tools.qdrant_service.QdrantService.ensure_hybrid_collection",
                 new_callable=AsyncMock,
             ):
                 with patch(
-                    "app.services.qdrant_service.QdrantService.upsert_hybrid_chunks",
+                    "agents.tools.qdrant_service.QdrantService.upsert_hybrid_chunks",
                     new_callable=AsyncMock,
                     side_effect=qdrant_error,
                 ):
-                    response = await client.post(
-                        "/admin/embed",
-                        headers={"X-API-Key": "test-admin-key"},
-                    )
+                    response = await client.post("/admin/embed", headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 502
         body = response.json()

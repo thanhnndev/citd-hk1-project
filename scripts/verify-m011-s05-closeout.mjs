@@ -36,8 +36,8 @@ const requiredEvidenceSurfaces = [
 const requiredProviderCaveats = [
   'OpenAI',
   'Qdrant',
-  'Google Places',
-  'Google Routes',
+  'Goong Places',
+  'Goong Routes',
   'Langfuse',
 ];
 
@@ -58,9 +58,9 @@ const liveProofGuardrails = [
     resultPattern: /RESULT=(?:passed|durable_verified)/,
   },
   {
-    surface: 'Google Places/Routes',
-    blockedPattern: /(?:Google Places|Google Routes|Places\/Routes)[\s\S]{0,220}credential_blocked/i,
-    passClaimPattern: /(?:Google Places|Google Routes|Places\/Routes)[\s\S]{0,220}\b(?:live[_ -]?pass|live proof|verified live|passed)\b/i,
+    surface: 'Goong Places/Routes',
+    blockedPattern: /(?:Goong Places|Goong Routes|Places\/Routes)[\s\S]{0,220}credential_blocked/i,
+    passClaimPattern: /(?:Goong Places|Goong Routes|Places\/Routes)[\s\S]{0,220}\b(?:live[_ -]?pass|live proof|verified live|passed)\b/i,
     resultPattern: /RESULT=(?:passed|durable_verified)/,
   },
   {

@@ -177,13 +177,14 @@ class TestLLMAnswerService:
         messages = call_kwargs["messages"]
         system_content = messages[0]["content"]
 
-        # Grounding constraint
-        assert "ONLY" in system_content, "System prompt must contain 'ONLY' grounding instruction"
+        # Grounding constraint — soft, not hard "ONLY"
+        assert "ngữ cảnh" in system_content.lower() or "context" in system_content.lower(), \
+            "System prompt must reference context"
         # Chunk titles injected
         assert "Làng chài Hàm Ninh" in system_content
         assert "Chợ hải sản Hàm Ninh" in system_content
-        # Language instruction
-        assert "Answer in Vietnamese." in system_content
+        # Language enforcement (Vietnamese)
+        assert "tiếng Việt" in system_content or "vietnamese" in system_content.lower()
 
     @pytest.mark.asyncio
     async def test_empty_chunks_returns_honest_message(self) -> None:

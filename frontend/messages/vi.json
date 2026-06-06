@@ -252,7 +252,7 @@
           "description": "Vector database cho RAG văn hóa Hàm Ninh."
         },
         {
-          "name": "Google Maps Platform",
+          "name": "Goong Maps Platform",
           "description": "Nguồn dữ liệu địa điểm và tuyến đường trong các slice sau."
         },
         {
@@ -293,8 +293,8 @@
     }
   },
   "Chat": {
-    "title": "Trò chuyện với AI Guide",
-    "placeholder": "Nhập câu hỏi về Hàm Ninh...",
+    "title": "Trợ lý Hàm Ninh",
+    "placeholder": "Hỏi tự nhiên: chào hỏi, tìm quán, hỏi đường, văn hóa...",
     "send": "Gửi",
     "reasoningLog": "Tại sao gợi ý này?",
     "citations": "Nguồn tham khảo",
@@ -308,22 +308,49 @@
     "viewOnMap": "Xem trên Bản đồ",
     "scoreLabel": "Điểm số",
     "noRating": "Chưa có đánh giá",
-    "welcomeGreeting": "Xin chào! Tôi là Hướng dẫn viên AI Hàm Ninh",
-    "welcomeSubtitle": "Hãy hỏi tôi bất cứ điều gì về văn hóa, lịch sử, ẩm thực và địa điểm ở Hàm Ninh.",
+    "explanation": "Tại sao gợi ý này?",
+    "providerSource": "Nguồn dữ liệu",
+    "providerStatus": "Trạng thái",
+    "scoreDataLimited": "Dữ liệu chấm điểm hạn chế",
+    "accessibilityNote": "Thông tin tiếp cận",
+    "welcomeGreeting": "Bạn muốn khám phá Hàm Ninh theo cách nào?",
+    "welcomeSubtitle": "Hỏi mình về địa điểm, đường đi, văn hóa/lịch sử, ẩm thực hoặc lịch trình quanh Hàm Ninh. Nếu thiếu thông tin, mình sẽ hỏi lại thay vì đoán.",
     "newConversation": "Cuộc trò chuyện mới",
     "copy": "Sao chép",
     "copied": "Đã sao chép!",
     "retryMessage": "Thử lại",
     "prompts": [
-      "Lịch sử làng chài Hàm Ninh như thế nào?",
-      "Gợi ý nhà hàng hải sản địa phương",
-      "Tôi đến Hàm Ninh từ Dương Đông như thế nào?",
-      "Hàm Ninh có lễ hội văn hóa nào?"
+      "Kể về ẩm thực địa phương",
+      "Tìm quán hải sản gần đây",
+      "Chỉ đường đến chợ Hàm Ninh",
+      "Làng chài Hàm Ninh có gì đặc biệt?"
+    ],
+    "quickReplyLabels": {
+      "places": [
+        "Hiển thị trên bản đồ",
+        "Kể thêm về chỗ này",
+        "Có tiếp cận được không?"
+      ],
+      "sources": [
+        "Hải sản nào nổi bật?",
+        "Tìm quán hải sản gần đây",
+        "Kể thêm về làng chài"
+      ],
+      "fallback": [
+        "Kể về làng chài Hàm Ninh",
+        "Tìm quán hải sản",
+        "Hỏi đường đến chợ Hàm Ninh"
+      ],
+      "generic": [
+        "Kể về ẩm thực địa phương",
+        "Tìm quán hải sản gần đây",
+        "Chỉ đường đến chợ Hàm Ninh"
     ]
+    }
   },
   "Map": {
     "title": "Bản đồ kiểm chứng địa điểm Hàm Ninh",
-    "intro": "Kiểm tra gợi ý địa điểm do agent backend trả về: thẻ kết quả, chi tiết được chọn, tọa độ sẵn sàng ghim và liên kết Google Maps mà không tải SDK bản đồ trên trình duyệt.",
+    "intro": "Kiểm tra gợi ý địa điểm do agent backend trả về trên bản đồ Goong thật: thẻ kết quả, chi tiết được chọn, ghim đồng bộ và liên kết nguồn trung lập.",
     "defaultQuery": "Gợi ý nhà hàng hải sản địa phương và điểm kinh doanh gia đình gần làng chài Hàm Ninh có thông tin tiếp cận.",
     "queryLabel": "Câu hỏi gợi ý địa điểm",
     "searchPlaceholder": "Hỏi địa điểm hoặc dịch vụ ở Hàm Ninh...",
@@ -338,7 +365,7 @@
     "selectPlace": "Chọn địa điểm",
     "pinReady": "sẵn sàng ghim",
     "pinUnavailable": "Không thể ghim: địa điểm này chưa có tọa độ trả về.",
-    "mapsLink": "Mở trong Google Maps",
+    "mapsLink": "Mở liên kết nguồn địa điểm",
     "rating": "Đánh giá",
     "reviews": "Lượt đánh giá",
     "openNow": "Đang mở cửa",
@@ -350,7 +377,10 @@
     "address": "Địa chỉ",
     "coordinates": "Tọa độ",
     "unknown": "Chưa rõ",
-    "responseNote": "Ghi chú của trợ lý"
+    "responseNote": "Ghi chú của trợ lý",
+    "missingMapToken": "Chưa cấu hình Goong map tiles. Kết quả vẫn hiển thị dạng thẻ cho đến khi thiết lập NEXT_PUBLIC_GOONG_MAPTILES_KEY.",
+    "mapUnavailable": "Bản đồ Goong chưa khởi tạo được. Thẻ kết quả và chi tiết địa điểm vẫn khả dụng.",
+    "noPins": "Không thể vẽ ghim bản đồ vì các kết quả này chưa có tọa độ hợp lệ."
   },
   "Architecture": {
     "title": "Kiến trúc hệ thống",

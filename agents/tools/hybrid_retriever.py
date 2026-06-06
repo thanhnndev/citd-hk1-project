@@ -249,11 +249,12 @@ class HybridRetriever:
         )
 
     async def search(self, query: str, top_k: int = 5) -> RetrievalResult:
-        """Run dense-only search, falling back to keyword search on any Qdrant error.
+        """Run hybrid search when BM25 is available, otherwise dense-only search.
 
-        The sparse/BM25 path is entirely bypassed — the method calls
-        ``dense_search()`` first and only touches the keyword fallback when
-        Qdrant is unavailable or the collection has no sparse vector.
+        When a fitted BM25 vectorizer is present, the method computes both the
+        dense embedding and sparse BM25 query vector and calls
+        ``QdrantService.hybrid_search()``. If sparse retrieval is unavailable,
+        it falls back to the dense-only query path.
 
         Args:
             query: User's natural-language query.
@@ -264,8 +265,50 @@ class HybridRetriever:
         """
         t0 = time.perf_counter()
         try:
+            if self._bm25 is not None:
+                dense_vector = await self._embed.embed_query(query)
+                sparse_vector = self._bm25.encode(query)
+                scored_points = await self._qdrant.hybrid_search(
+                    dense_vector, sparse_vector, top_k
+                )
+
+                chunks: list[RAGChunk] = []
+                for point in scored_points:
+                    payload = point.payload or {}
+                    chunks.append(
+                        RAGChunk(
+                            chunk_id=payload.get("chunk_id", ""),
+                            source_id=payload.get("source_id", ""),
+                            title=payload.get("title", ""),
+                            url=payload.get("url"),
+                            domain=payload.get("domain", ""),
+                            source_type=payload.get("source_type", ""),
+                            reliability=payload.get("reliability", "medium"),
+                            language=payload.get("language", "vi"),
+                            location=payload.get("location", ""),
+                            text=payload.get("text", ""),
+                            chunk_index=payload.get("chunk_index", 0),
+                            total_chunks=payload.get("total_chunks", 1),
+                        )
+                    )
+
+                latency_ms = round((time.perf_counter() - t0) * 1000, 3)
+                logger.info(
+                    "agent.retrieval_mode",
+                    mode="hybrid",
+                    query=query,
+                    top_k=top_k,
+                    result_count=len(chunks),
+                    latency_ms=latency_ms,
+                )
+                return RetrievalResult(
+                    chunks=chunks,
+                    query=query,
+                    total_found=len(chunks),
+                    latency_ms=latency_ms,
+                )
+
             result = await self.dense_search(query, top_k)
-            # dense_search already logged agent.retrieval_mode=dense
             return result
 
         except Exception as exc:

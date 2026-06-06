@@ -26,6 +26,12 @@ export default async function ChatPage({ params }: Props) {
     viewOnMap: t('viewOnMap'),
     scoreLabel: t('scoreLabel'),
     noRating: t('noRating'),
+    scoreBreakdown: t('scoreBreakdown'),
+    explanation: t('explanation'),
+    providerSource: t('providerSource'),
+    providerStatus: t('providerStatus'),
+    scoreDataLimited: t('scoreDataLimited'),
+    accessibilityNote: t('accessibilityNote'),
   };
 
   return (

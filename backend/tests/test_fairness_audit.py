@@ -47,7 +47,7 @@ def _make_place(place_id: str, local_factor: float) -> PlaceResult:
             final_score=0.8,
             rank=1,
         ),
-        google_maps_uri="https://maps.google.com/?q=test",
+        map_uri="https://map.goong.io/?pid=test",
     )
 
 

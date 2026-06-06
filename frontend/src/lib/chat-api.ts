@@ -34,6 +34,37 @@ export interface ScoreBreakdown {
   rank: number;
 }
 
+/**
+ * Safe structured explanation for why a place was recommended.
+ * Mirrors backend/app/models/response.py PlaceExplanation (extra='forbid').
+ * All fields are backend-owned — the frontend never fabricates reasoning.
+ */
+export interface PlaceExplanation {
+  /** 1-based recommendation rank, or 0 when not ranked. */
+  rank: number;
+  /** Concise reason derived only from normalized place data. */
+  primary_reason: string;
+  /** Preference signals matched by the normalized candidate. */
+  matched_preferences: string[];
+  /** Safe locality/fairness context without exact user GPS. */
+  local_context: string;
+  /** Compact score fields used by the reranker or fallback scorer. */
+  score_factors: Record<string, number | string | null>;
+  /** Fairness/locality note derived from local_factor metadata. */
+  fairness_note: string;
+  /** Accessibility note derived from normalized accessibility fields. */
+  accessibility_note: string;
+  /** Route summary without exact origin/user GPS. */
+  route_summary: string;
+  /** Normalized provider/source label (google_places, goong_places, mock, cache). */
+  provider_source: string | null;
+  /** Normalized provider status (ok, empty, credentials_blocked, upstream_error, unavailable). */
+  provider_status: string | null;
+  /** Normalized candidate/result fields used to build this explanation. */
+  evidence_fields_used: string[];
+  detail_highlights: string[];
+}
+
 export interface PlaceResult {
   place_id: string;
   display_name: string;
@@ -41,17 +72,30 @@ export interface PlaceResult {
   location?: LatLng | null;
   types: string[];
   primary_type?: string | null;
+  primary_type_display_name?: string | null;
   rating?: number | null;
   user_rating_count?: number | null;
   price_level?: number | null;
   open_now?: boolean | null;
   business_status?: string | null;
-  local_factor: number;
+  current_opening_hours?: Record<string, unknown> | null;
+  regular_opening_hours?: Record<string, unknown> | null;
+  payment_options: Record<string, boolean>;
+  parking_options: Record<string, boolean>;
+  editorial_summary?: string | null;
+  generative_summary?: string | null;
+  review_summary?: string | null;
+  reviews: Record<string, unknown>[];
+  photos: string[];
+  service_options: Record<string, boolean | null>;
+  local_factor: number | null;
   final_score: number;
   score_breakdown: ScoreBreakdown;
   accessibility_score?: number | null;
   accessibility_warning?: string | null;
-  google_maps_uri: string;
+  map_uri: string;
+  /** Structured why-this-recommendation data from backend. Never fabricated. */
+  explanation?: PlaceExplanation;
 }
 
 export interface Citation {
@@ -65,6 +109,7 @@ export interface ChatResponse {
   message: string;
   citations: Citation[];
   places: PlaceResult[];
+  suggestions?: string[];
   reasoning_log?: string | null;
   intent?: string | null;
   langfuse_trace_id?: string | null;
@@ -74,10 +119,34 @@ export interface ChatResponse {
   latency_ms: number;
 }
 
+export type ChatStreamStatus =
+  | "understanding"
+  | "using_history"
+  | "searching_knowledge"
+  | "checking_places"
+  | "composing";
+
+/**
+ * Provider source vocabulary — reflects which provider actually served results.
+ * Never fabricated by the frontend.
+ * @see docs/M014-S03-RECOMMENDATION-EXPLANATION-CONTRACT.md §2
+ */
+export type ProviderSource = "google_places" | "goong_places" | "mock" | "cache";
+
+/**
+ * Provider status vocabulary — reflects actual provider health/result state.
+ * @see docs/M014-S03-RECOMMENDATION-EXPLANATION-CONTRACT.md §2
+ */
+export type ProviderStatus = "ok" | "empty" | "credentials_blocked" | "upstream_error" | "unavailable";
+
 export interface StreamChatCallbacks {
   onToken: (token: string) => void;
   onCitations: (citations: Citation[]) => void;
+  onPlaces?: (places: PlaceResult[]) => void;
+  onStatus?: (status: ChatStreamStatus) => void;
+  onSuggestions?: (suggestions: string[]) => void;
   onDone: () => void;
+  onOpen?: () => void;
   onError: (error: string) => void;
 }
 
@@ -151,6 +220,8 @@ export async function streamChat(
     return;
   }
 
+  callbacks.onOpen?.();
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -170,31 +241,54 @@ export async function streamChat(
         .split("\n")
         .filter((line) => line.startsWith("data: "));
 
-      for (const line of dataLines) {
-        const data = line.slice(6);
+      const data = dataLines.map((line) => line.slice(6)).join("\n");
 
-        if (data === "[DONE]") {
-          callbacks.onDone();
-          return;
-        }
-
-        if (data.startsWith("[CITATIONS] ")) {
-          try {
-            callbacks.onCitations(JSON.parse(data.slice(12)) as Citation[]);
-          } catch {
-            callbacks.onError("Invalid citations payload");
-            return;
-          }
-          continue;
-        }
-
-        if (data.startsWith("[ERROR] ")) {
-          callbacks.onError(data.slice(8));
-          return;
-        }
-
-        callbacks.onToken(data);
+      if (data === "[DONE]") {
+        callbacks.onDone();
+        return;
       }
+
+      if (data.startsWith("[STATUS] ")) {
+        callbacks.onStatus?.(data.slice(9) as ChatStreamStatus);
+        continue;
+      }
+
+      if (data.startsWith("[CITATIONS] ")) {
+        try {
+          callbacks.onCitations(JSON.parse(data.slice(12)) as Citation[]);
+        } catch {
+          callbacks.onError("Invalid citations payload");
+          return;
+        }
+        continue;
+      }
+
+      if (data.startsWith("[PLACES] ")) {
+        try {
+          callbacks.onPlaces?.(JSON.parse(data.slice(9)) as PlaceResult[]);
+        } catch {
+          callbacks.onError("Invalid places payload");
+          return;
+        }
+        continue;
+      }
+
+      if (data.startsWith("[SUGGESTIONS] ")) {
+        try {
+          callbacks.onSuggestions?.(JSON.parse(data.slice(14)) as string[]);
+        } catch {
+          callbacks.onError("Invalid suggestions payload");
+          return;
+        }
+        continue;
+      }
+
+      if (data.startsWith("[ERROR] ")) {
+        callbacks.onError(data.slice(8));
+        return;
+      }
+
+      callbacks.onToken(data);
     }
   }
 }

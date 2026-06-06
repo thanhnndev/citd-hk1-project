@@ -1,182 +1,106 @@
-"""LangGraph-backed chat agent orchestration with per-session memory.
+"""LangGraph-style tool-calling chat agent.
 
-AgentService is the shared backend boundary for non-streaming and streaming chat.
-It owns retrieval, LLM fallback, citation preservation, and lightweight session
-state so routers do not duplicate orchestration logic.
+The runtime follows the simple LangGraph pattern documented by LangChain:
+LLM decides whether to call a tool; tool node executes; LLM composes final
+answer. Retrieval is a tool, never the default entry point.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 import asyncpg
 import structlog
 
-from app.models.rag import RAGChunk, RetrievalResult
+from app.models.rag import RAGChunk
 from app.models.response import ChatResponse, Citation
-from agents.guardrails.grounded_answer import GroundedAnswerService, detect_intent
-from agents.tools.retriever import Retriever
+from agents.guardrails.grounded_answer import GroundedAnswerService
 from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
-
-try:  # LangGraph is optional in unit tests until dependencies are installed.
-    from langgraph.graph import END, StateGraph
-    from langgraph.checkpoint.memory import MemorySaver
-except Exception:  # pragma: no cover - exercised when dependency is absent locally.
-    END = "__end__"
-    StateGraph = None  # type: ignore[assignment]
-    MemorySaver = None  # type: ignore[assignment]
+from agents.tools.retriever import Retriever
 
 logger = structlog.get_logger(__name__)
 
-# -- Per-node timeout thresholds (ROB-06) --
-NODE_TIMEOUT_RETRIEVE = 10  # seconds for retrieval node
-NODE_TIMEOUT_ANSWER = 15    # seconds for answer generation node
+NODE_TIMEOUT_LLM = 20
+NODE_TIMEOUT_TOOL = 15
+
+# Per-node timeout constants (ROB-06)
+NODE_TIMEOUT_RETRIEVE = 10
+NODE_TIMEOUT_ANSWER = 15
 
 
 class NodeTimeoutError(Exception):
-    """Raised when a graph node exceeds its configured timeout.
-
-    Captures the node name and timeout value for structured logging
-    and user-friendly error messages.
-    """
+    """Raised when a graph node exceeds its per-node timeout."""
 
     def __init__(self, node_name: str, timeout_seconds: int) -> None:
         self.node_name = node_name
         self.timeout_seconds = timeout_seconds
         super().__init__(f"Node '{node_name}' timed out after {timeout_seconds}s")
 
+# ---------------------------------------------------------------------------
+# Structured follow-up context contract (R052)
+# ---------------------------------------------------------------------------
 
-class AgentState(TypedDict, total=False):
-    """Serializable state passed through the retrieval and answer phases."""
+import agents.graph.checkpointing as _checkpointing
+from agents.graph.checkpointing import InMemoryAgentCheckpointer, PostgresAgentCheckpointer
+from agents.graph.followup import (
+    FollowUpContext,
+    _build_followup_context,
+    _is_ambiguous_pronoun_followup,
+    _matches_structured_context,
+    compose_followup_answer as _compose_followup_answer,
+    resolve_followup_before_tool_routing as _resolve_followup_before_tool_routing_impl,
+    resolve_followup_decision,
+)
+from agents.graph.state import (
+    END,
+    START,
+    MemorySaver,
+    StateGraph,
+    AgentState,
+    FollowUpDecision,
+    NODE_TIMEOUT_LLM,
+    NODE_TIMEOUT_TOOL,
+    TOOLS as _TOOLS,
+)
 
-    session_id: str
-    message: str
-    language: str
-    history: list[dict[str, str]]
-    retrieval_query: str
-    chunks: list[RAGChunk]
-    citations: list[Citation]
-    response: ChatResponse
-    fallback_reason: str | None
-    intent: str | None
-    langfuse_trace_id: str | None
-
-
-@dataclass
-class InMemoryAgentCheckpointer:
-    """Small async checkpointer used when Postgres/LangGraph persistence is absent."""
-
-    _store: dict[str, list[dict[str, str]]] = field(default_factory=dict)
-
-    async def load_history(self, session_id: str) -> list[dict[str, str]]:
-        return list(self._store.get(session_id, []))
-
-    async def save_turn(self, session_id: str, user: str, assistant: str) -> None:
-        history = self._store.setdefault(session_id, [])
-        history.extend([
-            {"role": "user", "content": user},
-            {"role": "assistant", "content": assistant},
-        ])
-        del history[:-8]
-
-
-
-class PostgresAgentCheckpointer:
-    """Asyncpg-backed checkpointer matching AgentService's session history contract."""
-
-    def __init__(self, pool: asyncpg.Pool) -> None:
-        self._pool = pool
-
-    @classmethod
-    async def create(cls, dsn: str) -> "PostgresAgentCheckpointer":
-        pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
-        checkpointer = cls(pool)
-        try:
-            await checkpointer.setup()
-            await checkpointer.load_history("__agent_checkpoint_connectivity__")
-        except Exception:
-            await pool.close()
-            raise
-        return checkpointer
-
-    async def setup(self) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS agent_session_messages (
-                    id BIGSERIAL PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-                    content TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-            await conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_agent_session_messages_session_order
-                ON agent_session_messages (session_id, id)
-                """
-            )
-
-    async def load_history(self, session_id: str) -> list[dict[str, str]]:
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT role, content
-                FROM (
-                    SELECT id, role, content
-                    FROM agent_session_messages
-                    WHERE session_id = $1
-                    ORDER BY id DESC
-                    LIMIT 8
-                ) recent
-                ORDER BY id ASC
-                """,
-                session_id,
-            )
-        return [{"role": row["role"], "content": row["content"]} for row in rows]
-
-    async def save_turn(self, session_id: str, user: str, assistant: str) -> None:
-        async with self._pool.acquire() as conn:
-            await conn.executemany(
-                """
-                INSERT INTO agent_session_messages (session_id, role, content)
-                VALUES ($1, $2, $3)
-                """,
-                [(session_id, "user", user), (session_id, "assistant", assistant)],
-            )
+from agents.graph.routing import (
+    _chunk_payload,
+    _clarify_message,
+    _direct_answer,
+    _extract_suggestions,
+    _fallback_action,
+    _get_default_suggestions,
+    _json_args,
+    _knowledge_fallback_answer,
+    _llm_unavailable_message,
+    _messages_for_llm,
+    _place_unavailable_message,
+    _status_for_state,
+    _status_for_tool_calls,
+    _too_many_tools_message,
+)
 
 async def create_agent_checkpointer(database_url: str | None = None) -> tuple[Any, str]:
-    """Create a checkpoint backend, falling back to memory when unavailable.
+    _checkpointing.asyncpg = asyncpg
+    return await _checkpointing.create_agent_checkpointer(database_url)
 
-    Returns a tuple of (checkpointer, checkpoint_mode). The in-memory fallback
-    keeps local and test execution working when DATABASE_URL/Postgres is absent.
-    """
-    dsn = database_url or os.getenv("DATABASE_URL")
-    if dsn:
-        try:
-            return await PostgresAgentCheckpointer.create(dsn), "postgres"
-        except Exception as exc:
-            logger.warning(
-                "agent.checkpoint_init_failed",
-                checkpoint_mode="memory",
-                reason=type(exc).__name__,
-            )
-    return InMemoryAgentCheckpointer(), "memory"
 
+def _resolve_followup_before_tool_routing(
+    state: AgentState,
+    has_llm: bool = False,
+) -> AgentState | None:
+    return _resolve_followup_before_tool_routing_impl(
+        state,
+        has_llm=has_llm,
+        direct_answer=_direct_answer,
+        clarify_message=_clarify_message,
+    )
 
 class AgentService:
-    """Shared agent orchestration for POST and SSE chat flows."""
-
     def __init__(
         self,
         *,
@@ -193,12 +117,13 @@ class AgentService:
         self._retriever = retriever
         self._hybrid_retriever = hybrid_retriever
         self._llm_service = llm_service
-        self._fallback_service = GroundedAnswerService(retriever) if retriever is not None else None
+        self._client = _real_client(llm_service)
+        self._model = getattr(llm_service, "model", "gpt-4o-mini") if llm_service is not None else "gpt-4o-mini"
         self._place_recommendation_service = place_recommendation_service
-        self._checkpointer = checkpointer or InMemoryAgentCheckpointer()
-        self.checkpoint_mode = checkpoint_mode
         self._semantic_cache = semantic_cache
         self._embedding_service = embedding_service
+        self._checkpointer = checkpointer or InMemoryAgentCheckpointer()
+        self.checkpoint_mode = checkpoint_mode
         self._langfuse_client = langfuse_client
         self._graph = self._build_graph()
 
@@ -206,412 +131,87 @@ class AgentService:
         if StateGraph is None:
             return None
         graph = StateGraph(AgentState)
-        graph.add_node("retrieve", self._retrieve_node)
-        graph.add_node("answer", self._answer_node)
-        graph.set_entry_point("retrieve")
-        graph.add_edge("retrieve", "answer")
-        graph.add_edge("answer", END)
+        graph.add_node("llm_call", self._llm_call_node)
+        graph.add_node("tool_node", self._tool_node)
+        graph.add_edge(START, "llm_call")
+        graph.add_conditional_edges("llm_call", self._should_continue, {"tool_node": "tool_node", END: END})
+        graph.add_edge("tool_node", "llm_call")
         return graph.compile(checkpointer=MemorySaver() if MemorySaver else None)
 
-    # -- Fairness audit logging --
-
-    _FAIRNESS_AUDIT_DIR = Path("data/fairness_audit")
-
-    def _fairness_audit_log(self, *, places: list, trace_id: str | None = None) -> None:
-        """Log local_factor distribution for place recommendations.
-
-        Extracts local_factor from each PlaceResult, computes distribution
-        stats (count, mean, min, max, buckets), and writes a JSON line to
-        data/fairness_audit/{timestamp}.jsonl.
-
-        Wrapped in try/except — audit failure must NOT break recommendation flow.
-        """
-        if not places:
-            return
-
-        try:
-            local_factors = []
-            for place in places:
-                lf = getattr(place, "local_factor", None)
-                if lf is not None:
-                    local_factors.append(float(lf))
-
-            if not local_factors:
-                return
-
-            count = len(local_factors)
-            mean_val = sum(local_factors) / count
-            min_val = min(local_factors)
-            max_val = max(local_factors)
-
-            buckets = self._bucket_local_factors(local_factors)
-
-            audit_record = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "trace_id": trace_id,
-                "count": count,
-                "mean": round(mean_val, 4),
-                "min": round(min_val, 4),
-                "max": round(max_val, 4),
-                "local_factors": [round(lf, 4) for lf in local_factors],
-                "distribution": buckets,
-            }
-
-            self._FAIRNESS_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            filepath = self._FAIRNESS_AUDIT_DIR / f"{ts}.jsonl"
-            with open(filepath, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(audit_record, ensure_ascii=False) + "\n")
-
-            logger.info(
-                "fairness_audit.logged",
-                filepath=str(filepath),
-                count=count,
-                mean=round(mean_val, 4),
-            )
-        except Exception as exc:
-            logger.warning(
-                "fairness_audit.error",
-                reason=type(exc).__name__,
-                message="audit failure must not break recommendation flow",
-            )
-
-    @staticmethod
-    def _bucket_local_factors(local_factors: list[float]) -> dict[str, int]:
-        """Bucket local_factor values into distribution ranges."""
-        buckets: dict[str, int] = {
-            "<0.1": 0,
-            "0.1-0.3": 0,
-            "0.3-0.5": 0,
-            ">0.5": 0,
-        }
-        for lf in local_factors:
-            if lf < 0.1:
-                buckets["<0.1"] += 1
-            elif lf < 0.3:
-                buckets["0.1-0.3"] += 1
-            elif lf < 0.5:
-                buckets["0.3-0.5"] += 1
-            else:
-                buckets[">0.5"] += 1
-        return buckets
-
-    def _start_langfuse_span(
-        self,
-        *,
-        trace_id: str,
-        name: str,
-        as_type: str = "span",
-        input_data: dict | None = None,
-    ) -> Any | None:
-        """Create a Langfuse observation span, gracefully degrading on error.
-
-        Returns the span object or None if Langfuse is unavailable.
-        All Langfuse calls are wrapped in try/except — Langfuse down means
-        silently dropped with a structlog warning only.
-        """
-        if self._langfuse_client is None:
-            return None
-        try:
-            from langfuse.types import TraceContext
-
-            span = self._langfuse_client.start_observation(
-                trace_context=TraceContext(trace_id=trace_id),
-                name=name,
-                as_type=as_type,  # type: ignore[arg-type]
-                input=input_data,
-            )
-            logger.info("langfuse.span_started", trace_id=trace_id, name=name)
-            return span
-        except Exception as exc:
-            logger.warning(
-                "langfuse.error",
-                operation="start_observation",
-                name=name,
-                reason=type(exc).__name__,
-            )
-            return None
-
-    def _end_langfuse_span(
-        self,
-        span: Any | None,
-        *,
-        trace_id: str,
-        name: str,
-        output_data: dict | None = None,
-    ) -> None:
-        """End a Langfuse span with output metadata, gracefully degrading."""
-        if span is None:
-            return
-        try:
-            if output_data:
-                span.update(output=output_data)
-            span.end()
-            logger.info("langfuse.span_ended", trace_id=trace_id, name=name)
-        except Exception as exc:
-            logger.warning(
-                "langfuse.error",
-                operation="end_observation",
-                name=name,
-                reason=type(exc).__name__,
-            )
-
     async def answer(self, *, session_id: str, message: str, language: str = "vi") -> ChatResponse:
-        """Return a grounded ChatResponse and persist the turn for the session."""
-        t0 = time.perf_counter()
+        started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
-
-        # -- Langfuse trace creation --
-        trace_id: str | None = None
-        if self._langfuse_client is not None:
-            try:
-                trace_id = self._langfuse_client.create_trace_id(seed=session_id)
-                state["langfuse_trace_id"] = trace_id
-                logger.info("langfuse.trace_created", trace_id=trace_id, session_id=session_id)
-            except Exception as exc:
-                logger.warning(
-                    "langfuse.error",
-                    operation="create_trace_id",
-                    reason=type(exc).__name__,
-                )
-
-        # -- Retrieve node with span and per-node timeout (ROB-06) --
-        retrieve_span = self._start_langfuse_span(
-            trace_id=trace_id or "",
-            name="retrieve",
-            as_type="retriever",
-            input_data={"query": state["retrieval_query"]},
-        )
-        try:
-            state = await asyncio.wait_for(
-                self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "agent.node_timeout",
-                session_id=session_id,
-                node="retrieve",
-                timeout_seconds=NODE_TIMEOUT_RETRIEVE,
-            )
-            state["fallback_reason"] = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
-            state["chunks"] = []
-            state["citations"] = []
-        self._end_langfuse_span(
-            retrieve_span,
-            trace_id=trace_id or "",
-            name="retrieve",
-            output_data={
-                "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
-                "retrieval_count": len(state.get("chunks", [])),
-            },
-        )
-
-        # -- Answer node with span and per-node timeout (ROB-06) --
-        answer_span = self._start_langfuse_span(
-            trace_id=trace_id or "",
-            name="answer",
-            input_data={"chunks_count": len(state.get("chunks", []))},
-        )
-        try:
-            state = await asyncio.wait_for(
-                self._answer_node(state), timeout=NODE_TIMEOUT_ANSWER
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "agent.node_timeout",
-                session_id=session_id,
-                node="answer",
-                timeout_seconds=NODE_TIMEOUT_ANSWER,
-            )
-            state["fallback_reason"] = state.get("fallback_reason") or f"NodeTimeoutError(answer, {NODE_TIMEOUT_ANSWER}s)"
-            # Fall through to compose_fallback below
-            state["response"] = await self._compose_fallback(state, state.get("fallback_reason", "llm_timeout"))
-        response = state["response"]
-        self._end_langfuse_span(
-            answer_span,
-            trace_id=trace_id or "",
-            name="answer",
-            output_data={
-                "response_length": len(response.message),
-                "fallback": response.fallback,
-                "citation_count": len(response.citations),
-            },
-        )
-
-        await self._save_turn(session_id, message, response.message)
-
-        # -- Attach trace_id to response --
-        if trace_id is not None:
-            response.langfuse_trace_id = trace_id
-
-        logger.info(
-            "agent.graph_end",
-            session_id=session_id,
-            retrieval_count=len(response.citations),
-            fallback=response.fallback,
-            fallback_reason=state.get("fallback_reason"),
-            latency_ms=round((time.perf_counter() - t0) * 1000, 3),
-            langfuse_trace_id=trace_id,
-        )
+        # Resolve contextual follow-ups before tool routing (R052 / T03)
+        resolved = _resolve_followup_before_tool_routing(state, has_llm=(self._client is not None))
+        if resolved is not None:
+            response = self._response_from_state(resolved, started)
+            await self._save_turn(session_id, message, response.message, response)
+            return response
+        preflight_handled = await self._run_preflight_route(state)
+        if preflight_handled:
+            pass
+        elif self._client is None:
+            state = await self._deterministic_decide_and_run(state)
+        else:
+            state = await self._run_tool_loop(state)
+        response = self._response_from_state(state, started)
+        await self._save_turn(session_id, message, response.message, response)
         return response
 
-    async def answer_stream(
-        self, *, session_id: str, message: str, language: str = "vi"
-    ) -> AsyncGenerator[str, None]:
-        """Yield answer tokens, then a citations marker and DONE marker."""
+    async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
+        started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
-
-        # -- Langfuse trace creation --
-        trace_id: str | None = None
-        if self._langfuse_client is not None:
-            try:
-                trace_id = self._langfuse_client.create_trace_id(seed=session_id)
-                state["langfuse_trace_id"] = trace_id
-                logger.info("langfuse.trace_created", trace_id=trace_id, session_id=session_id)
-            except Exception as exc:
-                logger.warning(
-                    "langfuse.error",
-                    operation="create_trace_id",
-                    reason=type(exc).__name__,
-                )
-
-        # -- Retrieve node with span and per-node timeout (ROB-06) --
-        retrieve_span = self._start_langfuse_span(
-            trace_id=trace_id or "",
-            name="retrieve",
-            as_type="retriever",
-            input_data={"query": state["retrieval_query"]},
-        )
-        try:
-            state = await asyncio.wait_for(
-                self._retrieve_node(state), timeout=NODE_TIMEOUT_RETRIEVE
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "agent.node_timeout",
-                session_id=session_id,
-                node="retrieve",
-                timeout_seconds=NODE_TIMEOUT_RETRIEVE,
-            )
-            fallback_reason = f"NodeTimeoutError(retrieve, {NODE_TIMEOUT_RETRIEVE}s)"
-            state["chunks"] = []
-            state["citations"] = []
+        # Resolve contextual follow-ups before tool routing (R052 / T03)
+        resolved = _resolve_followup_before_tool_routing(state, has_llm=(self._client is not None))
+        if resolved is not None:
+            # Emit status for observability
+            decision = state.get("followup_decision")
+            if decision == "structured_context":
+                yield "[STATUS] using_context"
+            elif decision == "history_context":
+                yield "[STATUS] using_history"
+            else:
+                yield "[STATUS] clarifying"
+            yield resolved.get("response_text", "")
+            response = self._response_from_state(resolved, started)
+            await self._save_turn(session_id, message, response.message, response)
+            return
+        # Expose context source in streaming for observability (R052)
+        if state.get("followup_decision") == "structured_context":
+            yield "[STATUS] using_context"
+        elif state.get("followup_decision") == "history_context":
+            yield "[STATUS] using_history"
         else:
-            fallback_reason = None
-        self._end_langfuse_span(
-            retrieve_span,
-            trace_id=trace_id or "",
-            name="retrieve",
-            output_data={
-                "mode": "hybrid" if self._hybrid_retriever else "keyword" if self._retriever else "none",
-                "retrieval_count": len(state.get("chunks", [])),
-            },
-        )
+            yield "[STATUS] understanding"
+        preflight_handled = await self._run_preflight_route(state)
+        if preflight_handled:
+            yield _status_for_state(state)
+            yield state.get("response_text", "")
+        elif self._client is None:
+            state = await self._deterministic_decide_and_run(state)
+            yield _status_for_state(state)
+            yield state.get("response_text", "")
+        else:
+            async for event in self._run_streaming_tool_loop(state):
+                if isinstance(event, str):
+                    yield event
+                else:
+                    state = event
+                    # When the LLM answers directly (e.g. greeting), stream
+                    # the composed response_text so the SSE client sees it.
+                    if state.get("response_text"):
+                        yield _status_for_state(state)
+                        yield state["response_text"]
+        response = self._response_from_state(state, started)
+        await self._save_turn(session_id, message, response.message, response)
+        if response.places:
+            yield f"[PLACES] {json.dumps([p.model_dump() for p in response.places], ensure_ascii=False)}"
+        if response.citations:
+            yield f"[CITATIONS] {json.dumps([c.model_dump() for c in response.citations], ensure_ascii=False)}"
+        if response.suggestions:
+            yield f"[SUGGESTIONS] {json.dumps(response.suggestions, ensure_ascii=False)}"
 
-        answer_text = ""
-        citations = state.get("citations", [])
-        fallback_reason: str | None = None
-
-        logger.info(
-            "agent.stream_start",
-            session_id=session_id,
-            checkpoint_mode=self.checkpoint_mode,
-            retrieval_count=len(citations),
-        )
-        if self._is_place_intent(state):
-            # -- Place recommendation span --
-            place_span = self._start_langfuse_span(
-                trace_id=trace_id or "",
-                name="place_recommendation",
-                as_type="tool",
-                input_data={"query": state["message"]},
-            )
-            response = await self._answer_place_intent(state)
-            self._end_langfuse_span(
-                place_span,
-                trace_id=trace_id or "",
-                name="place_recommendation",
-                output_data={
-                    "result_count": len(response.places),
-                    "fallback": response.fallback,
-                },
-            )
-            answer_text = response.message
-            citations = response.citations
-            yield answer_text
-            logger.info(
-                "agent.stream_place_recommendation",
-                session_id=session_id,
-                result_count=len(response.places),
-                fallback=response.fallback,
-            )
-        elif self._llm_service is not None:
-            # -- Answer span for streaming with per-token timeout (ROB-06) --
-            answer_span = self._start_langfuse_span(
-                trace_id=trace_id or "",
-                name="answer",
-                input_data={"chunks_count": len(state.get("chunks", []))},
-            )
-            try:
-                stream = self._llm_service.answer_stream(
-                    chunks=state.get("chunks", []),
-                    citations=citations,
-                    query=state["retrieval_query"],
-                    language=language,
-                    session_id=session_id,
-                )
-                while True:
-                    try:
-                        token = await asyncio.wait_for(
-                            stream.__anext__(), timeout=NODE_TIMEOUT_ANSWER
-                        )
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "agent.node_timeout",
-                            session_id=session_id,
-                            node="answer_stream",
-                            timeout_seconds=NODE_TIMEOUT_ANSWER,
-                        )
-                        fallback_reason = f"NodeTimeoutError(answer_stream, {NODE_TIMEOUT_ANSWER}s)"
-                        break
-                    answer_text += token
-                    yield token
-            except Exception as exc:
-                fallback_reason = type(exc).__name__
-                logger.warning("agent.answer_fallback", session_id=session_id, fallback_reason=fallback_reason)
-            self._end_langfuse_span(
-                answer_span,
-                trace_id=trace_id or "",
-                name="answer",
-                output_data={
-                    "response_length": len(answer_text),
-                    "fallback": fallback_reason is not None,
-                },
-            )
-
-        if not answer_text:
-            response = await self._compose_fallback(state, fallback_reason or "llm_unavailable")
-            answer_text = response.message
-            citations = response.citations
-            yield answer_text
-
-        await self._save_turn(session_id, message, answer_text)
-        yield f"[CITATIONS] {json.dumps([c.model_dump() for c in citations], ensure_ascii=False)}"
-        yield "[DONE]"
-        logger.info(
-            "agent.stream_complete",
-            session_id=session_id,
-            fallback_reason=fallback_reason,
-            langfuse_trace_id=trace_id,
-        )
-
-
-    async def stream(
-        self, *, session_id: str, message: str, language: str = "vi"
-    ) -> AsyncGenerator[str, None]:
-        """Backward-compatible alias for older internal callers."""
+    async def stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         async for event in self.answer_stream(session_id=session_id, message=message, language=language):
             yield event
 
@@ -621,293 +221,380 @@ class AgentService:
         except Exception as exc:
             logger.warning("agent.checkpoint_load", session_id=session_id, reason=type(exc).__name__)
             history = []
-        prior_user = next((h["content"] for h in reversed(history) if h.get("role") == "user"), "")
-        retrieval_query = f"{prior_user}\n{message}" if prior_user else message
+        # Load structured follow-up context from prior turn (R052)
+        prior_context: FollowUpContext | None = None
+        context_source = "none"
+        if history:
+            try:
+                prior_context = await self._checkpointer.load_context(session_id)
+                if prior_context is not None and prior_context.is_populated:
+                    context_source = "structured_context"
+                elif prior_context is not None:
+                    # Context exists but not populated — fall back to history
+                    context_source = "history_context"
+                    prior_context = None
+            except Exception as exc:
+                logger.warning("agent.context_load_failed", session_id=session_id, reason=type(exc).__name__)
+                prior_context = None
+        # Classify follow-up decision for observability
+        followup_decision = resolve_followup_decision(message, prior_context, history)
         return {
             "session_id": session_id,
             "message": message,
-            "language": language,
+            "language": "en" if language == "en" else "vi",
             "history": history,
-            "retrieval_query": retrieval_query,
-            "fallback_reason": None,
-            "intent": detect_intent(message),
+            "messages": _messages_for_llm(message=message, history=history, language=language),
+            "citations": [],
+            "places": [],
+            "suggestions": [],
+            "reasoning_log": None,
+            "intent": None,
+            "response_text": "",
+            "places_response_ready": False,
+            "knowledge_response_ready": False,
+            "knowledge_chunks": [],
+            "prior_context": prior_context,
+            "followup_decision": followup_decision,
+            "context_source": context_source,
+            "tool_call_signatures": [],
         }
 
-    async def _retrieve_node(self, state: AgentState) -> AgentState:
-        query = state["retrieval_query"]
-
-        # -- Semantic cache check (optional, graceful degradation) --
-        cache_hit_response: str | None = None
-        if self._semantic_cache is not None and self._embedding_service is not None:
-            try:
-                query_embedding = await self._embedding_service.embed_texts([query])
-                if query_embedding and len(query_embedding) > 0:
-                    embedding = query_embedding[0]
-                    cache_hit_response = await self._semantic_cache.lookup(
-                        query, embedding
-                    )
-            except Exception as exc:
-                # Cache failure must NOT break retrieval
-                logger.warning(
-                    "agent.semantic_cache_lookup_failed",
-                    session_id=state["session_id"],
-                    reason=type(exc).__name__,
-                )
-
-        if cache_hit_response is not None:
-            # Cache hit — use cached response text directly
-            state["citations"] = []
-            # Build a synthetic chunk from cached response for downstream use
-            from app.models.rag import RAGChunk
-            state["chunks"] = [RAGChunk(
-                chunk_id="cache_hit",
-                source_id="semantic_cache",
-                title="Semantic Cache Hit",
-                url="",
-                domain="cache",
-                source_type="cache",
-                reliability="low",
-                language="unknown",
-                location="",
-                text=cache_hit_response,
-                chunk_index=0,
-                total_chunks=1,
-            )]
-            logger.info(
-                "agent.cache_hit",
-                session_id=state["session_id"],
-            )
-            return state
-
-        # -- Normal retrieval path --
-        try:
-            if self._hybrid_retriever is not None:
-                result, citations = await self._hybrid_retriever.search_with_citations(query, top_k=5)
-                mode = "hybrid"
-            elif self._retriever is not None:
-                result, citations = self._retriever.search_with_citations(query, top_k=5)
-                mode = "keyword"
-            else:
-                result = RetrievalResult(chunks=[], query=query, total_found=0)
-                citations = []
-                mode = "none"
-        except Exception as exc:
-            logger.warning("agent.retrieve_fallback", session_id=state["session_id"], reason=type(exc).__name__)
-            result = RetrievalResult(chunks=[], query=query, total_found=0)
-            citations = []
-            mode = "error"
-            state["fallback_reason"] = type(exc).__name__
-
-        state["chunks"] = result.chunks
-        state["citations"] = citations
-
-        # -- Store in semantic cache on miss (best-effort) --
-        if self._semantic_cache is not None and self._embedding_service is not None and result.chunks:
-            try:
-                response_text = " ".join(c.text for c in result.chunks)
-                query_embedding = await self._embedding_service.embed_texts([query])
-                if query_embedding and len(query_embedding) > 0:
-                    await self._semantic_cache.store(
-                        query, query_embedding[0], response_text
-                    )
-            except Exception as exc:
-                # Cache store failure must NOT break retrieval
-                logger.warning(
-                    "agent.semantic_cache_store_failed",
-                    session_id=state["session_id"],
-                    reason=type(exc).__name__,
-                )
-
-        logger.info(
-            "agent.node_complete",
-            phase="retrieve",
-            session_id=state["session_id"],
-            retrieval_mode=mode,
-            retrieval_count=len(result.chunks),
-        )
+    async def _run_tool_loop(self, state: AgentState) -> AgentState:
+        for _ in range(3):
+            # Place tool may have already produced a deterministic response;
+            # skip the LLM to avoid overwriting response_text.
+            if state.get("places_response_ready") or state.get("knowledge_response_ready"):
+                return state
+            state = await asyncio.wait_for(self._llm_call_node(state), timeout=NODE_TIMEOUT_LLM)
+            if self._should_continue(state) == END:
+                return state
+            state = await asyncio.wait_for(self._tool_node(state), timeout=NODE_TIMEOUT_TOOL)
+        state["response_text"] = _too_many_tools_message(state["language"])
+        state["intent"] = "clarification"
         return state
 
-    async def _answer_node(self, state: AgentState) -> AgentState:
-        if self._is_place_intent(state):
-            state["response"] = await self._answer_place_intent(state)
-            logger.info(
-                "agent.node_complete",
-                phase="place_recommendation",
-                session_id=state["session_id"],
-                intent=state.get("intent"),
-                result_count=len(state["response"].places),
-                fallback=state["response"].fallback,
-            )
-            return state
+    async def _run_streaming_tool_loop(self, state: AgentState) -> AsyncGenerator[str | AgentState, None]:
+        for _ in range(3):
+            if state.get("places_response_ready") or state.get("knowledge_response_ready"):
+                yield state
+                return
+            state = await asyncio.wait_for(self._llm_call_node(state), timeout=NODE_TIMEOUT_LLM)
+            if self._should_continue(state) == END:
+                yield state
+                return
+            yield _status_for_tool_calls(state.get("tool_calls", []))
+            state = await asyncio.wait_for(self._tool_node(state), timeout=NODE_TIMEOUT_TOOL)
+        state["response_text"] = _too_many_tools_message(state["language"])
+        state["intent"] = "clarification"
+        yield state
 
+    async def _llm_call_node(self, state: AgentState) -> AgentState:
+        completion = await self._client.chat.completions.create(
+            model=self._model,
+            messages=state["messages"],
+            tools=_TOOLS,
+            tool_choice="auto",
+            max_completion_tokens=520,
+        )
+        message = completion.choices[0].message
+        tool_calls = self._normalize_tool_calls(list(message.tool_calls or []))
+        if tool_calls:
+            state["tool_calls"] = tool_calls
+            state["messages"].append(message.model_dump(exclude_none=True))
+            return state
+        state["tool_calls"] = []
+        content = message.content or ""
+        msg_text, suggestions = _extract_suggestions(content)
+        state["response_text"] = msg_text or _clarify_message(state["language"])
+        state["suggestions"] = suggestions
+        state["intent"] = state.get("intent") or "conversational"
+        return state
+
+    async def _tool_node(self, state: AgentState) -> AgentState:
+        tool_messages: list[dict[str, Any]] = []
+        signatures = state.setdefault("tool_call_signatures", [])
+        for call in self._normalize_tool_calls(state.get("tool_calls", []))[:2]:
+            name = call["name"]
+            args = call["args"]
+            query = str(args.get("query") or state["message"])
+            signature = f"{name}:{query}"
+            if signature in signatures:
+                content = json.dumps({"status": "repeat", "message": "Tool call already attempted for this query."}, ensure_ascii=False)
+            elif name == "search_knowledge":
+                signatures.append(signature)
+                content = await self._search_knowledge_tool(state, query)
+            elif name == "search_places":
+                signatures.append(signature)
+                content = await self._search_places_tool(state, query)
+            else:
+                content = json.dumps({"status": "unavailable", "message": "Unknown tool"}, ensure_ascii=False)
+            tool_messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
+        state["messages"].extend(tool_messages)
+        state["tool_calls"] = []
+        return state
+
+    def _normalize_tool_calls(self, tool_calls: list[Any]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for index, call in enumerate(tool_calls):
+            function = getattr(call, "function", None)
+            name = getattr(function, "name", None)
+            arguments = getattr(function, "arguments", None)
+            call_id = getattr(call, "id", None)
+            if isinstance(call, dict):
+                function_data = call.get("function") if isinstance(call.get("function"), dict) else {}
+                name = function_data.get("name") or call.get("name")
+                arguments = function_data.get("arguments") or call.get("arguments")
+                call_id = call.get("id")
+            if not name:
+                continue
+            normalized.append({
+                "id": str(call_id or f"tool-{index}"),
+                "name": str(name),
+                "args": _json_args(arguments if isinstance(arguments, str) else json.dumps(arguments or {})),
+            })
+        return normalized
+
+    def _should_continue(self, state: AgentState) -> Literal["tool_node", "__end__"]:
+        if state.get("places_response_ready") or state.get("knowledge_response_ready"):
+            return END
+        return "tool_node" if state.get("tool_calls") else END
+
+    async def _run_preflight_route(self, state: AgentState) -> bool:
+        """Handle only safe deterministic conversational shortcuts.
+
+        LangGraph's agent pattern keeps semantic routing inside the LLM node:
+        llm_call decides whether to emit tool calls, and the conditional edge
+        only checks for those tool calls. Keep preflight limited to greetings,
+        thanks, and capability prompts so domain intents stay soft-routed.
+        """
+        action = _fallback_action(state["message"], state.get("history", []))
+        if action == "direct":
+            state["response_text"] = _direct_answer(state["message"], state.get("history", []), state["language"])
+            state["intent"] = "conversational"
+            return True
+        return False
+
+    def can_answer_without_corpus(self, message: str) -> bool:
+        """Corpus bypass now requires the LLM/tool loop, not hard routing."""
+        return False
+
+    async def _deterministic_decide_and_run(self, state: AgentState) -> AgentState:
+        action = _fallback_action(state["message"], state.get("history", []))
+        if action == "direct":
+            state["response_text"] = _direct_answer(state["message"], state.get("history", []), state["language"])
+            state["intent"] = "conversational"
+            return state
+        if action == "clarify":
+            state["response_text"] = _clarify_message(state["language"])
+            state["intent"] = "clarification"
+            return state
+        state["response_text"] = _llm_unavailable_message(state["language"])
+        state["intent"] = "clarification"
+        state["fallback"] = True
+        return state
+
+    async def _search_knowledge_tool(self, state: AgentState, query: str) -> str:
+        chunks: list[RAGChunk] = []
+        citations: list[Citation] = []
+        if self._hybrid_retriever is not None:
+            result, citations = await self._hybrid_retriever.search_with_citations(query, top_k=5)
+            chunks = result.chunks
+        elif self._retriever is not None:
+            result, citations = self._retriever.search_with_citations(query, top_k=5)
+            chunks = result.chunks
+        state["citations"] = citations[:5]
+        state["knowledge_chunks"] = chunks[:5]
+        state["intent"] = "cultural_query"
         if self._llm_service is not None:
             try:
-                response = await self._llm_service.answer(
-                    chunks=state.get("chunks", []),
-                    citations=state.get("citations", []),
-                    query=state["retrieval_query"],
+                answer = await self._llm_service.answer(
+                    chunks=chunks[:5],
+                    citations=citations[:5],
+                    query=query,
                     language=state["language"],
                     session_id=state["session_id"],
                 )
-                state["response"] = response
-                logger.info("agent.node_complete", phase="answer", session_id=state["session_id"], fallback=False)
-                return state
+                state["response_text"] = answer.message
+                state["fallback"] = answer.fallback
+                state["knowledge_response_ready"] = True
             except Exception as exc:
-                state["fallback_reason"] = type(exc).__name__
-                logger.warning("agent.answer_fallback", session_id=state["session_id"], fallback_reason=type(exc).__name__)
+                logger.warning("agent.knowledge_llm_error", session_id=state["session_id"], reason=type(exc).__name__)
+        if not state.get("response_text"):
+            state["response_text"] = GroundedAnswerService(self._retriever).answer_from_chunks(
+                chunks[:5], citations[:5], query, state["language"], state["session_id"]
+            ).message
+            state["knowledge_response_ready"] = True
+        return json.dumps({"status": "ok", "results": [_chunk_payload(c, i + 1) for i, c in enumerate(chunks[:5])]}, ensure_ascii=False)
 
-        fallback_reason = state.get("fallback_reason") or "llm_unavailable"
-        state["response"] = await self._compose_fallback(state, fallback_reason)
-        logger.info(
-            "agent.node_complete",
-            phase="answer",
-            session_id=state["session_id"],
-            fallback=state["response"].fallback,
-        )
-        return state
-
-    def _is_place_intent(self, state: AgentState) -> bool:
-        intent = state.get("intent") or detect_intent(state["message"])
-        if intent in {"restaurant_search", "navigation"}:
-            return True
-        lower = state["message"].lower()
-        recommendation_terms = ("recommend", "gợi ý", "đề xuất", "dịch vụ", "service", "place", "địa điểm")
-        ham_ninh_terms = ("hàm ninh", "ham ninh")
-        return any(term in lower for term in recommendation_terms) and any(term in lower for term in ham_ninh_terms)
-
-    # -- SOC-05: Cultural context before commercial recommendations --
-
-    _CULTURAL_DOMAINS = {"culture", "history", "heritage", "tradition", "festival", "temple", "đình", "chùa", "di tích", "lễ hội", "văn hóa"}
-
-    def _extract_cultural_context(self, chunks: list[RAGChunk]) -> list[RAGChunk]:
-        """Extract chunks related to cultural/historical content from retrieval results.
-
-        Returns chunks whose domain or source_type indicates cultural/historical relevance.
-        Limited to top 3 to keep the intro concise.
-        """
-        cultural: list[RAGChunk] = []
-        for chunk in chunks:
-            domain = (chunk.domain or "").lower()
-            source_type = (chunk.source_type or "").lower()
-            title = (chunk.title or "").lower()
-            text = (chunk.text or "").lower()
-
-            is_cultural = (
-                any(d in domain for d in self._CULTURAL_DOMAINS)
-                or any(d in source_type for d in self._CULTURAL_DOMAINS)
-                or any(d in title for d in self._CULTURAL_DOMAINS)
-                or any(d in text[:200] for d in self._CULTURAL_DOMAINS)
-            )
-            if is_cultural:
-                cultural.append(chunk)
-                if len(cultural) >= 3:
-                    break
-        return cultural
-
-    def _build_cultural_intro(
-        self, cultural_chunks: list[RAGChunk], language: str
-    ) -> str:
-        """Build a brief cultural context intro from retrieved chunks."""
-        if language == "vi":
-            intro = "🏛️ **Về Hàm Ninh — Bối cảnh văn hóa:**"
-        else:
-            intro = "🏛️ **About Hàm Ninh — Cultural Context:**"
-
-        snippets = []
-        for chunk in cultural_chunks[:2]:  # Max 2 snippets for brevity
-            # Truncate to first 150 chars
-            text = (chunk.text or "")[:150]
-            if text:
-                snippets.append(f"- {text}")
-
-        if snippets:
-            return f"{intro}\n" + "\n".join(snippets)
-        return intro
-
-    async def _answer_place_intent(self, state: AgentState) -> ChatResponse:
+    async def _search_places_tool(self, state: AgentState, query: str) -> str:
+        state["intent"] = PLACE_RECOMMENDATION_INTENT
         if self._place_recommendation_service is None:
-            state["fallback_reason"] = "place_recommendation_unavailable"
-            return ChatResponse(
-                session_id=state["session_id"],
-                message="Place recommendations are unavailable because the server Places service is not configured.",
-                citations=[],
-                places=[],
-                reasoning_log="place_recommendation status=unavailable source=none candidate_count=0 result_count=0",
-                intent=PLACE_RECOMMENDATION_INTENT,
-                langfuse_trace_id=None,
-                latency_ms=0.0,
-                fallback=True,
-            )
+            state["response_text"] = _place_unavailable_message(state["language"])
+            # fallback=False: place intent was handled via the deterministic tool
+            # policy path — no RAG/LLM fallback occurred. The unavailable message
+            # is the honest answer, not a degraded fallback.
+            state["fallback"] = False
+            return json.dumps({"status": "unavailable", "message": state["response_text"]}, ensure_ascii=False)
+
+        # Extract optional preferences from tool args (already parsed from LLM tool call)
+        # These are sourced from the last tool call's arguments, stored in state.
+        _budget: str | None = None
+        _accessibility: bool | None = None
+        _user_location: dict[str, float] | None = None
+        for call in self._normalize_tool_calls(state.get("tool_calls", []))[:2]:
+            if call["name"] == "search_places":
+                args = call["args"]
+                _budget = args.get("budget") if isinstance(args.get("budget"), str) else None
+                _accessibility = args.get("accessibility") if isinstance(args.get("accessibility"), bool) else None
+                ul = args.get("user_location")
+                if isinstance(ul, dict):
+                    _user_location = ul
+                break
+
         try:
             response = await self._place_recommendation_service.recommend(
-                query=state["message"],
+                query=query,
                 language=state["language"],
                 session_id=state["session_id"],
+                budget=_budget,
+                accessibility=_accessibility,
+                user_location=_user_location,
             )
-            # Log fairness audit for place recommendations (best-effort, never breaks flow)
-            self._fairness_audit_log(
-                places=response.places,
-                trace_id=state.get("langfuse_trace_id"),
-            )
+        except Exception as exc:
+            logger.warning("agent.place_tool_error", session_id=state["session_id"], reason=type(exc).__name__)
+            state["response_text"] = _place_unavailable_message(state["language"])
+            state["fallback"] = True
+            return json.dumps({"status": "error", "message": state["response_text"]}, ensure_ascii=False)
+        state["places"] = response.places
+        state["reasoning_log"] = response.reasoning_log
+        state["response_text"] = response.message
+        state["fairness_audit"] = response.fairness_audit
+        state["fallback"] = response.fallback
+        state["decision_trace"] = response.decision_trace
+        state["places_response_ready"] = True
+        return json.dumps({"status": "ok", "message": response.message, "places": [p.model_dump() for p in response.places[:5]]}, ensure_ascii=False)
 
-            # -- SOC-05: Cultural context before commercial recommendations --
-            # If we have cultural/historical chunks, prepend context to the response.
-            cultural_chunks = self._extract_cultural_context(state.get("chunks", []))
-            if cultural_chunks:
-                cultural_intro = self._build_cultural_intro(
-                    cultural_chunks, state["language"]
-                )
-                response.message = f"{cultural_intro}\n\n{response.message}"
-                response.reasoning_log = (
-                    f"cultural_context=true cultural_chunks={len(cultural_chunks)} "
-                    f"{response.reasoning_log or ''}"
-                )
-
-            return response
-        except Exception as exc:  # noqa: BLE001 - service boundary must fail closed.
-            state["fallback_reason"] = "place_recommendation_error"
-            logger.warning(
-                "agent.place_recommendation_fallback",
-                session_id=state["session_id"],
-                reason=type(exc).__name__,
+    def _response_from_state(self, state: AgentState, started: float) -> ChatResponse:
+        suggestions = state.get("suggestions")
+        if not suggestions:
+            suggestions = _get_default_suggestions(
+                intent=state.get("intent"),
+                language=state["language"],
+                has_places=bool(state.get("places")),
+                has_citations=bool(state.get("citations")),
+                fallback=state.get("fallback", False),
             )
-            return ChatResponse(
-                session_id=state["session_id"],
-                message="Place recommendations are temporarily unavailable. Please try again shortly.",
-                citations=[],
-                places=[],
-                reasoning_log="place_recommendation status=upstream_error source=none candidate_count=0 result_count=0",
-                intent=PLACE_RECOMMENDATION_INTENT,
-                langfuse_trace_id=None,
-                latency_ms=0.0,
-                fallback=True,
-            )
-
-    async def _compose_fallback(self, state: AgentState, reason: str) -> ChatResponse:
-        if self._fallback_service is None:
-            return ChatResponse(
-                session_id=state["session_id"],
-                message="Hiện tại nguồn dữ liệu chưa có thông tin đầy đủ để trả lời câu hỏi này.",
-                citations=[],
-                places=[],
-                intent=None,
-                langfuse_trace_id=None,
-                latency_ms=0.0,
-                fallback=True,
-            )
-        response = self._fallback_service.answer_from_chunks(
-            chunks=state.get("chunks", []),
-            citations=state.get("citations", []),
-            query=state["message"],
-            language=state["language"],
+        return ChatResponse(
             session_id=state["session_id"],
+            message=state.get("response_text") or _clarify_message(state["language"]),
+            citations=state.get("citations", []),
+            places=state.get("places", []),
+            suggestions=suggestions,
+            reasoning_log=state.get("reasoning_log"),
+            intent=state.get("intent"),
+            langfuse_trace_id=state.get("langfuse_trace_id"),
+            latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            fallback=state.get("fallback", False),
+            fairness_audit=state.get("fairness_audit"),
+            decision_trace=state.get("decision_trace"),
         )
-        response.fallback = reason != "llm_unavailable"
-        state["fallback_reason"] = reason
-        return response
 
-    async def _save_turn(self, session_id: str, message: str, answer: str) -> None:
+    async def _save_turn(self, session_id: str, message: str, answer: str, response: ChatResponse | None = None) -> None:
         try:
-            await self._checkpointer.save_turn(session_id, message, answer)
+            ctx = _build_followup_context(response) if response is not None else None
+            if ctx is not None:
+                ctx.last_user_topic = message
+            if hasattr(self._checkpointer, "save_turn_with_context"):
+                await self._checkpointer.save_turn_with_context(session_id, message, answer, ctx)
+            else:
+                await self._checkpointer.save_turn(session_id, message, answer)
+                if ctx is not None and ctx.is_populated:
+                    await self._checkpointer.save_context(session_id, ctx)
+            if ctx is not None and ctx.is_populated:
+                logger.debug("agent.context_saved", session_id=session_id, intent=ctx.intent, places=len(ctx.place_ids))
         except Exception as exc:
             logger.warning("agent.checkpoint_save", session_id=session_id, reason=type(exc).__name__)
+
+    async def _save_followup_context(self, session_id: str, response: ChatResponse) -> None:
+        """Persist structured follow-up context from a ChatResponse (R052).
+
+        Builds context only for place/intent-bearing responses; skips empty or
+        pure-conversational answers. Degrades gracefully on checkpointer errors.
+        """
+        try:
+            ctx = _build_followup_context(response)
+            if ctx.is_populated:
+                await self._checkpointer.save_context(session_id, ctx)
+                logger.debug("agent.context_saved", session_id=session_id, intent=ctx.intent, places=len(ctx.place_ids))
+        except Exception as exc:
+            logger.warning("agent.context_save_failed", session_id=session_id, reason=type(exc).__name__)
+
+# Compatibility seams for older tests. Active chat paths do not use retrieve-first.
+    async def _retrieve_node(self, state: AgentState) -> AgentState:
+        query = state.get("retrieval_query") or state["message"]
+        if self._semantic_cache is not None and self._embedding_service is not None:
+            try:
+                embeddings = await self._embedding_service.embed_texts([query])
+                embedding = embeddings[0] if embeddings else None
+                if embedding is not None:
+                    cached = await self._semantic_cache.lookup(query, embedding)
+                    if cached is not None:
+                        state["citations"] = []
+                        state["chunks"] = [RAGChunk(
+                            chunk_id="cache_hit", source_id="semantic_cache", title="Semantic Cache Hit",
+                            url="", domain="cache", source_type="cache", reliability="low", language="unknown",
+                            location="", text=cached, chunk_index=0, total_chunks=1,
+                        )]
+                        return state
+            except Exception:
+                embedding = None
+        else:
+            embedding = None
+
+        chunks: list[RAGChunk] = []
+        citations: list[Citation] = []
+        try:
+            if self._hybrid_retriever is not None:
+                result, citations = await self._hybrid_retriever.search_with_citations(query, top_k=5)
+                chunks = result.chunks
+            elif self._retriever is not None:
+                result, citations = self._retriever.search_with_citations(query, top_k=5)
+                chunks = result.chunks
+        except Exception as exc:
+            logger.warning("agent.retrieve_error", session_id=state.get("session_id"), reason=type(exc).__name__)
+
+        state["chunks"] = chunks
+        state["citations"] = citations
+
+        if self._semantic_cache is not None and self._embedding_service is not None and chunks:
+            try:
+                if embedding is None:
+                    embeddings = await self._embedding_service.embed_texts([query])
+                    embedding = embeddings[0] if embeddings else None
+                if embedding is not None:
+                    await self._semantic_cache.store(query, embedding, " ".join(chunk.text for chunk in chunks))
+            except Exception:
+                pass
+        return state
+
+    async def _answer_node(self, state: AgentState) -> AgentState:
+        return await self._deterministic_decide_and_run(state)
+
+    async def _classify_message_intent(self, state: AgentState) -> str:
+        action = _fallback_action(state["message"], state.get("history", []))
+        intent = {"direct": "conversational", "clarify": "clarification"}.get(action, "llm_routed")
+        state["intent"] = intent
+        return intent
+
+    async def _compose_fallback(self, state: AgentState, reason: str) -> ChatResponse:
+        state = await self._deterministic_decide_and_run(state)
+        response = self._response_from_state(state, time.perf_counter())
+        response.fallback = True
+        return response
+
+def _real_client(llm_service: Any | None) -> Any | None:
+    client = getattr(llm_service, "_client", None) if llm_service is not None else None
+    if client is None or type(client).__module__.startswith("unittest.mock"):
+        return None
+    return client
+

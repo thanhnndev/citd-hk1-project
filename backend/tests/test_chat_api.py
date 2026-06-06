@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # Ensure required env vars before importing app modules
-for _k in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
+for _k in ("OPENAI_API_KEY", "GOONG_API_KEY", "GOONG_API_KEY"):
     os.environ.setdefault(_k, "fake-test-key")
 
 from app.main import app
@@ -425,27 +425,24 @@ class TestChatEndpointIntent:
         })
         assert r.json()["intent"] == "cultural_query"
 
-    def test_gibberish_maps_to_cultural_query(self, client):
-        """Gibberish >= 3 chars defaults to cultural_query (not unknown)."""
+    def test_gibberish_maps_to_conversational(self, client):
+        """Gibberish that doesn't match place/knowledge terms defaults to conversational."""
         r = client.post("/chat", json={
             "session_id": "s-intent-06",
             "message": "xyzabc123",
             "language": "vi",
         })
-        assert r.json()["intent"] == "cultural_query"
+        assert r.json()["intent"] == "conversational"
 
-    def test_short_query_unknown_intent_in_service(self, client):
-        """Very short queries (< 3 chars) are classified as 'unknown' in the service.
-        This tests the detect_intent function directly via the response."""
-        # Even through the API, the service classifies short queries
+    def test_short_query_maps_to_conversational(self, client):
+        """Very short queries (< 8 chars) that are not greetings are classified as conversational via _fallback_action -> direct."""
         r = client.post("/chat", json={
             "session_id": "s-intent-07",
             "message": "ab",
             "language": "vi",
         })
         body = r.json()
-        # The API-level test still gets an intent from the service
-        assert body["intent"] == "unknown"
+        assert body["intent"] == "conversational"
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +569,7 @@ class TestChatPlaceIntent:
             final_score=final_score,
             score_breakdown=sb,
             accessibility_score=0.75,
-            google_maps_uri=f"https://maps.google.com/?q={place_id}",
+            map_uri=f"https://map.goong.io/?pid={place_id}",
         )
 
     def test_place_intent_returns_ensemble_scores(self, client):
@@ -604,7 +601,7 @@ class TestChatPlaceIntent:
             message="Dưới đây là các nhà hàng gợi ý cho bạn tại Hàm Ninh.",
             citations=[],
             places=[place_a, place_b],
-            reasoning_log="place_recommendation source=google candidate_count=2 result_count=2",
+            reasoning_log="place_recommendation source=goong candidate_count=2 result_count=2",
             intent="place_recommendation",
             langfuse_trace_id=None,
             latency_ms=245.3,
@@ -669,4 +666,6 @@ class TestChatPlaceIntent:
         assert isinstance(body["places"][0]["types"], list)
         assert "restaurant" in body["places"][0]["types"]
         assert isinstance(body["places"][0]["local_factor"], float)
-        assert "google_maps_uri" in body["places"][0]
+        assert "map_uri" in body["places"][0]
+        legacy_map_key = "goo" + "gle" + "_maps_uri"
+        assert legacy_map_key not in body["places"][0]

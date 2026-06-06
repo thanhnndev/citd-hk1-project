@@ -202,6 +202,24 @@ class TestQdrantServiceHybridMethods:
         assert call_kwargs["with_payload"] is True
         assert points == [fake_point]
 
+    @pytest.mark.asyncio
+    async def test_dense_search_uses_named_dense_vector(self) -> None:
+        """dense_search must specify the named dense vector for hybrid collections."""
+        svc = _make_service()
+
+        fake_response = MagicMock()
+        fake_response.points = []
+        svc._client.query_points = AsyncMock(return_value=fake_response)
+
+        dense_vec = [0.1] * 1536
+
+        points = await svc.dense_search(dense_vec, top_k=4)
+
+        call_kwargs = svc._client.query_points.call_args.kwargs
+        assert call_kwargs["using"] == DENSE_VECTOR_NAME
+        assert call_kwargs["query"] == dense_vec
+        assert points == []
+
 
 # ---------------------------------------------------------------------------
 # TestHybridRetriever

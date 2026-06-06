@@ -33,10 +33,15 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
 
-    # ── Google APIs ─────────────────────────────────────────────
-    # Optional: blank values let Places/Routes services fail honestly at runtime.
+    # ── Google Places API (New) ─────────────────────────────────
+    # Required for place search (text/nearby) and details.
+    # Get from Google Cloud Console: https://console.cloud.google.com/apis/api/places.googleapis.com
     GOOGLE_PLACES_API_KEY: str = ""
-    GOOGLE_ROUTES_API_KEY: str = ""
+
+    # ── Goong Maps (Distance Matrix + Map Tiles) ────────────────
+    # Distance Matrix used by backend for route enrichment (optional).
+    # Map tiles key is browser-safe, exposed via NEXT_PUBLIC_GOONG_MAPTILES_KEY.
+    GOONG_API_KEY: str = ""
 
     # ── Langfuse ────────────────────────────────────────────────
     LANGFUSE_PUBLIC_KEY: str = ""
@@ -65,6 +70,7 @@ class Settings(BaseSettings):
     # ── Rate Limiting ───────────────────────────────────────────
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "20/minute"
+    REDIS_URL: str = "redis://redis:6379/0"
 
     # ── Server ──────────────────────────────────────────────────
     APP_ENV: str = "development"
@@ -82,8 +88,8 @@ class Settings(BaseSettings):
 
     @cached_property
     def redis_url(self) -> str:
-        """Build Redis URL."""
-        return "redis://redis:6379/0"
+        """Return the configured Redis URL for rate limiting and health checks."""
+        return self.REDIS_URL
 
     @cached_property
     def qdrant_url(self) -> str:

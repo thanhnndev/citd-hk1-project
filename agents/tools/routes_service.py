@@ -1,4 +1,4 @@
-"""Google Routes API (New) client with circuit breaker and candidate enrichment."""
+"""Goong Distance Matrix client with circuit breaker and candidate enrichment."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from app.models.request import LatLng
 
 logger = logging.getLogger(__name__)
 
-ROUTES_BASE_URL = "https://routes.googleapis.com"
-COMPUTE_ROUTE_MATRIX_PATH = "/directions/v2:computeRouteMatrix"
+ROUTES_BASE_URL = "https://rsapi.goong.io"
+DISTANCE_MATRIX_PATH = "/v2/distancematrix"
 
 # ── Circuit breaker thresholds ─────────────────────────────────
 FAILURE_WINDOW_SECONDS = 60   # Look-back window for counting failures
@@ -27,29 +27,27 @@ COOLDOWN_SECONDS = 300        # How long to stay open before trying again (5 min
 class RoutesHttpClient(Protocol):
     """Minimal async HTTP seam so tests and agents can substitute a mock client."""
 
-    async def post(
+    async def get(
         self,
         path: str,
         *,
-        json: Mapping[str, Any],
-        headers: Mapping[str, str],
+        params: Mapping[str, Any],
     ) -> Any: ...
 
 
 class HttpxRoutesClient:
-    """Thin httpx-backed client for Google Routes API (New)."""
+    """Thin httpx-backed client for Goong Distance Matrix API."""
 
     def __init__(self, *, base_url: str = ROUTES_BASE_URL, timeout: float = 10.0) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
 
-    async def post(
+    async def get(
         self,
         path: str,
         *,
-        json: Mapping[str, Any],
-        headers: Mapping[str, str],
+        params: Mapping[str, Any],
     ) -> httpx.Response:
-        return await self._client.post(path, json=json, headers=headers)
+        return await self._client.get(path, params=params)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -123,12 +121,12 @@ class CircuitBreaker:
         self._failures = [ts for ts in self._failures if ts > cutoff]
 
 
-class GoogleRoutesService:
+class GoongRoutesService:
     """Server-side Routes service for computing real driving distances.
 
     Usage::
 
-        service = GoogleRoutesService()
+        service = GoongRoutesService()
         results = await service.computeRouteMatrix(origin, destinations)
         candidates = await service.enrich_candidates(candidates, origin)
     """
@@ -159,7 +157,7 @@ class GoogleRoutesService:
     ) -> list[dict[str, Any]]:
         """Compute driving distances and durations from one origin to many destinations.
 
-        POSTs to ``https://routes.googleapis.com/directions/v2:computeRouteMatrix``.
+        GETs ``https://rsapi.goong.io/v2/distancematrix`` with sanitized query params.
 
         Returns a list of result dicts (one per destination, in request order).
         Each dict contains keys from the field mask:
@@ -186,41 +184,32 @@ class GoogleRoutesService:
             )
             return []
 
-        # 3. Build request
-        body = {
-            "origins": [
-                {
-                    "location": {
-                        "latLng": {"latitude": origin.lat, "longitude": origin.lng}
-                    }
-                }
-            ],
-            "destinations": [
-                {
-                    "location": {
-                        "latLng": {"lat": d.lat, "longitude": d.lng}
-                    }
-                }
-                for d in destinations
-            ],
-            "travelMode": "DRIVE",
-            "routingPreference": "TRAFFIC_UNAWARE",
-        }
+        if not destinations:
+            return []
 
-        headers = {
-            "X-Goog-Api-Key": api_key,
-            "X-Goog-FieldMask": "distanceMeters,durationSeconds,condition,status,destinationIndex",
-            "Content-Type": "application/json",
+        # 3. Build request
+        params = {
+            "origins": _format_lat_lng(origin),
+            "destinations": "|".join(_format_lat_lng(destination) for destination in destinations),
+            "vehicle": "car",
+            "api_key": api_key,
         }
 
         # 4. Execute
         try:
-            response = await self._client.post(
-                COMPUTE_ROUTE_MATRIX_PATH, json=body, headers=headers
+            response = await self._client.get(
+                DISTANCE_MATRIX_PATH, params=params
             )
         except httpx.TimeoutException:
             logger.warning(
                 "route_timeout",
+                extra={"origin": (origin.lat, origin.lng), "destination_count": len(destinations)},
+            )
+            self._circuit_breaker.record_failure()
+            return []
+        except httpx.RequestError:
+            logger.warning(
+                "route_transport_error",
                 extra={"origin": (origin.lat, origin.lng), "destination_count": len(destinations)},
             )
             self._circuit_breaker.record_failure()
@@ -267,12 +256,8 @@ class GoogleRoutesService:
             self._circuit_breaker.record_failure()
             return []
 
-        results = (
-            payload if isinstance(payload, list) else payload.get("originIndex", [])
-            if isinstance(payload, dict) else []
-        )
-
-        if not isinstance(results, list):
+        results = _normalize_goong_matrix(payload)
+        if results is None:
             logger.warning("route_unexpected_response_shape")
             self._circuit_breaker.record_failure()
             return []
@@ -351,5 +336,42 @@ class GoogleRoutesService:
     # -- Internals --------------------------------------------------
 
     def _get_api_key(self) -> str | None:
-        key = self._settings.GOOGLE_ROUTES_API_KEY.strip()
+        key = self._settings.GOONG_API_KEY.strip()
         return key if key else None
+
+
+def _format_lat_lng(location: LatLng) -> str:
+    return f"{location.lat},{location.lng}"
+
+
+def _normalize_goong_matrix(payload: object) -> list[dict[str, Any]] | None:
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return None
+    first_row = rows[0]
+    if not isinstance(first_row, dict):
+        return None
+    elements = first_row.get("elements")
+    if not isinstance(elements, list):
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for index, element in enumerate(elements):
+        if not isinstance(element, dict):
+            return None
+        status = element.get("status") or "OK"
+        result: dict[str, Any] = {"destinationIndex": index, "status": status}
+        distance = element.get("distance")
+        if isinstance(distance, dict) and isinstance(distance.get("value"), (int, float)):
+            result["distanceMeters"] = int(distance["value"])
+        duration = element.get("duration")
+        if isinstance(duration, dict) and isinstance(duration.get("value"), (int, float)):
+            result["durationSeconds"] = int(duration["value"])
+        normalized.append(result)
+    return normalized
+
+
+# Temporary compatibility alias; S05 owns final zero-Google cleanup.
+GoongRoutesService = GoongRoutesService

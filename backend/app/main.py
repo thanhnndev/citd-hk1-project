@@ -39,12 +39,34 @@ from agents.tools.embedding_service import EmbeddingService
 from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from agents.services.llm_answer_service import LLMAnswerService
 from agents.services.place_recommendation_service import PlaceRecommendationService
-from agents.tools.places_service import GooglePlacesService
-from agents.tools.routes_service import GoogleRoutesService
+from agents.tools.places_service import GooglePlacesService, GoongPlacesService, DualPlacesService
+from agents.tools.routes_service import GoongRoutesService
+from agents.tools.place_cache import PlaceCache
 from agents.tools.qdrant_service import QdrantService
 from agents.tools.retriever import Retriever
 
 logger = get_logger(__name__)
+
+
+# ── Place cache factory ─────────────────────────────────────────────────
+
+async def _create_place_cache(dsn: str | None) -> PlaceCache | None:
+    """Create a Postgres-backed place cache, or return None if unavailable.
+
+    Never crashes — returns None on missing DSN or connection failure.
+    Logs structured events: place_cache.configured / place_cache.degraded.
+    """
+    if not dsn:
+        logger.info("place_cache.configured", status="skipped", reason="DATABASE_URL not set")
+        return None
+    try:
+        cache = await PlaceCache.create(dsn=dsn)
+        logger.info("place_cache.configured", status="ready", ttl_seconds=cache._ttl_seconds)
+        return cache
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("place_cache.degraded", error_type=type(exc).__name__, reason="init_failed")
+        return None
+
 
 # ── Lifespan manager ────────────────────────────────────────────────────
 
@@ -115,15 +137,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.agent_service = None
 
     try:
-        places_service = GooglePlacesService(settings=settings)
-        routes_service = GoogleRoutesService(settings=settings)
-        app.state.places_service = places_service
-        app.state.place_recommendation_service = PlaceRecommendationService(
-            places_service, routes_service=routes_service
+        place_cache = await _create_place_cache(os.environ.get("DATABASE_URL"))
+        app.state.place_cache = place_cache
+        google_service = GooglePlacesService(settings=settings, place_cache=place_cache)
+        goong_service = GoongPlacesService(settings=settings)
+        dual_service = DualPlacesService(
+            google_service=google_service,
+            goong_service=goong_service,
+            settings=settings,
+            place_cache=place_cache,
         )
-        logger.info("places.recommendation_configured", provider="google_places")
+        routes_service = GoongRoutesService(settings=settings)
+        app.state.places_service = dual_service
+        app.state.place_recommendation_service = PlaceRecommendationService(
+            dual_service, routes_service=routes_service
+        )
+        logger.info(
+            "places.recommendation_configured",
+            primary_provider="google_places",
+            fallback_provider="goong_places",
+            google_key_configured=bool(settings.GOOGLE_PLACES_API_KEY.strip()),
+            goong_key_configured=bool(settings.GOONG_API_KEY.strip()),
+            cache_configured=place_cache is not None,
+        )
     except Exception as exc:
         logger.warning("places.recommendation_init_failed", error_type=type(exc).__name__)
+        app.state.place_cache = None
 
     if chunks:
         try:
@@ -185,6 +224,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         llm_service_enabled=app.state.llm_service is not None,
         agent_service_enabled=app.state.agent_service is not None,
         place_recommendation_enabled=app.state.place_recommendation_service is not None,
+        place_cache_configured=getattr(app.state, "place_cache", None) is not None,
         user_service_enabled=app.state.user_service is not None,
         checkpoint_mode=checkpoint_mode,
     )
@@ -196,6 +236,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     close_client = getattr(places_client, "aclose", None)
     if close_client is not None:
         await close_client()
+
+    # Close place cache pool
+    place_cache = getattr(app.state, "place_cache", None)
+    if place_cache is not None:
+        await place_cache.close()
 
     # Close user service pool
     user_service = getattr(app.state, "user_service", None)

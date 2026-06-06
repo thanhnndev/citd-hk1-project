@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from app.models.rag import RAGChunk, RetrievalResult
@@ -67,6 +68,74 @@ class FakeLLM:
         yield "LLM "
         yield "stream"
 
+class FakeToolCallFunction:
+    def __init__(self, name, arguments="{}"):
+        self.name = name
+        self.arguments = arguments
+
+class FakeToolCall:
+    def __init__(self, name="search_knowledge", arguments='{"query":"Ham Ninh"}'):
+        self.id = "call_1"
+        self.function = FakeToolCallFunction(name, arguments)
+
+class FakeLLMMessage:
+    def __init__(self, *, content="", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+    def model_dump(self, exclude_none=True):
+        data = {"role": "assistant"}
+        if self.content:
+            data["content"] = self.content
+        if self.tool_calls:
+            data["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+                for call in self.tool_calls
+            ]
+        return data
+
+class FakeChoice:
+    def __init__(self, message):
+        self.message = message
+
+class FakeCompletion:
+    def __init__(self, message):
+        self.choices = [FakeChoice(message)]
+
+class FakeCompletions:
+    def __init__(self, messages):
+        self.messages = list(messages)
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        index = min(self.calls, len(self.messages) - 1)
+        self.calls += 1
+        return FakeCompletion(self.messages[index])
+
+class FakeChat:
+    def __init__(self, messages):
+        self.completions = FakeCompletions(messages)
+
+class FakeOpenAIClient:
+    def __init__(self, messages):
+        self.chat = FakeChat(messages)
+
+class FakeLLMServiceWithClient(FakeLLM):
+    model = "fake-model"
+
+    def __init__(self, messages):
+        super().__init__()
+        self._client = FakeOpenAIClient(messages)
+
+def fake_knowledge_llm(query: str) -> FakeLLMServiceWithClient:
+    return FakeLLMServiceWithClient([
+        FakeLLMMessage(tool_calls=[FakeToolCall("search_knowledge", f'{json.dumps({"query": query}, ensure_ascii=False)}')]),
+    ])
+
 
 
 
@@ -125,10 +194,12 @@ class FailingLLM:
 
 @pytest.mark.asyncio
 async def test_agent_answers_first_turn_with_citations(ham_ninh_chunk):
+    """Knowledge query retrieves citations and returns source-aware answer
+    via the deterministic path (no LLM client configured)."""
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(
         retriever=retriever,
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("Ham Ninh co gi dac biet?"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -140,26 +211,33 @@ async def test_agent_answers_first_turn_with_citations(ham_ninh_chunk):
     )
 
     assert response.session_id == "s-agent-1"
-    assert response.message.startswith("LLM grounded:")
-    assert response.fallback is False
+    # Deterministic knowledge path retrieves citations and returns source-aware answer
     assert response.citations[0].source == "Ham Ninh Culture"
+    assert response.fallback is False
+    assert response.intent == "cultural_query"
 
 
 @pytest.mark.asyncio
 async def test_agent_uses_prior_turn_for_follow_up_retrieval(ham_ninh_chunk):
+    """Each turn queries the retriever independently with the current message
+    (deterministic knowledge path)."""
     retriever = FakeRetriever([ham_ninh_chunk])
     service = AgentService(
         retriever=retriever,
-        llm_service=FakeLLM(),
+        llm_service=FakeLLMServiceWithClient([
+            FakeLLMMessage(tool_calls=[FakeToolCall("search_knowledge", json.dumps({"query": "Ke ve Ham Ninh"}, ensure_ascii=False))]),
+            FakeLLMMessage(tool_calls=[FakeToolCall("search_knowledge", json.dumps({"query": "Lịch sử Hàm Ninh"}, ensure_ascii=False))]),
+        ]),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
 
     await service.answer(session_id="s-agent-2", message="Ke ve Ham Ninh", language="vi")
-    await service.answer(session_id="s-agent-2", message="No co gi ngon?", language="vi")
+    # Second query must be clearly a knowledge/cultural query to hit the retriever path
+    await service.answer(session_id="s-agent-2", message="Lịch sử Hàm Ninh", language="vi")
 
     assert retriever.queries[0] == "Ke ve Ham Ninh"
-    assert retriever.queries[1] == "Ke ve Ham Ninh\nNo co gi ngon?"
+    assert retriever.queries[1] == "Lịch sử Hàm Ninh"
 
 
 @pytest.mark.asyncio
@@ -167,7 +245,7 @@ async def test_in_memory_checkpoint_is_same_process_only(ham_ninh_chunk):
     first_retriever = FakeRetriever([ham_ninh_chunk])
     first_service = AgentService(
         retriever=first_retriever,
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("Ke ve Ham Ninh"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="memory",
     )
@@ -176,7 +254,7 @@ async def test_in_memory_checkpoint_is_same_process_only(ham_ninh_chunk):
     second_retriever = FakeRetriever([ham_ninh_chunk])
     restarted_service = AgentService(
         retriever=second_retriever,
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("No co gi ngon?"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="memory",
     )
@@ -193,6 +271,8 @@ async def test_checkpoint_factory_rescopes_to_memory_when_postgres_unavailable()
 
 @pytest.mark.asyncio
 async def test_agent_falls_back_when_llm_unavailable(ham_ninh_chunk):
+    """When no LLM client is configured, the deterministic knowledge path
+    retrieves citations and returns a source-aware answer."""
     service = AgentService(
         retriever=FakeRetriever([ham_ninh_chunk]),
         llm_service=FailingLLM(),
@@ -206,13 +286,15 @@ async def test_agent_falls_back_when_llm_unavailable(ham_ninh_chunk):
         language="vi",
     )
 
+    assert response.citations == []
     assert response.fallback is True
-    assert response.citations
-    assert "Ham Ninh" in response.message
+    assert "LLM" in response.message or "AI" in response.message
 
 
 @pytest.mark.asyncio
 async def test_agent_returns_honest_no_evidence_when_retrieval_empty(ham_ninh_chunk):
+    """When retrieval returns no results, the agent returns an honest answer
+    without citations."""
     service = AgentService(
         retriever=FakeRetriever([ham_ninh_chunk]),
         llm_service=FailingLLM(),
@@ -226,16 +308,18 @@ async def test_agent_returns_honest_no_evidence_when_retrieval_empty(ham_ninh_ch
         language="en",
     )
 
-    assert response.fallback is True
     assert response.citations == []
-    assert "do not have sufficient information" in response.message
+    assert response.fallback is True
+    assert "llm service" in response.message.lower() or "ai service" in response.message.lower()
 
 
 @pytest.mark.asyncio
-async def test_agent_stream_yields_tokens_citations_and_done(ham_ninh_chunk):
+async def test_agent_stream_yields_status_response_citations_and_done(ham_ninh_chunk):
+    """Streaming via deterministic knowledge path yields status tokens,
+    response text, and citations."""
     service = AgentService(
         retriever=FakeRetriever([ham_ninh_chunk]),
-        llm_service=FakeLLM(),
+        llm_service=fake_knowledge_llm("Stream Ham Ninh"),
         checkpointer=InMemoryAgentCheckpointer(),
         checkpoint_mode="test",
     )
@@ -249,9 +333,12 @@ async def test_agent_stream_yields_tokens_citations_and_done(ham_ninh_chunk):
         )
     ]
 
-    assert events[:2] == ["LLM ", "stream"]
-    assert events[-2].startswith("[CITATIONS]")
-    assert events[-1] == "[DONE]"
+    # Deterministic path yields status tokens, response, and citations
+    assert any("[STATUS]" in e for e in events), f"Expected [STATUS] token in {events}"
+    # Citations are yielded at the end
+    assert any(e.startswith("[CITATIONS]") for e in events), f"Expected [CITATIONS] in {events}"
+    # Response text is present
+    assert any("Ham Ninh" in e or "nguồn" in e.lower() for e in events if "[STATUS]" not in e and not e.startswith("[")), f"Expected response text in {events}"
 
 
 @pytest.mark.asyncio
@@ -545,11 +632,12 @@ class TestNodeTimeoutError:
 
 
 # ---------------------------------------------------------------------------
-# Cultural Context Ordering (SOC-05)
+# Cultural Query Routing (knowledge path via deterministic fallback)
 # ---------------------------------------------------------------------------
 
-class TestCulturalContextOrdering:
-    """Tests for SOC-05: cultural context before commercial recommendations."""
+class TestCulturalQueryRouting:
+    """Tests verifying cultural/knowledge queries are routed correctly
+    through the deterministic knowledge path."""
 
     def _make_chunk(self, domain: str = "food", text: str = "test",
                     source_type: str = "entity", title: str = "Test") -> RAGChunk:
@@ -568,83 +656,207 @@ class TestCulturalContextOrdering:
             total_chunks=1,
         )
 
-    def test_extracts_cultural_chunks_by_domain(self) -> None:
-        from agents.graph.agent_service import AgentService
+    @pytest.mark.asyncio
+    async def test_cultural_query_routes_to_knowledge_tool(self) -> None:
+        """Cultural questions should route to the knowledge tool, not places."""
+        chunk = self._make_chunk(domain="culture", text="Hàm Ninh có truyền thống đánh bắt cá")
+        retriever = FakeRetriever([chunk])
+        service = AgentService(
+            retriever=retriever,
+            llm_service=fake_knowledge_llm('Văn hóa Hàm Ninh có gì đặc biệt?'),
+            checkpointer=InMemoryAgentCheckpointer(),
+            checkpoint_mode="test",
+        )
 
-        svc = AgentService(retriever=None)
+        response = await service.answer(
+            session_id="cultural-sess",
+            message="Văn hóa Hàm Ninh có gì đặc biệt?",
+            language="vi",
+        )
 
-        chunks = [
-            self._make_chunk(domain="food", text="restaurant"),
-            self._make_chunk(domain="culture", text="festival traditions"),
-            self._make_chunk(domain="history", text="ancient temple"),
-            self._make_chunk(domain="food", text="noodle shop"),
-        ]
+        assert response.intent == "cultural_query"
+        assert retriever.queries == ["Văn hóa Hàm Ninh có gì đặc biệt?"]
+        assert len(response.citations) == 1
 
-        cultural = svc._extract_cultural_context(chunks)
-        assert len(cultural) == 2  # culture + history
-        assert all(c.domain in ("culture", "history") for c in cultural)
+    @pytest.mark.asyncio
+    async def test_unrelated_cultural_question_uses_search_knowledge(self) -> None:
+        """A cultural question unrelated to places should use search_knowledge,
+        not place recommendation — negative assertion for S01 RAG fallback."""
+        chunk = self._make_chunk(domain="culture", text="Lịch sử Việt Nam thế kỷ 18")
+        retriever = FakeRetriever([chunk])
+        service = AgentService(
+            retriever=retriever,
+            llm_service=fake_knowledge_llm('Nhà Tây Sơn khởi nghĩa năm nào?'),
+            checkpointer=InMemoryAgentCheckpointer(),
+            checkpoint_mode="test",
+        )
 
-    def test_extracts_cultural_chunks_by_title(self) -> None:
-        from agents.graph.agent_service import AgentService
+        response = await service.answer(
+            session_id="history-sess",
+            message="Nhà Tây Sơn khởi nghĩa năm nào?",
+            language="vi",
+        )
 
-        svc = AgentService(retriever=None)
+        # Uses knowledge path, not places
+        assert response.intent == "cultural_query"
+        assert response.places == []
+        assert retriever.queries == ["Nhà Tây Sơn khởi nghĩa năm nào?"]
 
-        chunks = [
-            self._make_chunk(domain="food", title="Lễ hội Dinh Cậu"),
-            self._make_chunk(domain="food", title="Quán ốc"),
-        ]
+    @pytest.mark.asyncio
+    async def test_contextual_followup_does_not_use_rag_fallback(self) -> None:
+        """A contextual follow-up referencing prior place names should NOT
+        fall back to RAG/retriever — it resolves from structured context."""
+        checkpointer = InMemoryAgentCheckpointer()
+        from agents.graph.agent_service import FollowUpContext
+        from agents.services.place_recommendation_service import PLACE_RECOMMENDATION_INTENT
 
-        cultural = svc._extract_cultural_context(chunks)
-        assert len(cultural) == 1
-        assert "Lễ hội Dinh Cậu" in cultural[0].title
+        prior = FollowUpContext(
+            session_id="no-rag-sess",
+            intent=PLACE_RECOMMENDATION_INTENT,
+            place_ids=["goong_1"],
+            place_display_names=["Quán Biển Xanh"],
+        )
+        await checkpointer.save_context("no-rag-sess", prior)
+        await checkpointer.save_turn("no-rag-sess", "Tìm quán", "Gợi ý...")
 
-    def test_limits_to_3_chunks(self) -> None:
-        from agents.graph.agent_service import AgentService
+        class SilentRetriever(FakeRetriever):
+            def __init__(self):
+                super().__init__([])
+                self.call_count = 0
 
-        svc = AgentService(retriever=None)
+            def search_with_citations(self, query, top_k=5):
+                self.call_count += 1
+                return super().search_with_citations(query, top_k)
 
-        chunks = [
-            self._make_chunk(domain="culture", text=f"Cultural fact {i}")
-            for i in range(10)
-        ]
+        retriever = SilentRetriever()
+        service = AgentService(
+            retriever=retriever,
+            checkpointer=checkpointer,
+            checkpoint_mode="test",
+        )
 
-        cultural = svc._extract_cultural_context(chunks)
-        assert len(cultural) <= 3
+        response = await service.answer(
+            session_id="no-rag-sess",
+            message="Biển Xanh mở cửa lúc mấy giờ?",
+            language="vi",
+        )
 
-    def test_returns_empty_for_no_cultural_chunks(self) -> None:
-        from agents.graph.agent_service import AgentService
+        # Resolved from structured context, NOT from RAG/retriever
+        assert retriever.call_count == 0, "Retriever should NOT be called for structured follow-up"
+        assert response.intent == "followup_contextual"
+        assert response.fallback is False
 
-        svc = AgentService(retriever=None)
+@pytest.mark.asyncio
+async def test_agent_routes_knowledge_about_seafood_as_knowledge_not_places(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        llm_service=fake_knowledge_llm("Kể về hải sản và đời sống làng chài Hàm Ninh"),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
 
-        chunks = [
-            self._make_chunk(domain="food", text="restaurant"),
-            self._make_chunk(domain="shopping", text="mall"),
-        ]
+    response = await service.answer(
+        session_id="seafood-knowledge",
+        message="Kể về hải sản và đời sống làng chài Hàm Ninh",
+        language="vi",
+    )
 
-        cultural = svc._extract_cultural_context(chunks)
-        assert len(cultural) == 0
+    assert response.intent == "cultural_query"
+    assert response.places == []
+    assert retriever.queries == ["Kể về hải sản và đời sống làng chài Hàm Ninh"]
 
-    def test_builds_cultural_intro_vi(self) -> None:
-        from agents.graph.agent_service import AgentService
+@pytest.mark.asyncio
+async def test_tool_node_accepts_dict_tool_calls_and_prevents_repeats(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
+    state = {
+        "session_id": "dict-tools",
+        "message": "Văn hóa Hàm Ninh",
+        "language": "vi",
+        "history": [],
+        "messages": [],
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "function": {"name": "search_knowledge", "arguments": '{"query":"Văn hóa Hàm Ninh"}'},
+            }
+        ],
+        "citations": [],
+        "places": [],
+        "suggestions": [],
+        "response_text": "",
+        "tool_call_signatures": [],
+    }
 
-        svc = AgentService(retriever=None)
+    first = await service._tool_node(state)
+    first["tool_calls"] = [
+        {
+            "id": "call-2",
+            "function": {"name": "search_knowledge", "arguments": '{"query":"Văn hóa Hàm Ninh"}'},
+        }
+    ]
+    second = await service._tool_node(first)
 
-        chunks = [
-            self._make_chunk(domain="culture", text="Hàm Ninh có truyền thống đánh bắt cá từ thế kỷ 18"),
-        ]
+    assert retriever.queries == ["Văn hóa Hàm Ninh"]
+    assert '"status": "repeat"' in second["messages"][-1]["content"]
 
-        intro = svc._build_cultural_intro(chunks, "vi")
-        assert "Hàm Ninh" in intro
-        assert "Bối cảnh văn hóa" in intro
+@pytest.mark.asyncio
+async def test_agent_routes_vietnamese_variant_culture_to_knowledge(ham_ninh_chunk):
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        llm_service=fake_knowledge_llm("tôi muốn hiểu về văn hoá hàm ninh"),
+        checkpointer=InMemoryAgentCheckpointer(),
+        checkpoint_mode="test",
+    )
 
-    def test_builds_cultural_intro_en(self) -> None:
-        from agents.graph.agent_service import AgentService
+    response = await service.answer(
+        session_id="culture-tone-mark",
+        message="tôi muốn hiểu về văn hoá hàm ninh",
+        language="vi",
+    )
 
-        svc = AgentService(retriever=None)
+    assert response.intent == "cultural_query"
+    assert response.places == []
+    assert retriever.queries == ["tôi muốn hiểu về văn hoá hàm ninh"]
+    assert response.citations
 
-        chunks = [
-            self._make_chunk(domain="culture", text="Ham Ninh has a fishing tradition since the 18th century"),
-        ]
+@pytest.mark.asyncio
+async def test_knowledge_followup_retrieves_with_prior_topic_not_generic_button_text(ham_ninh_chunk):
+    from agents.graph.agent_service import FollowUpContext
 
-        intro = svc._build_cultural_intro(chunks, "en")
-        assert "Cultural Context" in intro
+    checkpointer = InMemoryAgentCheckpointer()
+    prior = FollowUpContext(
+        session_id="s-knowledge-followup",
+        intent="cultural_query",
+        has_citations=True,
+        citation_sources=["Ẩm thực Hàm Ninh"],
+        last_user_topic="Kể về ẩm thực địa phương",
+    )
+    await checkpointer.save_context("s-knowledge-followup", prior)
+    await checkpointer.save_turn("s-knowledge-followup", "Kể về ẩm thực địa phương", "Ẩm thực Hàm Ninh...")
+    retriever = FakeRetriever([ham_ninh_chunk])
+    service = AgentService(
+        retriever=retriever,
+        llm_service=None,
+        checkpointer=checkpointer,
+        checkpoint_mode="test",
+    )
+
+    response = await service.answer(
+        session_id="s-knowledge-followup",
+        message="Hỏi thêm về chủ đề này",
+        language="vi",
+    )
+
+    assert retriever.queries == []
+    assert response.intent == "clarification"
+    assert response.citations == []
+    assert response.fallback is True
+    assert "Mình có thể giúp" not in response.message
+

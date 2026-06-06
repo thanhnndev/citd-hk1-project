@@ -20,13 +20,25 @@ from agents.tools.retriever import Retriever, RetrievalResult
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Intent classification keywords
+# Intent classification keywords (fallback only)
 # ---------------------------------------------------------------------------
+
+# Lightweight keyword-based fallback used ONLY when the LLM classifier
+# is unavailable. The primary intent router is the LLM-based
+# classify_intent() function below — it understands semantics, not keywords.
+# Keywords are never enough; this list exists purely for resilience.
 
 _RESTAURANT_KEYWORDS_VI = {
     "nhà hàng", "ăn", "quán", "hải sản", "cơm", "phở", "bún",
     "món", "nhậu", "tiệm", "tiệc", "đặc sản", "ẩm thực",
     "food", "restaurant", "eat", "seafood", "dining", "meal",
+}
+
+# Keywords for accommodation / lodging searches → route to Places API
+_ACCOMMODATION_KEYWORDS_VI = {
+    "nhà nghỉ", "khách sạn", "homestay", "resort", "motel",
+    "chỗ ở", "lưu trú", "ngủ đêm", "phòng nghỉ",
+    "hotel", "hostel", "lodge", "accommodation", "stay", "room",
 }
 
 _NAVIGATION_KEYWORDS_VI = {
@@ -36,11 +48,29 @@ _NAVIGATION_KEYWORDS_VI = {
     "vị trí", "địa điểm",
 }
 
+_INTENT_SYSTEM_PROMPT = """\
+Classify the user's intent into exactly ONE of these categories:
+
+- conversational: Greetings, small talk, thanks, capability/help questions, or very short messages with no information need (e.g. "chào", "hello", "cảm ơn", "bạn có thể giúp gì", "what can you do")
+- restaurant_search: Looking for places to eat, drink, or stay (restaurants, cafés, hotels, homestays, lodging, accommodation)
+- navigation: Asking for directions, routes, maps, distances, or how to get somewhere
+- cultural_query: Asking about history, culture, traditions, festivals, landmarks, or general info about Hàm Ninh
+- unknown: Anything else, too short to classify, or ambiguous
+
+Reply with ONLY the category name, nothing else.
+
+User message: {message}"""
+
 
 def detect_intent(message: str) -> str:
-    """Lightweight keyword/rule-based intent classifier.
+    """Lightweight keyword/rule-based intent classifier (FALLBACK ONLY).
+
+    Primary intent routing is LLM-based via classify_intent() in AgentService.
+    This function remains for backwards compatibility and when the LLM is unavailable
+    (test mode, API down, timeout).
 
     Returns one of:
+    - "conversational"
     - "restaurant_search"
     - "navigation"
     - "cultural_query"
@@ -52,8 +82,43 @@ def detect_intent(message: str) -> str:
 
     lower = stripped.lower()
 
+    # Conversational / capability turns have no information need, so skip RAG.
+    conversational_exact_or_edge = (
+        "chào", "hello", "hi", "hey", "xin chào",
+        "cảm ơn", "thanks", "thank", "ok", "oke",
+        "tạm biệt", "bye", "goodbye",
+        "hẹn gặp", "good morning", "good evening",
+    )
+    for word in conversational_exact_or_edge:
+        if lower == word or lower.startswith(word + " ") or lower.endswith(" " + word):
+            return "conversational"
+
+    conversational_help = (
+        "bạn có thể giúp gì", "bạn giúp được gì", "bạn làm được gì",
+        "có thể giúp gì", "giúp được gì", "làm được gì",
+        "what can you do", "how can you help", "help me",
+    )
+    if any(phrase in lower for phrase in conversational_help):
+        return "conversational"
+
+    # Check recommendation-seeking queries first → Places API
+    recommendation_phrases = (
+        "recommend", "gợi ý", "đề xuất",
+        "nên đi", "nên đến", "nên ăn", "nên ở",
+        "nơi nào", "chỗ nào", "quán nào",
+        "which", "where", "what place",
+    )
+    for phrase in recommendation_phrases:
+        if phrase in lower:
+            return "restaurant_search"
+
     # Check restaurant intent
     for kw in _RESTAURANT_KEYWORDS_VI:
+        if kw in lower:
+            return "restaurant_search"
+
+    # Check accommodation / lodging intent → route to Places
+    for kw in _ACCOMMODATION_KEYWORDS_VI:
         if kw in lower:
             return "restaurant_search"
 
@@ -64,6 +129,59 @@ def detect_intent(message: str) -> str:
 
     # Default: most natural-language questions about the domain
     return "cultural_query"
+
+
+async def classify_intent(
+    message: str,
+    client: "openai.AsyncOpenAI | None" = None,
+    model: str = "gpt-4o-mini",
+) -> tuple[str, float]:
+    """LLM-based intent classification with keyword fallback.
+
+    Sends the user message to a lightweight LLM call for semantic intent detection.
+    Falls back to keyword-based detect_intent() if the LLM call fails, times out,
+    or returns an unexpected response (e.g. mock objects in tests).
+
+    Args:
+        message: The user's raw message/query.
+        client: OpenAI async client. If None, falls back to keywords.
+        model: Model to use for classification.
+
+    Returns:
+        Tuple of (intent_name, confidence_score).
+        Confidence is 0.9 if LLM classified, 0.5 if keyword fallback.
+    """
+    import asyncio
+    import openai as _openai
+
+    valid = {"conversational", "restaurant_search", "navigation", "cultural_query", "unknown"}
+
+    # Try LLM classification first (with 3s timeout to avoid blocking)
+    if client is not None:
+        try:
+            system_prompt = _INTENT_SYSTEM_PROMPT.format(message=message)
+            completion = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                    ],
+                    max_completion_tokens=20,
+                ),
+                timeout=3.0,
+            )
+            raw = (completion.choices[0].message.content or "unknown").strip().lower()
+            # Validate: must be a clean string, not a mock repr like "<AsyncMock...>"
+            if raw in valid and not raw.startswith("<"):
+                return raw, 0.9
+            # LLM returned unexpected value — fall through to keyword
+        except (asyncio.TimeoutError, _openai.OpenAIError, Exception):
+            # LLM unavailable — fall back to keyword matching
+            pass
+
+    # Keyword fallback
+    intent = detect_intent(message)
+    return intent, 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -85,59 +203,65 @@ def _excerpt(text: str, max_chars: int = _EXCERPT_MAX_CHARS) -> str:
     return truncated + "..."
 
 
+def _topic_hint(query: str, language: str) -> str:
+    """Derive a lightweight topic label from the query without case routing."""
+    cleaned = " ".join((query or "").strip().split())
+    if not cleaned:
+        return "Hàm Ninh" if language == "vi" else "Ham Ninh"
+    lowered = cleaned.lower()
+    prefixes = (
+        "kể về ", "nói về ", "hỏi thêm về ", "tìm hiểu về ", "giới thiệu về ",
+        "tell me about ", "talk about ", "learn about ", "more about ",
+    )
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            topic = cleaned[len(prefix):].strip(" ?.!")
+            return topic[:80] if topic else ("Hàm Ninh" if language == "vi" else "Ham Ninh")
+    return cleaned[:80]
+
+def _final_sentence(language: str) -> str:
+    if language == "vi":
+        return "Tóm lại, câu trả lời được rút ra từ các nguồn đã tìm thấy; bạn có thể hỏi tiếp để đào sâu một ý cụ thể."
+    return "In short, the answer is grounded in the retrieved sources; you can ask a follow-up to explore any specific point."
+
+def _compact_evidence(results: list[RAGChunk], max_items: int = 5) -> list[tuple[int, str, str]]:
+    seen: set[str] = set()
+    items: list[tuple[int, str, str]] = []
+    for source_index, chunk in enumerate(results, start=1):
+        excerpt = _excerpt(chunk.text, 220).strip()
+        key = excerpt.lower()
+        if not excerpt or key in seen:
+            continue
+        seen.add(key)
+        items.append((source_index, chunk.title, excerpt))
+        if len(items) >= max_items:
+            break
+    return items
+
 def compose_answer_vi(query: str, results: list[RAGChunk]) -> str:
-    """Compose a Vietnamese answer from retrieved chunks.
-
-    Format:
-    - Single chunk: "Theo {source}: {excerpt}"
-    - Multiple chunks (up to 3): paragraph combining excerpts with context.
-    """
-    top = results[:3]
-
-    if len(top) == 0:
+    """Compose a readable Vietnamese answer from retrieved chunks."""
+    evidence = _compact_evidence(results)
+    if not evidence:
         return "Hiện tại nguồn dữ liệu chưa có thông tin đầy đủ để trả lời câu hỏi này."
 
-    if len(top) == 1:
-        chunk = top[0]
-        excerpt = _excerpt(chunk.text)
-        return f"Theo {chunk.title}: {excerpt}"
-
-    # Multiple chunks — build a coherent paragraph
-    parts: list[str] = []
-    for chunk in top:
-        excerpt = _excerpt(chunk.text)
-        parts.append(f"{chunk.title}: {excerpt}")
-
-    combined = ". ".join(parts)
-    return f"Dựa trên thông tin thu thập được: {combined}."
-
+    topic = _topic_hint(query, "vi")
+    intro = f"Về {topic}, các nguồn hiện có cho thấy:"
+    bullets = [f"- {excerpt} [{source_index}]" for source_index, _, excerpt in evidence[:4]]
+    return "\n".join([intro, *bullets, _final_sentence("vi")])
 
 def compose_answer_en(query: str, results: list[RAGChunk]) -> str:
-    """Compose an English answer from Vietnamese source chunks.
-
-    Acknowledges the Vietnamese source material with English framing.
-    """
-    top = results[:3]
-
-    if len(top) == 0:
+    """Compose a readable English answer from Vietnamese source chunks."""
+    evidence = _compact_evidence(results)
+    if not evidence:
         return (
             "Currently, our data sources do not have sufficient information "
             "to answer this question."
         )
 
-    if len(top) == 1:
-        chunk = top[0]
-        excerpt = _excerpt(chunk.text)
-        return f"Based on Vietnamese source material from {chunk.title}: {excerpt}"
-
-    parts: list[str] = []
-    for chunk in top:
-        excerpt = _excerpt(chunk.text)
-        parts.append(f"From {chunk.title}: {excerpt}")
-
-    combined = ". ".join(parts)
-    return f"Based on Vietnamese source material: {combined}."
-
+    topic = _topic_hint(query, "en")
+    intro = f"About {topic}, the available sources indicate:"
+    bullets = [f"- {excerpt} [{source_index}]" for source_index, _, excerpt in evidence[:4]]
+    return "\n".join([intro, *bullets, _final_sentence("en")])
 
 # ---------------------------------------------------------------------------
 # No-evidence messages (honest — zero fabricated claims)

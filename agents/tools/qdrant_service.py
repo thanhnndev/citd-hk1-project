@@ -300,6 +300,7 @@ class QdrantService:
                 ),
             ],
             query=dense_vector,
+            using=DENSE_VECTOR_NAME,
             limit=top_k,
             with_payload=True,
         )

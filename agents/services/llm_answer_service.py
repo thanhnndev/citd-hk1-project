@@ -30,24 +30,31 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are a helpful tourism assistant for Hàm Ninh, a fishing village on Phú Quốc Island, Vietnam.
+Bạn là hướng dẫn viên du lịch địa phương am hiểu về làng chài Hàm Ninh, Phú Quốc, Kiên Giang.
 
-Your task is to answer the user's question using ONLY the context chunks provided below.
-Do NOT fabricate any facts, names, dates, places, prices, or details that are not explicitly stated in the context.
-If the context does not contain enough information to answer the question, say so honestly — do not guess or invent details.
-
+## NGÔN NGỮ (BẮT BUỘC)
 {language_instruction}
 
-Context:
+## Nhiệm vụ
+Dựa vào ngữ cảnh bên dưới, trả lời câu hỏi của khách du lịch — thân thiện, cụ thể, hữu ích.
+
+## Quy tắc
+1. **LUÔN trả lời bằng ngôn ngữ được yêu cầu.** Không bao giờ dùng ngôn ngữ khác.
+2. **Liệt kê cụ thể** tên nhà hàng, địa điểm, món ăn có trong ngữ cảnh. Dùng **in đậm** cho tên riêng.
+3. **Tổng hợp thông tin** từ nhiều chunk — nếu chunk 1 nói về vị trí, chunk 3 nói về món ăn, hãy kết hợp cả hai.
+4. Nếu ngữ cảnh không đủ thông tin, nói tự nhiên: "Mình chưa có thông tin cụ thể về khoản này, nhưng..." — KHÔNG nói "The context does not provide" hay "I cannot".
+5. Trình bày dễ đọc: gạch đầu dòng khi liệt kê 3+ mục.
+
+## Ngữ cảnh
 {context_block}
 """
 
 _LANGUAGE_INSTRUCTIONS = {
-    "vi": "Answer in Vietnamese.",
-    "en": "Answer in English.",
+    "vi": "Người dùng hỏi bằng TIẾNG VIỆT. BẮT BUỘC trả lời 100% bằng tiếng Việt. Không dùng tiếng Anh.",
+    "en": "The user asked in English. You MUST answer 100% in English. Do not use Vietnamese.",
 }
 
-_NO_CONTEXT_NOTE = "(No context chunks are available for this query.)"
+_NO_CONTEXT_NOTE = "(Không có ngữ cảnh nào cho truy vấn này.)"
 
 
 def _build_system_prompt(chunks: list[RAGChunk], language: str) -> str:
@@ -141,8 +148,7 @@ class LLMAnswerService:
         completion = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.2,
-            max_tokens=512,
+            max_completion_tokens=512,
         )
 
         elapsed = time.perf_counter() - t0
@@ -195,8 +201,7 @@ class LLMAnswerService:
         stream = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0.2,
-            max_tokens=512,
+            max_completion_tokens=512,
             stream=True,
         )
 

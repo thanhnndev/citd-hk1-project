@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.places import FairnessAudit, PlaceDecisionTrace
 from app.models.request import LatLng
 
 
@@ -52,6 +53,24 @@ class AccessibilityInfo(BaseModel):
     )
 
 
+class PlaceExplanation(BaseModel):
+    """Safe structured explanation for why a place was recommended."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rank: int = Field(default=0, ge=0, description="1-based recommendation rank, or 0 when not ranked.")
+    primary_reason: str = Field(default="Recommended from grounded place data with limited metadata.", max_length=240, description="Concise reason derived only from normalized place fields.")
+    matched_preferences: list[str] = Field(default_factory=list, max_length=10, description="Preference signals matched by the normalized candidate.")
+    local_context: str = Field(default="local signal unknown", max_length=160, description="Safe locality/fairness context without exact user GPS.")
+    score_factors: dict[str, float | int | str | None] = Field(default_factory=dict, max_length=12, description="Compact score fields used by the reranker or fallback scorer.")
+    fairness_note: str = Field(default="local representation metadata limited", max_length=200, description="Fairness/locality note derived from local_factor metadata.")
+    accessibility_note: str = Field(default="accessibility metadata unknown", max_length=200, description="Accessibility note derived from normalized accessibility fields.")
+    route_summary: str = Field(default="route metadata unavailable", max_length=200, description="Route summary without exact origin/user GPS.")
+    provider_source: str | None = Field(default=None, max_length=64, description="Normalized provider/source label when available.")
+    provider_status: str | None = Field(default=None, max_length=64, description="Normalized provider status when available.")
+    evidence_fields_used: list[str] = Field(default_factory=list, max_length=20, description="Normalized candidate/result fields used to build this explanation.")
+    detail_highlights: list[str] = Field(default_factory=list, max_length=8, description="Human-friendly highlights derived from Place Details (New).")
+
 class PlaceResult(BaseModel):
     """
     A single place recommendation with full scoring details.
@@ -88,13 +107,13 @@ class PlaceResult(BaseModel):
                         "rank": 1,
                     },
                     "accessibility_score": 0.75,
-                    "google_maps_uri": "https://maps.google.com/?q=ChIJ123abc",
+                    "map_uri": "https://map.goong.io/?pid=ChIJ123abc",
                 }
             ]
         }
     )
 
-    place_id: str = Field(description="Google Places unique identifier.")
+    place_id: str = Field(description="Goong Places unique identifier.")
     display_name: str = Field(description="Human-readable name of the place.")
     formatted_address: str | None = Field(
         default=None,
@@ -112,16 +131,20 @@ class PlaceResult(BaseModel):
         default=None,
         description="Provider-supplied primary place type when available.",
     )
+    primary_type_display_name: str | None = Field(
+        default=None,
+        description="Localized primary type label when available from Place Details.",
+    )
     rating: float | None = Field(
         default=None,
         ge=0.0,
         le=5.0,
-        description="Google Maps rating (0-5), or null if unrated.",
+        description="Provider rating (0-5), or null if unrated.",
     )
     user_rating_count: int | None = Field(
         default=None,
         ge=0,
-        description="Number of Google Maps user ratings, or null when unavailable.",
+        description="Number of Provider user ratings, or null when unavailable.",
     )
     price_level: int | None = Field(
         default=None,
@@ -137,8 +160,19 @@ class PlaceResult(BaseModel):
         default=None,
         description="Provider-supplied business status when available.",
     )
-    local_factor: float = Field(
-        description="Locality signal — higher for locally-owned businesses.",
+    current_opening_hours: dict | None = Field(default=None, description="Current opening hours from Place Details when available.")
+    regular_opening_hours: dict | None = Field(default=None, description="Regular opening hours from Place Details when available.")
+    payment_options: dict[str, bool] = Field(default_factory=dict, description="Accepted payment options from Place Details.")
+    parking_options: dict[str, bool] = Field(default_factory=dict, description="Parking options from Place Details.")
+    editorial_summary: str | None = Field(default=None, description="Provider editorial summary, presented as-is when available.")
+    generative_summary: str | None = Field(default=None, description="Google AI-generated place summary when available.")
+    review_summary: str | None = Field(default=None, description="Google AI-generated review summary when available.")
+    reviews: list[dict] = Field(default_factory=list, description="Bounded provider reviews from Place Details.")
+    photos: list[str] = Field(default_factory=list, description="Bounded provider photo resource names from Place Details.")
+    service_options: dict[str, bool | None] = Field(default_factory=dict, description="Dining/service flags such as takeout, delivery, dine_in, reservable, serves_*.")
+    local_factor: float | None = Field(
+        default=None,
+        description="Locality signal when available; null means provider metadata did not support a local ownership inference.",
     )
     final_score: float = Field(
         description="Composite ranking score used for sorting results (0-1)."
@@ -156,8 +190,12 @@ class PlaceResult(BaseModel):
         default=None,
         description="Specific accessibility caveat if known.",
     )
-    google_maps_uri: str = Field(
-        description="Deep link to open the place in Google Maps.",
+    map_uri: str = Field(
+        description="Deep link to open the place in a provider map.",
+    )
+    explanation: PlaceExplanation = Field(
+        default_factory=PlaceExplanation,
+        description="Structured why-this-recommendation data for the place.",
     )
 
 
@@ -366,6 +404,10 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Ordered list of place recommendations.",
     )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="Optional list of dynamic suggestion chips generated by the LLM.",
+    )
     reasoning_log: str | None = Field(
         default=None,
         description="Optional internal reasoning summary for debugging.",
@@ -398,4 +440,12 @@ class ChatResponse(BaseModel):
     guardrail_reason: str | None = Field(
         default=None,
         description="Human-readable reason for the guardrail verdict.",
+    )
+    fairness_audit: FairnessAudit | None = Field(
+        default=None,
+        description="Structured fairness audit snapshot for place recommendation calls.",
+    )
+    decision_trace: PlaceDecisionTrace | None = Field(
+        default=None,
+        description="R046 structured decision trace for the full search_places path.",
     )

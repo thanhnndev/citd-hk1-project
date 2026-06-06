@@ -252,7 +252,7 @@
           "description": "Vector database for Ham Ninh cultural RAG."
         },
         {
-          "name": "Google Maps Platform",
+          "name": "Goong Maps Platform",
           "description": "Place and routing data source in later slices."
         },
         {
@@ -293,8 +293,8 @@
     }
   },
   "Chat": {
-    "title": "Chat with AI Guide",
-    "placeholder": "Ask about Ham Ninh...",
+    "title": "Ham Ninh Assistant",
+    "placeholder": "Ask naturally: say hi, find food, get directions, explore culture...",
     "send": "Send",
     "reasoningLog": "Why this suggestion?",
     "citations": "Sources",
@@ -308,22 +308,49 @@
     "viewOnMap": "View on Map",
     "scoreLabel": "Score",
     "noRating": "No rating",
-    "welcomeGreeting": "Hello! I'm your Ham Ninh AI Guide",
-    "welcomeSubtitle": "Ask me anything about Ham Ninh's culture, history, food, and places.",
+    "explanation": "Why this place?",
+    "providerSource": "Source",
+    "providerStatus": "Status",
+    "scoreDataLimited": "Limited scoring data available",
+    "accessibilityNote": "Accessibility info",
+    "welcomeGreeting": "How would you like to explore Ham Ninh?",
+    "welcomeSubtitle": "Ask about places, directions, culture/history, food, or trip ideas around Ham Ninh. If details are missing, I will clarify instead of guessing.",
     "newConversation": "New conversation",
     "copy": "Copy",
     "copied": "Copied!",
     "retryMessage": "Retry",
     "prompts": [
-      "What is the history of Ham Ninh fishing village?",
-      "Recommend local seafood restaurants",
-      "How do I get to Ham Ninh from Duong Dong?",
-      "What cultural festivals happen in Ham Ninh?"
-    ]
+      "Tell me about local food",
+      "Find nearby seafood restaurants",
+      "Get directions to Ham Ninh market",
+      "What makes Ham Ninh fishing village special?"
+    ],
+    "quickReplyLabels": {
+      "places": [
+        "Show on map",
+        "Tell me more",
+        "Is it accessible?"
+      ],
+      "sources": [
+        "What seafood stands out?",
+        "Find nearby seafood",
+        "Tell me more about the village"
+      ],
+      "fallback": [
+        "Ask about the fishing village",
+        "Find seafood places",
+        "Ask directions to Ham Ninh market"
+      ],
+      "generic": [
+        "Tell me about local food",
+        "Find nearby seafood",
+        "Get directions to Ham Ninh market"
+      ]
+    }
   },
   "Map": {
     "title": "Ham Ninh Place Proof Map",
-    "intro": "Inspect live place recommendations returned by the backend agent: result cards, selected details, pin-ready coordinates, and Google Maps links without loading a browser map SDK.",
+    "intro": "Inspect live place recommendations returned by the backend agent on a real Goong map: result cards, selected details, synchronized pins, and neutral source links.",
     "defaultQuery": "Recommend local seafood restaurants and family-run places near Ham Ninh fishing village with accessibility details.",
     "queryLabel": "Place recommendation query",
     "searchPlaceholder": "Ask for places or services in Ham Ninh...",
@@ -338,7 +365,7 @@
     "selectPlace": "Select place",
     "pinReady": "pin ready",
     "pinUnavailable": "Pin unavailable: coordinates were not returned for this place.",
-    "mapsLink": "Open in Google Maps",
+    "mapsLink": "Open source place link",
     "rating": "Rating",
     "reviews": "Reviews",
     "openNow": "Open now",
@@ -350,7 +377,10 @@
     "address": "Address",
     "coordinates": "Coordinates",
     "unknown": "Unknown",
-    "responseNote": "Assistant note"
+    "responseNote": "Assistant note",
+    "missingMapToken": "Goong map tiles are not configured. Results remain available as cards until NEXT_PUBLIC_GOONG_MAPTILES_KEY is set.",
+    "mapUnavailable": "The Goong map could not initialize. Result cards and place details are still available.",
+    "noPins": "No map pins can be drawn because these results do not include usable coordinates."
   },
   "Architecture": {
     "title": "System Architecture",

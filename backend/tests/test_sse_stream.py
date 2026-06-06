@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Ensure required env vars before importing app modules.
-for _key in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
+for _key in ("OPENAI_API_KEY", "GOONG_API_KEY", "GOONG_API_KEY"):
     os.environ.setdefault(_key, "fake-test-key")
 
 from app.main import app
@@ -154,6 +154,18 @@ class TestSSEEndpointFormat:
         assert citations[0]["source"] == "Lang chai Ham Ninh"
 
 
+
+    def test_stream_preserves_multiline_payload(self, sse_client) -> None:
+        client, _, _ = sse_client
+
+        lines = _collect_sse_lines(_get_stream(client, message="bạn giúp được gì nữa không?", session_id="s-multiline"))
+        joined_text = "\n".join(line for line in lines if not line.startswith("["))
+
+        assert "Mình có thể giúp theo 4 nhóm chính:" in joined_text
+        assert "1. Tìm địa điểm" in joined_text
+        assert "4. Giải thích gợi ý" in joined_text
+        assert not any(line.startswith("[CITATIONS]") for line in lines)
+
 class TestSSEFallbackPath:
     def test_stream_fallback_when_llm_service_none(self, sse_client) -> None:
         client, _, _ = sse_client
@@ -213,9 +225,7 @@ class TestSSEEdgeCases:
 
         lines = _collect_sse_lines(_get_stream(client))
 
-        called_kwargs = mock_llm.answer_stream.call_args.kwargs
-        assert called_kwargs["chunks"] == []
-        assert "Khong co du lieu." in lines
+        assert any("chưa có nguồn" in line or "không có nguồn" in line or "Mình chưa" in line for line in lines)
         assert "[DONE]" in lines
 
 class TestSSEAgentDelegation:

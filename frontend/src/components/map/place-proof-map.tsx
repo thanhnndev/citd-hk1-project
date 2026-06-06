@@ -6,6 +6,7 @@ import { ExternalLink, Loader2, Navigation, Search, ShieldAlert, Star } from "lu
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { GoongPlaceMap } from "@/components/map/goong-place-map";
 import { sendChat, type ChatResponse, type PlaceResult } from "@/lib/chat-api";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,9 @@ type MapProofTranslations = Readonly<{
   selectPlace: string;
   pinReady: string;
   pinUnavailable: string;
+  missingMapToken: string;
+  mapUnavailable: string;
+  noPins: string;
   mapsLink: string;
   rating: string;
   reviews: string;
@@ -66,17 +70,6 @@ function normalizePercent(value: number | null | undefined) {
   return Math.round(Math.max(0, Math.min(1, value)) * 100);
 }
 
-function staticPlotPosition(place: PlaceResult, bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }) {
-  if (!hasLocation(place)) return null;
-
-  const latRange = bounds.maxLat - bounds.minLat || 1;
-  const lngRange = bounds.maxLng - bounds.minLng || 1;
-  return {
-    left: `${((place.location.lng - bounds.minLng) / lngRange) * 82 + 9}%`,
-    top: `${(1 - (place.location.lat - bounds.minLat) / latRange) * 72 + 14}%`,
-  };
-}
-
 export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
   const language = locale === "en" ? "en" : "vi";
   const [query, setQuery] = useState(translations.defaultQuery);
@@ -88,18 +81,7 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
 
   const places = response?.places ?? [];
   const selectedPlace = places.find((place) => place.place_id === selectedPlaceId) ?? places[0] ?? null;
-  const pinnedPlaces = places.filter(hasLocation);
-  const bounds = useMemo(() => {
-    if (pinnedPlaces.length === 0) return null;
-    const lats = pinnedPlaces.map((place) => place.location.lat);
-    const lngs = pinnedPlaces.map((place) => place.location.lng);
-    return {
-      minLat: Math.min(...lats),
-      maxLat: Math.max(...lats),
-      minLng: Math.min(...lngs),
-      maxLng: Math.max(...lngs),
-    };
-  }, [pinnedPlaces]);
+  const pinnedPlaces = useMemo(() => places.filter(hasLocation), [places]);
 
   const runSearch = useCallback(async (nextQuery: string) => {
     const prompt = nextQuery.trim() || translations.defaultQuery;
@@ -189,27 +171,15 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
 
           <div className="space-y-4">
             <Card className="overflow-hidden bg-card/90 shadow-xl shadow-primary/10">
-              <div className="relative h-80 overflow-hidden bg-[linear-gradient(135deg,hsl(var(--primary)/0.18),hsl(var(--accent)/0.16)),radial-gradient(circle_at_28%_30%,hsl(var(--secondary)/0.42),transparent_24%)]">
-                <div className="absolute inset-6 rounded-[2rem] border border-primary/20 bg-background/35" />
-                <div className="absolute left-8 top-8 rounded-full bg-card/90 px-3 py-1 text-xs font-medium text-muted-foreground shadow">Hàm Ninh</div>
-                {bounds && places.map((place, index) => {
-                  const position = staticPlotPosition(place, bounds);
-                  if (!position) return null;
-                  return (
-                    <button
-                      key={place.place_id}
-                      type="button"
-                      onClick={() => setSelectedPlaceId(place.place_id)}
-                      className={cn("absolute grid size-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 shadow-lg transition hover:scale-110", selectedPlace?.place_id === place.place_id ? "border-secondary bg-primary text-primary-foreground" : "border-card bg-secondary text-secondary-foreground")}
-                      style={position}
-                      aria-label={`${translations.selectPlace}: ${place.display_name}`}
-                    >
-                      {index + 1}
-                    </button>
-                  );
-                })}
-                {pinnedPlaces.length === 0 && <div className="absolute inset-0 grid place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{translations.pinUnavailable}</div>}
-              </div>
+              <GoongPlaceMap
+                places={places}
+                selectedPlaceId={selectedPlaceId}
+                onMarkerSelect={setSelectedPlaceId}
+                missingTokenLabel={translations.missingMapToken}
+                unavailableLabel={translations.mapUnavailable}
+                emptyLabel={translations.noPins}
+                selectPlaceLabel={translations.selectPlace}
+              />
               <CardContent className="p-5">
                 <div className="grid gap-3 sm:grid-cols-2">
                   {places.map((place, index) => (
@@ -273,11 +243,11 @@ function PlaceDetail({ place, translations }: { place: PlaceResult; translations
           <Detail label={translations.accessibility} value={accessibility === null ? (place.accessibility_warning ?? translations.unknown) : `${accessibility}%`} />
         </dl>
         <div className="flex flex-wrap items-center gap-3">
-          <Badge variant="secondary">local_factor {place.local_factor.toFixed(2)}</Badge>
+          <Badge variant="secondary">local_factor {place.local_factor == null ? translations.unknown : place.local_factor.toFixed(2)}</Badge>
           <Badge variant="secondary">final_score {place.final_score.toFixed(2)}</Badge>
-          {place.google_maps_uri ? (
+          {place.map_uri ? (
             <Button asChild variant="outline" className="rounded-2xl">
-              <a href={place.google_maps_uri} target="_blank" rel="noreferrer">
+              <a href={place.map_uri} target="_blank" rel="noreferrer">
                 <ExternalLink aria-hidden="true" />{translations.mapsLink}
               </a>
             </Button>

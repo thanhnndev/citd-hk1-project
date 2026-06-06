@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 # Ensure required env vars before importing app modules
-for _k in ("OPENAI_API_KEY", "GOOGLE_PLACES_API_KEY", "GOOGLE_ROUTES_API_KEY"):
+for _k in ("OPENAI_API_KEY", "GOONG_API_KEY", "GOONG_API_KEY"):
     os.environ.setdefault(_k, "fake-test-key")
 
 from app.models.request import ChatRequest

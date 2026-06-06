@@ -85,6 +85,7 @@ export default async function ArchitecturePage({ params }: Props) {
   const t = await getTranslations('Architecture');
   const p = await getTranslations('Placeholder');
   return (
+<<<<<<< HEAD
   <>
     <PlaceholderPage
       title={t('title')}
@@ -96,4 +97,89 @@ export default async function ArchitecturePage({ params }: Props) {
     <SiteFooter locale={locale} />
   </>
 );
+=======
+    <div className="min-h-screen bg-background text-foreground">
+      <SectionShell
+        id="overview"
+        eyebrow={overview.eyebrow}
+        heading={overview.heading}
+        body={overview.body}
+      >
+        <CardGrid
+          cards={overview.cards as CardEntry[]}
+          icons={['ArrowRight']}
+        />
+      </SectionShell>
+
+      <SectionShell
+        id="rag-pipeline"
+        eyebrow={ragPipeline.eyebrow}
+        heading={ragPipeline.heading}
+        body={ragPipeline.body}
+      >
+        <CardGrid
+          cards={ragPipeline.cards as CardEntry[]}
+          icons={['Database', 'Search', 'BookOpen']}
+        />
+      </SectionShell>
+
+      <SectionShell
+        id="maps-api"
+        eyebrow={mapsApi.eyebrow}
+        heading={mapsApi.heading}
+        body={mapsApi.body}
+      >
+        <CardGrid
+          cards={mapsApi.cards as CardEntry[]}
+          icons={['MapPin', 'Route', 'ShieldAlert']}
+        />
+      </SectionShell>
+
+      <SectionShell
+        id="ensemble-reranker"
+        eyebrow={ensembleReranker.eyebrow}
+        heading={ensembleReranker.heading}
+        body={ensembleReranker.body}
+      >
+        <CardGrid
+          cards={ensembleReranker.cards as CardEntry[]}
+          icons={['GitBranch', 'SlidersHorizontal', 'Scale']}
+        />
+      </SectionShell>
+
+      <SectionShell
+        id="orchestration"
+        eyebrow={orchestration.eyebrow}
+        heading={orchestration.heading}
+        body={orchestration.body}
+      >
+        <CardGrid
+          cards={orchestration.cards as CardEntry[]}
+          icons={['BrainCircuit', 'MessageSquare', 'History']}
+        />
+      </SectionShell>
+
+      <SectionShell
+        id="frontend-shell"
+        eyebrow={frontendShell.eyebrow}
+        heading={frontendShell.heading}
+        body={frontendShell.body}
+      >
+        <CardGrid
+          cards={frontendShell.cards as CardEntry[]}
+          icons={['Monitor', 'Languages', 'Activity']}
+        />
+      </SectionShell>
+
+      <footer className="border-t border-border/40 py-12">
+        <div className="mx-auto max-w-6xl px-6 text-center text-sm text-muted-foreground">
+          <Badge variant="outline" className="mb-4 border-primary/30 bg-primary/5 text-primary">
+            {t('title')}
+          </Badge>
+          <p>Built with Next.js 16, FastAPI, LangGraph, Qdrant, and Goong Maps Platform.</p>
+        </div>
+      </footer>
+    </div>
+  );
+>>>>>>> 58b081fb053a4f834ef518a1739675896523f68e
 }

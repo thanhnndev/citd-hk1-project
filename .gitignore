@@ -24,6 +24,7 @@ node_modules/
 dist/
 build/
 next-env.d.ts
+tsconfig.tsbuildinfo
 
 # ── Python ──
 __pycache__/

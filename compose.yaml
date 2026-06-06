@@ -182,11 +182,12 @@ services:
       - .env
     environment:
       <<: *langfuse_app_environment
+      HOSTNAME: 0.0.0.0
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-generate-with-openssl-rand-hex-32}
       CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
       CLICKHOUSE_CLUSTER_ENABLED: "false"
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/public/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/public/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -255,6 +256,10 @@ services:
       langfuse:
         condition: service_healthy
     volumes:
+      # Keep backend source bind-mounted so uvicorn --reload actually picks up
+      # local fixes to the API wrapper and agent package during development.
+      - ./backend/app:/app/app:ro
+      - ./agents:/app/agents:ro
       - ./data:/data:ro
     restart: no
     networks:

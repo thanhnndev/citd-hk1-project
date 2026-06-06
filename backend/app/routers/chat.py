@@ -11,6 +11,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.core.config import get_settings
 from app.middleware.rate_limiter import get_limiter
 from app.models.request import ChatRequest
 from app.models.response import ChatResponse
@@ -30,6 +31,7 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/chat")
 limiter = get_limiter()
+chat_rate_limit = get_settings().RATE_LIMIT_CHAT
 
 
 
@@ -42,7 +44,11 @@ def _error_stream(reason: str) -> StreamingResponse:
 
 
 def _sse_payload(value: str) -> str:
-    return f"data: {value}\n\n"
+    # SSE data payloads cannot contain raw newlines in a single data line.
+    # Emit multi-line payloads using repeated data: fields so clients can
+    # reconstruct assistant messages with paragraphs/lists intact.
+    lines = str(value).splitlines() or [""]
+    return "".join(f"data: {line}\n" for line in lines) + "\n"
 
 
 def _streaming_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:
@@ -64,7 +70,7 @@ def _agent_service_available(request: Request) -> bool:
     )
 
 @router.post("", response_model=ChatResponse)
-@limiter.limit("20/minute")
+@limiter.limit(chat_rate_limit)
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     """Answer a user query through the shared agent service."""
     t0 = time.perf_counter()
@@ -181,7 +187,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     return response
 
 @router.get("/stream")
-@limiter.limit("20/minute")
+@limiter.limit(chat_rate_limit)
 async def chat_stream(
     request: Request,
     message: str = Query(...),
@@ -226,7 +232,12 @@ async def chat_stream(
             # Fail-open: continue to stream
 
     agent_service = getattr(request.app.state, "agent_service", None)
-    if not _agent_service_available(request):
+    can_answer_without_corpus = bool(
+        agent_service is not None
+        and hasattr(agent_service, "can_answer_without_corpus")
+        and agent_service.can_answer_without_corpus(query)
+    )
+    if not _agent_service_available(request) and not can_answer_without_corpus:
         logger.error("sse.stream_error", reason="service_unavailable", session_id=sid)
         return _error_stream("service_unavailable")
 
