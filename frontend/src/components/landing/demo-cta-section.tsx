@@ -1,3 +1,5 @@
+"use client";
+
 import { ArrowRight, ExternalLink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";

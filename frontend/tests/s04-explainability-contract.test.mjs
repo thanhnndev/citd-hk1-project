@@ -77,7 +77,7 @@ const CHAT_STREAM_STATUSES = [
   'composing',
 ];
 
-const PROVIDER_SOURCES = ['google_places', 'goong_places', 'mock', 'cache'];
+const _PROVIDER_SOURCES = ['google_places', 'goong_places', 'mock', 'cache'];
 const PROVIDER_STATUSES = ['ok', 'empty', 'credentials_blocked', 'upstream_error', 'unavailable'];
 
 // ── R053: PlaceExplanation Type Contract (T02) ──────────────────────────────

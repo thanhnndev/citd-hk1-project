@@ -13,6 +13,7 @@
   "dependencies": {
     "@radix-ui/react-slot": "latest",
     "@tailwindcss/postcss": "latest",
+    "@types/mapbox-gl": "^3.4.1",
     "ai": "6.0.184",
     "class-variance-authority": "latest",
     "clsx": "latest",

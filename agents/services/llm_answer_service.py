@@ -118,6 +118,7 @@ class LLMAnswerService:
         query: str,
         language: str,
         session_id: str,
+        history: list[dict[str, str]] | None = None,
     ) -> ChatResponse:
         """Generate a grounded answer via OpenAI chat completion.
 
@@ -142,13 +143,17 @@ class LLMAnswerService:
         system_prompt = _build_system_prompt(chunks, language)
         messages: List[dict] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
         ]
+        if history:
+            for item in history[-8:]:
+                if item.get("role") in {"user", "assistant"} and item.get("content"):
+                    messages.append({"role": item["role"], "content": item["content"]})
+        messages.append({"role": "user", "content": query})
 
         completion = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            max_completion_tokens=512,
+            max_completion_tokens=2048,
         )
 
         elapsed = time.perf_counter() - t0
@@ -184,6 +189,7 @@ class LLMAnswerService:
         query: str,
         language: str,
         session_id: str,
+        history: list[dict[str, str]] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Yield a grounded answer token-by-token via OpenAI streaming.
 
@@ -195,13 +201,17 @@ class LLMAnswerService:
         system_prompt = _build_system_prompt(chunks, language)
         messages: List[dict] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
         ]
+        if history:
+            for item in history[-8:]:
+                if item.get("role") in {"user", "assistant"} and item.get("content"):
+                    messages.append({"role": item["role"], "content": item["content"]})
+        messages.append({"role": "user", "content": query})
 
         stream = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,
-            max_completion_tokens=512,
+            max_completion_tokens=2048,
             stream=True,
         )
 

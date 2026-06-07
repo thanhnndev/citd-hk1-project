@@ -27,12 +27,12 @@ interface WelcomeScreenProps {
 const ICONS = [BookOpenText, Utensils, Route, MapPinned];
 
 export function WelcomeScreen({ onPromptClick, translations }: WelcomeScreenProps) {
-  const intents = translations.welcomeIntents ?? translations.guidanceCards?.map((card, index) => ({
+  const intents = translations.welcomeIntents ?? translations.guidanceCards?.map((card, _index) => ({
     title: card.title,
     description: card.body,
     badge: translations.quickPromptLabel ?? "Try",
-    prompts: translations.promptChips[index] ? [translations.promptChips[index]] : [],
-  })) ?? translations.promptChips.map((prompt, index) => ({
+    prompts: translations.promptChips[_index] ? [translations.promptChips[_index]] : [],
+  })) ?? translations.promptChips.map((prompt, _index) => ({
     title: prompt,
     description: translations.subtitle,
     badge: translations.quickPromptLabel ?? "Try",

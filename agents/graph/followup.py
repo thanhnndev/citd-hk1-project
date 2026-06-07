@@ -36,7 +36,7 @@ class PlaceMemory:
     def aliases(self) -> list[str]:
         normalized = _norm(self.name)
         aliases = [normalized] if normalized else []
-        distinctive = [t for t in normalized.split() if len(t) > 1 and t not in _PLACE_DESCRIPTOR_TOKENS]
+        distinctive = [t for t in normalized.split() if len(t) > 1 and t not in _PLACE_DESCRIPTOR_TOKENS and t not in _GEOGRAPHIC_TOKENS]
         aliases.extend(distinctive)
         return aliases
 
@@ -53,6 +53,9 @@ class FollowUpResolution:
 _PLACE_DESCRIPTOR_TOKENS = frozenset({
     "quán", "nhà", "hàng", "khách", "sạn", "bè", "hải", "sản",
     "homestay", "hotel", "restaurant", "seafood", "ăn", "uống", "nghỉ", "dưỡng", "resort",
+})
+_GEOGRAPHIC_TOKENS = frozenset({
+    "hàm", "ninh", "phú", "quốc", "dương", "đông", "kiên", "giang", "an", "thới", "cửa", "lấp",
 })
 _QUERY_DETAIL_TOKENS = frozenset({
     "giá", "bao", "nhiêu", "mở", "cửa", "đường", "đi", "review", "rating",
@@ -202,7 +205,7 @@ def _resolve_place_followup(message: str, context: FollowUpContext) -> FollowUpR
     best_score = 0.0
     for place in _place_memories(context):
         normalized = _norm(place.name)
-        distinctive = [t for t in normalized.split() if len(t) > 1 and t not in _PLACE_DESCRIPTOR_TOKENS]
+        distinctive = [t for t in normalized.split() if len(t) > 1 and t not in _PLACE_DESCRIPTOR_TOKENS and t not in _GEOGRAPHIC_TOKENS]
         descriptor = [t for t in normalized.split() if len(t) > 1 and t in _PLACE_DESCRIPTOR_TOKENS]
         score = 0.0
         if normalized and normalized in text:
@@ -296,7 +299,7 @@ def _matches_structured_context(text: str, context: FollowUpContext) -> bool:
         normalized = _norm(name)
         if not normalized:
             continue
-        tokens = [t for t in normalized.split() if len(t) > 1 and t not in _skip_tokens]
+        tokens = [t for t in normalized.split() if len(t) > 1 and t not in _skip_tokens and t not in _GEOGRAPHIC_TOKENS]
         if not tokens:
             # If the place name is entirely generic descriptors, only match
             # descriptor overlap when the message is framed as a follow-up.

@@ -431,7 +431,7 @@ test('S06: Chat loop renders messenger UI at mobile and desktop viewports', asyn
 
 // ── Test: Recommendation Flow with Score, Explanation, Provider Evidence ─────
 
-test('S06: Recommendation flow shows score breakdown, explanation, and provider evidence', async (t) => {
+test('S06: Recommendation flow shows score breakdown, explanation, and provider evidence', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -507,7 +507,7 @@ let context;
 
 // ── Test: Contextual Follow-Up Reuses Prior Context ───────────────────────────
 
-test('S06: Follow-up question reuses prior context without RAG/fallback wording', async (t) => {
+test('S06: Follow-up question reuses prior context without RAG/fallback wording', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   let context;
 
@@ -585,7 +585,7 @@ test('S06: Follow-up question reuses prior context without RAG/fallback wording'
 
 // ── Test: Quick Reply Chips Work ─────────────────────────────────────────────
 
-test('S06: Quick reply chips are clickable and send messages', async (t) => {
+test('S06: Quick reply chips are clickable and send messages', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -625,7 +625,7 @@ let context;
 
 // ── Test: Keyboard Accessibility ─────────────────────────────────────────────
 
-test('S06: Keyboard accessibility — Enter sends, Tab navigates', async (t) => {
+test('S06: Keyboard accessibility — Enter sends, Tab navigates', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -665,7 +665,7 @@ let context;
 
 // ── Negative Test: API Error Shows Visible Fallback ───────────────────────────
 
-test('S06 Negative: API error shows visible error state without fabricating response', async (t) => {
+test('S06 Negative: API error shows visible error state without fabricating response', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -728,7 +728,7 @@ let context;
 
 // ── Negative Test: Empty Places Shows Honest Fallback ─────────────────────────
 
-test('S06 Negative: Empty place list shows fallback state without fake results', async (t) => {
+test('S06 Negative: Empty place list shows fallback state without fake results', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -774,7 +774,7 @@ let context;
 
 // ── Negative Test: Missing Explanation Fields Degrades Honestly ──────────────
 
-test('S06 Negative: Missing explanation fields show fallback labels without fake reasoning', async (t) => {
+test('S06 Negative: Missing explanation fields show fallback labels without fake reasoning', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -825,7 +825,7 @@ let context;
 
 // ── Negative Test: Mobile Overflow Check ─────────────────────────────────────
 
-test('S06 Negative: No horizontal overflow on mobile with place cards', async (t) => {
+test('S06 Negative: No horizontal overflow on mobile with place cards', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;
@@ -862,7 +862,7 @@ let context;
 
 // ── Negative Test: Streaming Failure Falls Back to Post-Response ──────────────
 
-test('S06 Negative: Streaming failure falls back to post-response without crash', async (t) => {
+test('S06 Negative: Streaming failure falls back to post-response without crash', async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
 
 let context;

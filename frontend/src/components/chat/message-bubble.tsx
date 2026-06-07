@@ -299,6 +299,8 @@ function citationAnchorId(index: number) {
   return `source-${index + 1}`;
 }
 
+import ReactMarkdown from "react-markdown";
+
 function RichMessageContent({
   content,
   citations,
@@ -306,51 +308,50 @@ function RichMessageContent({
   content: string;
   citations?: Citation[];
 }) {
-  if (!citations?.length) return <>{content}</>;
+  let processedContent = content;
+  if (citations?.length) {
+    processedContent = content.replace(/\[(\d+)\]/g, (match, d) => {
+      const citationIndex = Number(d) - 1;
+      const citation = citations[citationIndex];
+      if (!citation) return match;
+      if (citation.url) {
+        return `[${match}](${citation.url})`;
+      }
+      return `[${match}](#${citationAnchorId(citationIndex)})`;
+    });
+  }
 
-  const parts = content.split(/(\[\d+\])/g);
   return (
-    <>
-      {parts.map((part, index) => {
-        const match = /^\[(\d+)\]$/.exec(part);
-        if (!match) return <span key={`${part}-${index}`}>{part}</span>;
-
-        const citationIndex = Number(match[1]) - 1;
-        const citation = citations[citationIndex];
-        if (!citation) return <span key={`${part}-${index}`}>{part}</span>;
-
-        const className =
-          "mx-0.5 inline-flex translate-y-[-0.08em] items-center rounded-full border border-[#0b5f63]/20 bg-[#0b5f63]/8 px-1.5 py-0.5 text-[0.68em] font-bold leading-none text-[#0b5f63] underline-offset-2 transition-colors hover:border-[#0b5f63]/40 hover:bg-[#0b5f63]/14 focus:outline-none focus:ring-2 focus:ring-[#0b5f63]/25";
-
-        if (citation.url) {
-          return (
-            <a
-              key={`${part}-${index}`}
-              href={citation.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={citation.source}
-              aria-label={`Open source ${match[1]}: ${citation.source}`}
-              className={className}
-            >
-              {part}
-            </a>
-          );
-        }
-
-        return (
-          <a
-            key={`${part}-${index}`}
-            href={`#${citationAnchorId(citationIndex)}`}
-            title={citation.source}
-            aria-label={`View source ${match[1]}: ${citation.source}`}
-            className={className}
-          >
-            {part}
-          </a>
-        );
-      })}
-    </>
+    <div className="[&_p]:mb-2 [&_p:last-child]:mb-0 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-bold">
+      <ReactMarkdown
+        components={{
+          a: ({ node: _node, ...props }) => {
+            const text = String(props.children);
+            const isCitation = /^\[\d+\]$/.test(text);
+            if (isCitation) {
+              return (
+                <a
+                  {...props}
+                  className="mx-0.5 inline-flex translate-y-[-0.08em] items-center rounded-full border border-[#0b5f63]/20 bg-[#0b5f63]/8 px-1.5 py-0.5 text-[0.68em] font-bold leading-none text-[#0b5f63] underline-offset-2 transition-colors hover:border-[#0b5f63]/40 hover:bg-[#0b5f63]/14 focus:outline-none focus:ring-2 focus:ring-[#0b5f63]/25"
+                  target={props.href?.startsWith("#") ? undefined : "_blank"}
+                  rel={props.href?.startsWith("#") ? undefined : "noopener noreferrer"}
+                />
+              );
+            }
+            return (
+              <a
+                {...props}
+                className="text-[#0b5f63] underline underline-offset-2"
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            );
+          },
+        }}
+      >
+        {processedContent}
+      </ReactMarkdown>
+    </div>
   );
 }
 

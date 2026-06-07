@@ -512,6 +512,7 @@ class GooglePlacesService:
             logger.warning("google_places_upstream_5xx", extra={"operation": operation, "status_code": status_code})
             return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Google Places returned an upstream error.", True)
         if status_code >= 400:
+            logger.warning("google_places_400_error", operation=operation, status_code=status_code, response_text=response.text)
             return self._safe_error(request, retrieved_at, metadata, "upstream_error", "Google Places request was not accepted.", False)
 
         try:

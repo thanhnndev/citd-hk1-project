@@ -120,7 +120,7 @@ services:
       - ham_ninh
 
   langfuse-minio-create-bucket:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: minio/mc:latest
     container_name: ham-ninh-langfuse-minio-create-bucket
     depends_on:
       langfuse-minio:

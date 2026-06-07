@@ -294,7 +294,7 @@ class AgentService:
             messages=state["messages"],
             tools=_TOOLS,
             tool_choice="auto",
-            max_completion_tokens=520,
+            max_completion_tokens=2048,
         )
         message = completion.choices[0].message
         tool_calls = self._normalize_tool_calls(list(message.tool_calls or []))
@@ -413,6 +413,7 @@ class AgentService:
                     query=query,
                     language=state["language"],
                     session_id=state["session_id"],
+                    history=state.get("history", []),
                 )
                 state["response_text"] = answer.message
                 state["fallback"] = answer.fallback
