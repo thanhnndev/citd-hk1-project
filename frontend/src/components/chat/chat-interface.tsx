@@ -7,6 +7,16 @@ import { WelcomeScreen } from "./welcome-screen";
 import { ChatSidebar } from "./chat-sidebar";
 import { PlaceResultsPanel } from "./place-results-panel";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
+import { AUTH_CHANGED_EVENT, getUser } from "@/lib/auth-store";
+import {
+  createEmptyConversation,
+  getChatStorageOwner,
+  loadChatConversations,
+  saveChatConversation,
+  toConversationSummaries,
+  type ChatConversationSummary,
+  type StoredChatConversation,
+} from "@/lib/chat-storage";
 import { ArrowDown, ArrowUp, AlertCircle, Loader2, MapPinned, Menu, RotateCcw, Trash2, ArrowRight } from "lucide-react";
 
 interface Message {
@@ -87,19 +97,61 @@ const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
 
 export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chatOwner, setChatOwner] = useState("guest");
+  const [conversations, setConversations] = useState<StoredChatConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [placesOpen, setPlacesOpen] = useState(false);
-  const [sessionId] = useState(() => crypto.randomUUID());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const storageHydratedRef = useRef(false);
 
   const language = (locale === "en" ? "en" : "vi") as "vi" | "en";
   const labels = SOURCE_LABELS[language];
+
+  useEffect(() => {
+    const loadOwnerConversations = () => {
+    const owner = getChatStorageOwner(getUser());
+    const stored = loadChatConversations(owner);
+    const initial = stored[0] ?? createEmptyConversation();
+
+    storageHydratedRef.current = false;
+    setChatOwner(owner);
+    setConversations(stored);
+    setActiveConversationId(initial.id);
+    setSessionId(initial.sessionId);
+    setMessages(initial.messages as Message[]);
+    setError(null);
+    setLoading(false);
+    window.setTimeout(() => {
+      storageHydratedRef.current = true;
+    }, 0);
+    };
+
+    loadOwnerConversations();
+    window.addEventListener(AUTH_CHANGED_EVENT, loadOwnerConversations);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, loadOwnerConversations);
+  }, []);
+
+  useEffect(() => {
+    if (!storageHydratedRef.current || !activeConversationId) return;
+    if (messages.length === 0) return;
+
+    const conversation: StoredChatConversation = {
+      id: activeConversationId,
+      sessionId,
+      title: "",
+      updatedAt: Date.now(),
+      messages,
+    };
+    setConversations(saveChatConversation(chatOwner, conversation));
+  }, [activeConversationId, chatOwner, messages, sessionId]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
@@ -243,6 +295,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, [messages, handleSubmit]);
 
   const handleClearConversation = useCallback(() => {
+    const next = createEmptyConversation();
+    setActiveConversationId(next.id);
+    setSessionId(next.sessionId);
     setMessages([]);
     setError(null);
     setLoading(false);
@@ -250,6 +305,22 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     setIsNearBottom(true);
     textareaRef.current?.focus();
   }, []);
+
+  const handleSelectConversation = useCallback(
+    (conversationId: string) => {
+      const conversation = conversations.find((item) => item.id === conversationId);
+      if (!conversation || loading) return;
+
+      setActiveConversationId(conversation.id);
+      setSessionId(conversation.sessionId);
+      setMessages(conversation.messages as Message[]);
+      setError(null);
+      setInput("");
+      setSidebarOpen(false);
+      setIsNearBottom(true);
+    },
+    [conversations, loading],
+  );
 
   // Derived from messages — needed by quick reply derivation and status bar
   const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
@@ -263,6 +334,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     .map((message) => message.content)
     .slice(-2)
     .reverse();
+  const conversationSummaries: ChatConversationSummary[] = toConversationSummaries(conversations);
   const placeTranslations = {
     placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
     viewOnMap: translations.viewOnMap ?? "View on Map",
@@ -402,7 +474,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           locale={locale}
           newQuestion={translations.newQuestion}
           recentQuestions={recentQuestions}
+          conversationSummaries={conversationSummaries}
+          activeConversationId={activeConversationId}
           onNewQuestion={handleClearConversation}
+          onSelectConversation={handleSelectConversation}
           mobileOpen={sidebarOpen}
           onMobileClose={() => setSidebarOpen(false)}
         />

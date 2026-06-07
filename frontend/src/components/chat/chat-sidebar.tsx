@@ -12,11 +12,16 @@ import {
   X,
 } from "lucide-react";
 
+import type { ChatConversationSummary } from "@/lib/chat-storage";
+
 interface ChatSidebarProps {
   locale: string;
   newQuestion: string;
   recentQuestions: string[];
+  conversationSummaries: ChatConversationSummary[];
+  activeConversationId: string | null;
   onNewQuestion: () => void;
+  onSelectConversation: (conversationId: string) => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
 }
@@ -25,7 +30,10 @@ export function ChatSidebar({
   locale,
   newQuestion,
   recentQuestions,
+  conversationSummaries,
+  activeConversationId,
   onNewQuestion,
+  onSelectConversation,
   mobileOpen,
   onMobileClose,
 }: ChatSidebarProps) {
@@ -43,6 +51,15 @@ export function ChatSidebar({
         [Hotel, "Hotels & resorts"],
         [Ticket, "Tickets & booking"],
       ];
+
+  const formatUpdatedAt = (updatedAt: number): string => {
+    const date = new Date(updatedAt);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleDateString(isVi ? "vi-VN" : "en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  };
 
   const content = (
     <div className="flex h-full min-h-0 flex-col">
@@ -93,10 +110,37 @@ export function ChatSidebar({
 
         <div className="mt-8">
           <p className="px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#91918e]">
-            {isVi ? "Lịch sử" : "History"}
+            {isVi ? "Lịch sử tài khoản" : "Account history"}
           </p>
           <div className="mt-2 space-y-1">
-            {recentQuestions.length > 0 ? (
+            {conversationSummaries.length > 0 ? (
+              conversationSummaries.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => {
+                    onSelectConversation(conversation.id);
+                    onMobileClose();
+                  }}
+                  className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${
+                    conversation.id === activeConversationId
+                      ? "bg-[#e7f2fb] text-[#005d90]"
+                      : "text-[#787774] hover:bg-black/[0.05]"
+                  }`}
+                  title={conversation.title}
+                >
+                  <span className="block truncate text-xs font-semibold">
+                    {conversation.title}
+                  </span>
+                  <span className="mt-1 flex items-center justify-between gap-2 text-[10px] text-[#91918e]">
+                    <span>
+                      {conversation.messageCount} {isVi ? "tin nhắn" : "messages"}
+                    </span>
+                    <span>{formatUpdatedAt(conversation.updatedAt)}</span>
+                  </span>
+                </button>
+              ))
+            ) : recentQuestions.length > 0 ? (
               recentQuestions.map((question, index) => (
                 <p
                   key={`${index}-${question}`}
