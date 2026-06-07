@@ -34,6 +34,11 @@ assert.match(
   /messages\.length > 0 && \(isNearBottom \|\| loading\)/,
   "empty welcome screen should not auto-scroll to the bottom",
 );
+assert.doesNotMatch(
+  chat,
+  /<header className="relative z-10 flex h-14/,
+  "chat page should not render a second internal top header",
+);
 assert.match(sidebar, /newQuestion/);
 assert.match(places, /PlaceCard/);
 assert.match(places, /PlaceResult/);

@@ -97,9 +97,9 @@ export function ChatSidebar({
           </p>
           <div className="mt-2 space-y-1">
             {recentQuestions.length > 0 ? (
-              recentQuestions.map((question) => (
+              recentQuestions.map((question, index) => (
                 <p
-                  key={question}
+                  key={`${index}-${question}`}
                   className="truncate rounded-md px-3 py-2 text-xs text-[#787774]"
                   title={question}
                 >

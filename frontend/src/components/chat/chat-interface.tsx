@@ -7,7 +7,7 @@ import { WelcomeScreen } from "./welcome-screen";
 import { ChatSidebar } from "./chat-sidebar";
 import { PlaceResultsPanel } from "./place-results-panel";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
-import { ArrowDown, ArrowUp, AlertCircle, Bell, Loader2, MapPinned, Menu, RotateCcw, Search, Trash2, ArrowRight } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, Loader2, MapPinned, Menu, RotateCcw, Trash2, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -408,43 +408,6 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         />
 
         <main className="relative flex min-h-0 min-w-0 flex-col bg-white">
-          <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-[#e9e9e7] bg-white px-4 sm:px-6">
-            <div className="flex min-w-0 items-center gap-3">
-              <button
-                type="button"
-                className="rounded-md p-1.5 text-[#787774] hover:bg-[#f7f7f5] lg:hidden"
-                onClick={() => setSidebarOpen(true)}
-                aria-label={language === "vi" ? "Mở menu" : "Open menu"}
-              >
-                <Menu className="size-5" />
-              </button>
-              <h1 className="truncate text-sm font-semibold sm:text-base">
-                {translations.title}
-              </h1>
-            </div>
-            <div className="flex items-center gap-1 text-[#787774]">
-              <button type="button" className="rounded-md p-2 hover:bg-[#f7f7f5]" aria-label={language === "vi" ? "Tìm kiếm" : "Search"}>
-                <Search className="size-4" />
-              </button>
-              <button type="button" className="relative rounded-md p-2 hover:bg-[#f7f7f5]" aria-label={language === "vi" ? "Thông báo" : "Notifications"}>
-                <Bell className="size-4" />
-                <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[#eb5757]" />
-              </button>
-              {latestPlaces.length > 0 && (
-                <button
-                  type="button"
-                  className="rounded-md p-2 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
-                  onClick={() => setPlacesOpen(true)}
-                  aria-label={placeTranslations.placeResultsHeading}
-                >
-                  <MapPinned className="size-4" />
-                </button>
-              )}
-              <span className="ml-1 grid size-7 place-items-center rounded-full bg-[#2eaadc] text-xs font-semibold text-white">
-                AI
-              </span>
-            </div>
-          </header>
 
       {/* Full-height scroll region — mobile-first with safe-area bottom padding for the composer */}
       <div
@@ -630,6 +593,24 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         <div className="mx-auto max-w-4xl">
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                className="mr-1 rounded-md p-1 text-[#787774] hover:bg-[#f7f7f5] lg:hidden"
+                onClick={() => setSidebarOpen(true)}
+                aria-label={language === "vi" ? "Mở menu" : "Open menu"}
+              >
+                <Menu className="size-4" />
+              </button>
+              {latestPlaces.length > 0 && (
+                <button
+                  type="button"
+                  className="mr-1 rounded-md p-1 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
+                  onClick={() => setPlacesOpen(true)}
+                  aria-label={placeTranslations.placeResultsHeading}
+                >
+                  <MapPinned className="size-4" />
+                </button>
+              )}
               {activeStatus && loading && <Loader2 className="size-3 animate-spin" />}
               {activeStatus && <span>{activeStatus}</span>}
             </div>
