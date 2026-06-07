@@ -4,8 +4,10 @@ import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
+import { ChatSidebar } from "./chat-sidebar";
+import { PlaceResultsPanel } from "./place-results-panel";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
-import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, RotateCcw, ShieldCheck, Trash2, Waves, ArrowRight } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, Bell, Loader2, MapPinned, Menu, RotateCcw, Search, Trash2, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -89,6 +91,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [placesOpen, setPlacesOpen] = useState(false);
   const [sessionId] = useState(() => crypto.randomUUID());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -102,7 +106,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, []);
 
   useEffect(() => {
-    if (isNearBottom || loading) {
+    if (messages.length > 0 && (isNearBottom || loading)) {
       scrollToBottom("smooth");
     }
   }, [messages, isNearBottom, loading, scrollToBottom]);
@@ -249,6 +253,30 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
   // Derived from messages — needed by quick reply derivation and status bar
   const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const latestPlaces =
+    [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.places?.length)
+      ?.places ?? [];
+  const recentQuestions = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .slice(-2)
+    .reverse();
+  const placeTranslations = {
+    placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
+    viewOnMap: translations.viewOnMap ?? "View on Map",
+    scoreLabel: translations.scoreLabel ?? "Score",
+    noRating: translations.noRating ?? "No rating",
+    scoreBreakdown: translations.scoreBreakdown ?? "Score Breakdown",
+    explanation: translations.explanation ?? "Why this place?",
+    providerSource: translations.providerSource ?? "Source",
+    providerStatus: translations.providerStatus ?? "Status",
+    scoreDataLimited:
+      translations.scoreDataLimited ?? "Limited scoring data available",
+    accessibilityNote:
+      translations.accessibilityNote ?? "Accessibility info",
+  };
   const sourceCount = lastAssistant?.citations?.length ?? 0;
   const activeStatus = lastAssistant?.streamStatus
     ? STATUS_LABELS[language][lastAssistant.streamStatus]
@@ -362,48 +390,72 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, [input]);
 
   return (
-<<<<<<< HEAD
-    <div className="flex flex-col" style={{ height: 'calc(100dvh - 64px)' }}>
-      {/* Messages area */}
-=======
-    <div className="relative flex h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-[#f4eddf] md:h-[calc(100dvh-5rem)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(12,95,99,0.18),transparent_34%),radial-gradient(circle_at_86%_22%,rgba(232,137,58,0.20),transparent_30%),linear-gradient(135deg,#f7f0e4_0%,#e3f2ee_54%,#fff8e9_100%)]" />
-      <div className="pointer-events-none absolute left-0 top-0 h-full w-full opacity-[0.08] [background-image:linear-gradient(90deg,#0b5f63_1px,transparent_1px),linear-gradient(#0b5f63_1px,transparent_1px)] [background-size:44px_44px]" />
+    <div className="h-[calc(100dvh-4rem)] min-h-[36rem] overflow-hidden bg-white text-[#37352f]">
+      <div
+        className={`grid h-full min-h-0 ${
+          latestPlaces.length > 0
+            ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
+            : "lg:grid-cols-[240px_minmax(0,1fr)]"
+        }`}
+      >
+        <ChatSidebar
+          locale={locale}
+          newQuestion={translations.newQuestion}
+          recentQuestions={recentQuestions}
+          onNewQuestion={handleClearConversation}
+          mobileOpen={sidebarOpen}
+          onMobileClose={() => setSidebarOpen(false)}
+        />
 
-      <header className="relative z-10 border-b border-[#0b5f63]/10 bg-[#fffaf0]/78 px-4 py-3 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#0b5f63] text-[#fffaf0] shadow-lg shadow-[#0b5f63]/20">
-              <Compass className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#0b5f63]">
-                <Waves className="size-3.5" />
-                Ham Ninh Guide
-              </div>
-              <h1 className="mt-0.5 truncate text-lg font-semibold tracking-tight text-[#123436] md:text-2xl">
+        <main className="relative flex min-h-0 min-w-0 flex-col bg-white">
+          <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-[#e9e9e7] bg-white px-4 sm:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                className="rounded-md p-1.5 text-[#787774] hover:bg-[#f7f7f5] lg:hidden"
+                onClick={() => setSidebarOpen(true)}
+                aria-label={language === "vi" ? "Mở menu" : "Open menu"}
+              >
+                <Menu className="size-5" />
+              </button>
+              <h1 className="truncate text-sm font-semibold sm:text-base">
                 {translations.title}
               </h1>
             </div>
-          </div>
-          <div className="hidden items-center gap-2 rounded-full border border-[#0b5f63]/15 bg-white/70 px-3 py-1.5 text-xs text-[#426365] shadow-sm md:flex">
-            <ShieldCheck className="size-3.5 text-[#0b5f63]" />
-            {language === "vi" ? "Trợ lý AI - hãy kiểm chứng thông tin quan trọng" : "AI assistant - verify important details"}
-          </div>
-        </div>
-      </header>
+            <div className="flex items-center gap-1 text-[#787774]">
+              <button type="button" className="rounded-md p-2 hover:bg-[#f7f7f5]" aria-label={language === "vi" ? "Tìm kiếm" : "Search"}>
+                <Search className="size-4" />
+              </button>
+              <button type="button" className="relative rounded-md p-2 hover:bg-[#f7f7f5]" aria-label={language === "vi" ? "Thông báo" : "Notifications"}>
+                <Bell className="size-4" />
+                <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-[#eb5757]" />
+              </button>
+              {latestPlaces.length > 0 && (
+                <button
+                  type="button"
+                  className="rounded-md p-2 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
+                  onClick={() => setPlacesOpen(true)}
+                  aria-label={placeTranslations.placeResultsHeading}
+                >
+                  <MapPinned className="size-4" />
+                </button>
+              )}
+              <span className="ml-1 grid size-7 place-items-center rounded-full bg-[#2eaadc] text-xs font-semibold text-white">
+                AI
+              </span>
+            </div>
+          </header>
 
       {/* Full-height scroll region — mobile-first with safe-area bottom padding for the composer */}
->>>>>>> 58b081fb053a4f834ef518a1739675896523f68e
       <div
         ref={scrollRef}
-        className="relative z-10 flex-1 overflow-y-auto px-2 pb-[env(safe-area-inset-bottom)] py-3 sm:px-3 sm:py-4 md:px-6"
+        className="relative z-10 flex-1 overflow-y-auto px-3 py-5 sm:px-6"
         role="log"
         aria-live="polite"
         aria-label={translations.title}
         onScroll={handleScroll}
       >
-        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-4 sm:gap-5">
+        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-6">
           {messages.length === 0 && !error && (
             <WelcomeScreen
               onPromptClick={handlePromptClick}
@@ -498,18 +550,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 copied: translations.copied,
                 retry: translations.retryMessage,
               }}
-              placeTranslations={{
-                placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
-                viewOnMap: translations.viewOnMap ?? "View on Map",
-                scoreLabel: translations.scoreLabel ?? "Score",
-                noRating: translations.noRating ?? "No rating",
-                scoreBreakdown: translations.scoreBreakdown ?? "Score Breakdown",
-                explanation: translations.explanation ?? "Why this place?",
-                providerSource: translations.providerSource ?? "Source",
-                providerStatus: translations.providerStatus ?? "Status",
-                scoreDataLimited: translations.scoreDataLimited ?? "Limited scoring data available",
-                accessibilityNote: translations.accessibilityNote ?? "Accessibility info",
-              }}
+              placeTranslations={placeTranslations}
             />
           ))}
 
@@ -548,7 +589,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       {/* Quick reply chips — deterministic, derived from local UI state */}
       {quickReplyChips.length > 0 && !loading && (
-        <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/60 px-2 py-2 sm:px-3 sm:py-2.5">
+        <div className="relative z-10 border-t border-[#e9e9e7] bg-white px-4 py-2.5">
           <div className="mx-auto max-w-4xl">
             <div className="flex items-center gap-2 px-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-[#5d7373]">
               <ArrowRight className="size-3" />
@@ -561,7 +602,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                   type="button"
                   onClick={() => handleQuickReplyClick(label)}
                   disabled={loading}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-[#0b5f63]/20 bg-white/80 px-3 py-1.5 text-xs font-medium text-[#0b5f63] shadow-sm transition-colors hover:bg-[#0b5f63]/10 hover:border-[#0b5f63]/30 active:bg-[#0b5f63]/15 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {label}
                 </button>
@@ -585,7 +626,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       )}
 
       {/* Sticky bottom composer — mobile-first with safe-area padding */}
-      <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/82 px-2 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] backdrop-blur-xl sm:px-3 sm:py-3 md:px-4">
+      <footer className="relative z-10 shrink-0 border-t border-[#e9e9e7] bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:px-8">
         <div className="mx-auto max-w-4xl">
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -594,7 +635,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             </div>
             <span className="hidden sm:inline">{labels.inputHint}</span>
           </div>
-          <div className="flex items-end gap-1.5 rounded-[1.45rem] border border-white/90 bg-white/90 p-1.5 shadow-2xl shadow-[#0b5f63]/10 ring-1 ring-[#0b5f63]/8 sm:gap-2 sm:p-2">
+          <div className="flex items-end gap-1.5 rounded-2xl border border-[#e9e9e7] bg-white p-1.5 shadow-sm focus-within:border-[#2383e2] focus-within:ring-2 focus-within:ring-[#2383e2]/10 sm:gap-2 sm:p-2">
             <textarea
               ref={textareaRef}
               value={input}
@@ -603,14 +644,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               placeholder={translations.placeholder}
               disabled={loading}
               rows={1}
-              className="max-h-36 min-h-10 flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#123436] placeholder:text-[#6f8584] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:text-sm sm:leading-6 sm:px-3 sm:py-2.5"
+              className="max-h-36 min-h-10 flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#37352f] placeholder:text-[#91918e] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:px-3 sm:py-2.5"
               aria-label={translations.placeholder}
             />
             {messages.length > 0 && (
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-10 w-10 shrink-0 rounded-2xl text-[#6f8584] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
+                className="h-10 w-10 shrink-0 rounded-xl text-[#787774] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
                 onClick={handleClearConversation}
                 disabled={loading}
                 aria-label={translations.newConversation ?? "New conversation"}
@@ -623,7 +664,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               onClick={() => handleSubmit()}
               disabled={loading || !input.trim()}
               size="icon"
-              className="h-10 w-10 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50] sm:h-11 sm:w-11"
+              className="h-10 w-10 shrink-0 rounded-xl bg-[#2383e2] shadow-sm hover:bg-[#1d6dc3] sm:h-11 sm:w-11"
               aria-label={translations.send}
               title={translations.send}
             >
@@ -631,6 +672,17 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             </Button>
           </div>
         </div>
+      </footer>
+        </main>
+
+        {latestPlaces.length > 0 && (
+          <PlaceResultsPanel
+            places={latestPlaces}
+            translations={placeTranslations}
+            mobileOpen={placesOpen}
+            onMobileClose={() => setPlacesOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
