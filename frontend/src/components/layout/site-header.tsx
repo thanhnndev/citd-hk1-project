@@ -3,58 +3,61 @@ import { Link } from '@/i18n/routing';
 import { cn } from '@/lib/utils';
 import { LocaleSwitcher } from './locale-switcher';
 import { AuthNav } from './auth-nav';
+import { HeaderNavigation } from './header-navigation';
 
 type SiteHeaderProps = {
   locale: string;
   className?: string;
 };
 
-const navItems = [
-  { href: '/', translationKey: 'home' as const },
-  { href: '/chat', translationKey: 'chat' as const },
-  { href: '/map', translationKey: 'map' as const },
-  { href: '/architecture', translationKey: 'architecture' as const },
-] as const;
-
 export async function SiteHeader({ locale, className }: SiteHeaderProps) {
   const t = await getTranslations('Navigation');
+  const navItems = [
+    { href: '/' as const, label: t('home') },
+    { href: '/chat' as const, label: t('chat') },
+    { href: '/map' as const, label: t('map') },
+    { href: '/architecture' as const, label: t('architecture') },
+  ];
 
   return (
     <header
       className={cn(
-        'sticky top-0 z-50 w-full border-b border-border/60 bg-background/80 backdrop-blur-md',
+        'sticky top-0 z-50 h-16 w-full border-b border-[#e5e7eb] bg-white/95 backdrop-blur-sm',
         className
       )}
       role="banner"
     >
       <nav
-        className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8"
+        className="mx-auto grid h-16 max-w-7xl grid-cols-[1fr_auto] items-center px-4 sm:px-6 md:grid-cols-[1fr_auto_1fr] lg:px-8"
         aria-label={t('localeLabel')}
       >
-        {/* Logo / Brand */}
         <Link
           href="/"
-          className="flex shrink-0 items-center text-lg font-semibold text-foreground transition-colors hover:text-primary"
+          className="flex w-fit shrink-0 items-center gap-2.5"
         >
-          Hàm Ninh AI
+          <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#087fb9] text-white">
+            <svg
+              data-testid="ham-ninh-logo"
+              viewBox="0 0 64 64"
+              className="h-8 w-8"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path d="M32 10v14" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" />
+              <path d="M19 43 32 18l13 25H19Z" fill="currentColor" />
+              <circle cx="32" cy="33" r="4.5" fill="#087fb9" />
+              <path d="M11 33H5m54 0h-6" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" />
+              <path d="M17 47c5-3 10-3 15 0s10 3 15 0v8c-5 3-10 3-15 0s-10-3-15 0v-8Z" fill="currentColor" />
+            </svg>
+          </span>
+          <span className="hidden text-sm font-bold tracking-tight text-[#005d90] sm:inline">
+            Hàm Ninh AI
+          </span>
         </Link>
 
-        {/* Desktop navigation links */}
-        <ul className="hidden items-center gap-6 md:flex">
-          {navItems.map(({ href, translationKey }) => (
-            <li key={href}>
-              <Link
-                href={href}
-                className="text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
-              >
-                {t(translationKey)}
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <HeaderNavigation items={navItems} />
 
-        {/* Right side: locale switcher + auth */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center justify-end gap-2 sm:gap-3">
           <LocaleSwitcher />
           <AuthNav
             locale={locale}

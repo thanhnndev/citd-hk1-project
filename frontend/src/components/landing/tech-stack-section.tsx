@@ -19,7 +19,7 @@ export function TechStackSection({ eyebrow, heading, body, items }: TechStackSec
     <SectionShell id="tech-stack" eyebrow={eyebrow} heading={heading} body={body}>
       <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {items.map((item) => (
-          <div key={item.name} className="rounded-xl border bg-background/70 p-5 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+          <div key={item.name} className="rounded-xl border border-primary/20 bg-white p-5 shadow-sm">
             <Badge variant="muted" className="mb-4">
               {item.name}
             </Badge>

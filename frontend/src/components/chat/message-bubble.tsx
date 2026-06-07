@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { CitationCard } from "./citation-card";
 import { PlaceCard } from "./place-card";
 import { MessageActions } from "./message-actions";
@@ -13,6 +14,55 @@ import {
   ArrowRight,
 } from "lucide-react";
 import type { ChatStreamStatus, Citation, PlaceResult } from "@/lib/chat-api";
+
+const markdownComponents: Components = {
+  p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+  strong: ({ children }) => (
+    <strong className="font-semibold text-current">{children}</strong>
+  ),
+  em: ({ children }) => <em className="italic">{children}</em>,
+  ul: ({ children }) => (
+    <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>
+  ),
+  li: ({ children }) => <li className="pl-1">{children}</li>,
+  h1: ({ children }) => (
+    <h3 className="mb-2 mt-4 text-lg font-semibold">{children}</h3>
+  ),
+  h2: ({ children }) => (
+    <h3 className="mb-2 mt-4 text-base font-semibold">{children}</h3>
+  ),
+  h3: ({ children }) => (
+    <h4 className="mb-2 mt-3 font-semibold">{children}</h4>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-3 border-l-2 border-[#2383e2] pl-3 text-[#5f5e5b]">
+      {children}
+    </blockquote>
+  ),
+  code: ({ className, children }) =>
+    className ? (
+      <code className="block overflow-x-auto rounded-lg bg-[#f7f7f5] p-3 font-mono text-xs">
+        {children}
+      </code>
+    ) : (
+      <code className="rounded bg-[#f7f7f5] px-1.5 py-0.5 font-mono text-[0.9em]">
+        {children}
+      </code>
+    ),
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-medium text-[#2383e2] underline underline-offset-2"
+    >
+      {children}
+    </a>
+  ),
+};
 
 export type MessageStatus = "submitted" | "streaming" | "complete";
 
@@ -103,14 +153,14 @@ export function MessageBubble({
 
   return (
     <article
-      className={`flex gap-2.5 animate-slideUp transition-all duration-200 sm:gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+      className={`flex gap-3 animate-slideUp transition-all duration-200 ${isUser ? "flex-row-reverse" : "flex-row"}`}
     >
       {/* Compact avatar — distinct per role */}
       <div
         className={`mt-1 grid size-7 shrink-0 place-items-center rounded-full shadow-sm ring-1 transition-colors sm:size-8 ${
           isUser
-            ? "bg-[#0b5f63] text-white ring-[#0b5f63]/20"
-            : "bg-[#fffaf0] text-[#0b5f63] ring-[#0b5f63]/15"
+            ? "bg-[#2b7a78] text-white ring-[#2b7a78]/20"
+            : "rounded-lg bg-[#2383e2] text-white ring-[#2383e2]/20"
         }`}
         aria-hidden="true"
       >
@@ -122,7 +172,7 @@ export function MessageBubble({
       </div>
 
       <div
-        className={`flex min-w-0 max-w-[86%] flex-col md:max-w-[74%] ${isUser ? "items-end" : "items-start"}`}
+        className={`flex min-w-0 max-w-[88%] flex-col md:max-w-[82%] ${isUser ? "items-end" : "items-start"}`}
       >
         {/* Sender label + status badge */}
         <div
@@ -141,20 +191,21 @@ export function MessageBubble({
 
         {/* Message bubble — visibly distinct left/right styles */}
         <div
-          className={`group relative rounded-[1.35rem] px-3.5 py-2.5 shadow-sm transition-shadow duration-200 hover:shadow-md sm:rounded-[1.45rem] sm:px-4 sm:py-3 ${
+          className={`group relative px-4 py-3 shadow-sm transition-shadow duration-200 hover:shadow-md sm:px-5 sm:py-4 ${
             isUser
-              ? "rounded-tr-md bg-gradient-to-br from-[#0b5f63] to-[#0d7a7e] text-white shadow-[#0b5f63]/20"
-              : "rounded-tl-md border border-white/80 bg-[#fffdf8]/92 text-[#173a3b] shadow-slate-900/8 backdrop-blur"
+              ? "rounded-2xl rounded-tr-sm bg-[#f0f0f0] text-[#37352f]"
+              : "rounded-xl border border-[#e9e9e7] bg-white text-[#37352f]"
           }`}
         >
           <div
-            className={`whitespace-pre-wrap text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7 ${isUser ? "text-white" : ""}`}
+            className="whitespace-pre-wrap text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7"
           >
             {content ? (
-              <RichMessageContent
-                content={content}
-                citations={isUser ? undefined : citations}
-              />
+              isUser ? (
+                content
+              ) : (
+                <RichMessageContent content={content} citations={citations} />
+              )
             ) : (
               <span className="inline-flex items-center gap-2 text-[#4d6868]">
                 <TypingDots />
@@ -171,7 +222,7 @@ export function MessageBubble({
 
           {/* Hover actions — copy, retry */}
           {!isUser && !isPending && content && (
-            <div className="absolute -bottom-3 right-3 rounded-full border border-slate-200 bg-white opacity-0 shadow-sm transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+            <div className="absolute -bottom-3 right-3 rounded-md border border-[#e9e9e7] bg-white shadow-sm">
               <MessageActions
                 content={content}
                 onRetry={onRetry}
@@ -234,10 +285,10 @@ export function MessageBubble({
         {/* Citations — collapsible sources drawer */}
         {!isUser && hasSources && (
           <details
-            className="mt-3 max-w-full rounded-2xl border border-[#0b5f63]/10 bg-white/65 p-2 shadow-sm"
+            className="mt-3 max-w-full rounded-lg bg-[#f7f7f5] p-3"
             aria-label={sourcesLabel}
           >
-            <summary className="cursor-pointer list-none rounded-xl px-2 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[#0b5f63] transition-colors hover:bg-white/70">
+            <summary className="cursor-pointer list-none px-1 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#787774]">
               {sourcesLabel} ({citations!.length})
             </summary>
             <div className="mt-2 grid max-w-full gap-2 overflow-hidden">
@@ -253,7 +304,7 @@ export function MessageBubble({
         {/* Place cards — curated first, with progressive disclosure for more results. */}
         {!isUser && places && places.length > 0 && placeTranslations && (
           <section
-            className="mt-3 max-w-full overflow-hidden rounded-3xl border border-[#0b5f63]/10 bg-white/72 p-3 shadow-sm"
+            className="mt-3 max-w-full overflow-hidden rounded-xl border border-[#e9e9e7] bg-white p-3 shadow-sm lg:hidden"
             role="region"
             aria-label={placeTranslations.placeResultsHeading}
           >
@@ -306,52 +357,22 @@ function RichMessageContent({
   content: string;
   citations?: Citation[];
 }) {
-  if (!citations?.length) return <>{content}</>;
-
-  const parts = content.split(/(\[\d+\])/g);
   return (
-    <>
-      {parts.map((part, index) => {
-        const match = /^\[(\d+)\]$/.exec(part);
-        if (!match) return <span key={`${part}-${index}`}>{part}</span>;
-
-        const citationIndex = Number(match[1]) - 1;
-        const citation = citations[citationIndex];
-        if (!citation) return <span key={`${part}-${index}`}>{part}</span>;
-
-        const className =
-          "mx-0.5 inline-flex translate-y-[-0.08em] items-center rounded-full border border-[#0b5f63]/20 bg-[#0b5f63]/8 px-1.5 py-0.5 text-[0.68em] font-bold leading-none text-[#0b5f63] underline-offset-2 transition-colors hover:border-[#0b5f63]/40 hover:bg-[#0b5f63]/14 focus:outline-none focus:ring-2 focus:ring-[#0b5f63]/25";
-
-        if (citation.url) {
-          return (
-            <a
-              key={`${part}-${index}`}
-              href={citation.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={citation.source}
-              aria-label={`Open source ${match[1]}: ${citation.source}`}
-              className={className}
-            >
-              {part}
-            </a>
-          );
-        }
-
-        return (
-          <a
-            key={`${part}-${index}`}
-            href={`#${citationAnchorId(citationIndex)}`}
-            title={citation.source}
-            aria-label={`View source ${match[1]}: ${citation.source}`}
-            className={className}
-          >
-            {part}
-          </a>
-        );
-      })}
-    </>
+    <ReactMarkdown components={markdownComponents}>
+      {transformCitationMarkers(content, citations)}
+    </ReactMarkdown>
   );
+}
+
+function transformCitationMarkers(content: string, citations?: Citation[]) {
+  if (!citations?.length) return content;
+
+  return content.replace(/\[(\d+)\]/g, (marker, rawIndex: string) => {
+    const index = Number(rawIndex) - 1;
+    const citation = citations[index];
+    if (!citation) return marker;
+    return `[${rawIndex}](${citation.url || `#${citationAnchorId(index)}`})`;
+  });
 }
 
 function TypingDots() {

@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Eye, EyeOff } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Eye, EyeOff, Loader2, LockKeyhole, Mail } from "lucide-react";
 import { login } from "@/lib/auth-api";
 import { saveToken, saveUser } from "@/lib/auth-store";
 import { Link } from "@/i18n/routing";
@@ -22,6 +21,8 @@ interface LoginFormProps {
     registerPrompt: string;
     registerLink: string;
     verifyError: string;
+    rememberLogin: string;
+    forgotPassword: string;
   };
 }
 
@@ -74,9 +75,13 @@ export function LoginForm({ locale, translations }: LoginFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-      <div className="space-y-1.5">
-        <label htmlFor="email" className="text-sm font-medium text-foreground">
+    <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+      <div>
+        <label
+          htmlFor="email"
+          className="flex items-center gap-2 text-xs font-semibold tracking-[0.04em] text-[#404850]"
+        >
+          <Mail className="h-4 w-4" aria-hidden="true" />
           {translations.emailLabel}
         </label>
         <input
@@ -88,12 +93,16 @@ export function LoginForm({ locale, translations }: LoginFormProps) {
           onChange={(e) => setEmail(e.target.value)}
           placeholder={translations.emailPlaceholder}
           disabled={loading}
-          className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          className="w-full rounded-none border-0 border-b border-[#9aa5b1] bg-transparent px-2 py-3 text-sm text-[#001b3c] outline-none transition-colors placeholder:text-[#6b7280] focus:border-b-2 focus:border-[#0077b6] focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
         />
       </div>
 
-      <div className="space-y-1.5">
-        <label htmlFor="password" className="text-sm font-medium text-foreground">
+      <div>
+        <label
+          htmlFor="password"
+          className="flex items-center gap-2 text-xs font-semibold tracking-[0.04em] text-[#404850]"
+        >
+          <LockKeyhole className="h-4 w-4" aria-hidden="true" />
           {translations.passwordLabel}
         </label>
         <div className="relative">
@@ -106,28 +115,51 @@ export function LoginForm({ locale, translations }: LoginFormProps) {
             onChange={(e) => setPassword(e.target.value)}
             placeholder={translations.passwordPlaceholder}
             disabled={loading}
-            className="w-full rounded-xl border border-input bg-background px-3 py-2 pr-10 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="w-full rounded-none border-0 border-b border-[#9aa5b1] bg-transparent px-2 py-3 pr-11 text-sm text-[#001b3c] outline-none transition-colors placeholder:text-[#6b7280] focus:border-b-2 focus:border-[#0077b6] focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <button
             type="button"
             onClick={() => setShowPassword((v) => !v)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            className="absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center text-[#404850] transition-colors hover:text-[#0077b6]"
             aria-label={showPassword ? translations.hidePassword : translations.showPassword}
           >
-            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
           </button>
         </div>
       </div>
 
-      {/* Error */}
+      <div className="flex items-center justify-between gap-4 pt-1 text-xs">
+        <label className="flex cursor-pointer items-center gap-2 font-semibold text-[#404850]">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded-sm border-[#9aa5b1] text-[#0077b6] focus:ring-[#0077b6]"
+          />
+          {translations.rememberLogin}
+        </label>
+        <button
+          type="button"
+          className="font-semibold text-[#0077b6] hover:underline"
+          title={translations.forgotPassword}
+          aria-disabled="true"
+        >
+          {translations.forgotPassword}
+        </button>
+      </div>
+
       {error && (
-        <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div
+          role="alert"
+          className="border-l-2 border-[#ba1a1a] bg-[#ffdad6]/55 px-3 py-2 text-sm text-[#93000a]"
+        >
           {error}
         </div>
       )}
 
-      {/* Submit */}
-      <Button type="submit" className="w-full" disabled={loading}>
+      <button
+        type="submit"
+        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-sm bg-[#0077b6] px-4 py-3 text-sm font-bold uppercase text-white shadow-[0_5px_12px_rgba(0,93,144,0.18)] transition-[opacity,transform] hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={loading}
+      >
         {loading ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -136,14 +168,13 @@ export function LoginForm({ locale, translations }: LoginFormProps) {
         ) : (
           translations.submitButton
         )}
-      </Button>
+      </button>
 
-      {/* Register link */}
-      <p className="text-center text-sm text-muted-foreground">
+      <p className="text-center text-xs text-[#6b7280]">
         {translations.registerPrompt}{" "}
         <Link
           href="/auth/register"
-          className="font-medium text-primary underline-offset-4 hover:underline"
+          className="font-semibold text-[#0077b6] underline-offset-4 hover:underline"
         >
           {translations.registerLink}
         </Link>

@@ -4,20 +4,23 @@ import { useMemo, useState } from "react";
 import { ExternalLink, MapPin, Star, ChevronDown, ChevronUp, Navigation, Baby, Trees, Utensils } from "lucide-react";
 import type { PlaceResult } from "@/lib/chat-api";
 
+export interface PlaceCardTranslations {
+  viewOnMap: string;
+  scoreLabel: string;
+  noRating: string;
+  scoreBreakdown?: string;
+  explanation?: string;
+  providerSource?: string;
+  providerStatus?: string;
+  scoreDataLimited?: string;
+  accessibilityNote?: string;
+}
+
 interface PlaceCardProps {
   place: PlaceResult;
   rank?: number;
-  translations: {
-    viewOnMap: string;
-    scoreLabel: string;
-    noRating: string;
-    scoreBreakdown?: string;
-    explanation?: string;
-    providerSource?: string;
-    providerStatus?: string;
-    scoreDataLimited?: string;
-    accessibilityNote?: string;
-  };
+  variant?: "default" | "panel";
+  translations: PlaceCardTranslations;
 }
 
 type FriendlyCategory = {
@@ -72,7 +75,7 @@ function shortAddress(address?: string | null): string | null {
   return address.split(",").slice(0, 2).join(",").trim();
 }
 
-export function PlaceCard({ place, rank, translations }: PlaceCardProps) {
+export function PlaceCard({ place, rank, variant = "default", translations }: PlaceCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const isVi = isVietnamese(translations);
   const category = friendlyType(place);
@@ -93,7 +96,11 @@ export function PlaceCard({ place, rank, translations }: PlaceCardProps) {
 
   return (
     <article
-      className="flex min-h-[15rem] flex-col justify-between rounded-3xl border border-[#0b5f63]/12 bg-[#fffdf8] p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#0b5f63]/10"
+      className={
+        variant === "panel"
+          ? "flex flex-col justify-between rounded-xl border border-[#e9e9e7] bg-white p-4 shadow-sm transition hover:border-[#2383e2]/35 hover:shadow-md"
+          : "flex min-h-[15rem] flex-col justify-between rounded-3xl border border-[#0b5f63]/12 bg-[#fffdf8] p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[#0b5f63]/10"
+      }
       aria-label={place.display_name}
     >
       <div>

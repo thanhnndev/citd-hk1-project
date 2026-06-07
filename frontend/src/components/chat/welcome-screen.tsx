@@ -32,7 +32,7 @@ export function WelcomeScreen({ onPromptClick, translations }: WelcomeScreenProp
     description: card.body,
     badge: translations.quickPromptLabel ?? "Try",
     prompts: translations.promptChips[index] ? [translations.promptChips[index]] : [],
-  })) ?? translations.promptChips.map((prompt, index) => ({
+  })) ?? translations.promptChips.map((prompt) => ({
     title: prompt,
     description: translations.subtitle,
     badge: translations.quickPromptLabel ?? "Try",
@@ -40,18 +40,18 @@ export function WelcomeScreen({ onPromptClick, translations }: WelcomeScreenProp
   }));
 
   return (
-    <div className="mx-auto flex h-full max-w-4xl flex-col items-center justify-center px-3 py-5 text-center animate-fadeIn">
+    <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-3 py-8 text-center animate-fadeIn">
       <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/75 px-3 py-1 text-xs font-medium text-primary shadow-sm backdrop-blur">
         <Waves className="size-3.5" />
         {translations.badgeLabel ?? "Local AI travel guide"}
       </div>
 
-      <div className="relative mb-5 flex size-16 items-center justify-center rounded-[1.6rem] bg-gradient-to-br from-[#0b5f63] via-[#168f8b] to-[#f2a65a] text-white shadow-xl shadow-teal-900/18 md:size-20 md:rounded-[2rem]">
+      <div className="relative mb-5 flex size-16 items-center justify-center rounded-xl bg-[#2383e2] text-white shadow-lg shadow-[#2383e2]/15 md:size-18">
         <Compass className="size-8 md:size-9" />
         <Sparkles className="absolute -right-1 -top-1 size-5 rounded-full bg-white p-1 text-[#c46b22] shadow" />
       </div>
 
-      <h2 className="max-w-2xl text-3xl font-semibold tracking-tight text-foreground md:text-5xl">
+      <h2 className="max-w-2xl text-2xl font-semibold tracking-tight text-[#37352f] md:text-4xl">
         {translations.greeting}
       </h2>
       <p className="mt-4 max-w-2xl text-base leading-8 text-muted-foreground">
@@ -69,7 +69,7 @@ export function WelcomeScreen({ onPromptClick, translations }: WelcomeScreenProp
           return (
             <section
               key={`${intent.title}-${index}`}
-              className="group rounded-[1.4rem] border border-white/75 bg-white/72 p-4 shadow-sm backdrop-blur transition duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-lg hover:shadow-[#0b5f63]/10"
+              className="group rounded-xl border border-[#e9e9e7] bg-white p-4 shadow-sm transition duration-200 hover:border-[#2383e2]/30 hover:shadow-md"
             >
               <div className="flex items-start gap-3">
                 <div className="grid size-10 shrink-0 place-items-center rounded-2xl bg-[#0b5f63]/10 text-[#0b5f63] transition group-hover:bg-[#0b5f63] group-hover:text-white">

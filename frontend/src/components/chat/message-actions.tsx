@@ -28,11 +28,11 @@ export function MessageActions({ content, onRetry, translations }: MessageAction
   }, [content]);
 
   return (
-    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+    <div className="flex items-center gap-0.5">
       <Button
         variant="ghost"
         size="icon"
-        className="size-7 text-muted-foreground hover:text-foreground"
+        className="size-7 rounded text-[#787774] hover:bg-[#f7f7f5] hover:text-[#2383e2]"
         onClick={handleCopy}
         aria-label={copied ? translations?.copied ?? "Copied!" : translations?.copy ?? "Copy"}
       >
@@ -47,7 +47,7 @@ export function MessageActions({ content, onRetry, translations }: MessageAction
         <Button
           variant="ghost"
           size="icon"
-          className="size-7 text-muted-foreground hover:text-foreground"
+          className="size-7 rounded text-[#787774] hover:bg-[#f7f7f5] hover:text-[#2383e2]"
           onClick={onRetry}
           aria-label={translations?.retry ?? "Retry"}
         >

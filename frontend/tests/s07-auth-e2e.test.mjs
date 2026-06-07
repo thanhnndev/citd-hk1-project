@@ -132,7 +132,10 @@ async function installAuthMocks(page, seenRequests) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ args: ['--no-sandbox'] });
+  const browser = await chromium.launch({
+    args: ['--no-sandbox'],
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   const consoleErrors = [];
@@ -152,7 +155,8 @@ async function main() {
     await page.locator('#username').fill('testuser');
     await page.locator('#email').fill('test@example.com');
     await page.locator('#password').fill('TestPass123');
-    await page.getByRole('button', { name: 'Tạo tài khoản' }).click();
+    await page.locator('#confirm_password').fill('TestPass123');
+    await page.getByRole('button', { name: 'Đăng ký' }).click();
 
     // Wait for success message (form shows verifyPrompt text)
     await page.getByText('Tài khoản đã được tạo!').waitFor({ timeout: 5000 });

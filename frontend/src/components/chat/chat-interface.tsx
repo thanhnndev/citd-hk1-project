@@ -4,8 +4,20 @@ import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
+import { ChatSidebar } from "./chat-sidebar";
+import { PlaceResultsPanel } from "./place-results-panel";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
-import { ArrowDown, ArrowUp, AlertCircle, Compass, Loader2, RotateCcw, ShieldCheck, Trash2, Waves, ArrowRight } from "lucide-react";
+import { AUTH_CHANGED_EVENT, getUser } from "@/lib/auth-store";
+import {
+  createEmptyConversation,
+  getChatStorageOwner,
+  loadChatConversations,
+  saveChatConversation,
+  toConversationSummaries,
+  type ChatConversationSummary,
+  type StoredChatConversation,
+} from "@/lib/chat-storage";
+import { ArrowDown, ArrowUp, AlertCircle, Loader2, MapPinned, Menu, RotateCcw, Trash2, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -85,24 +97,68 @@ const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
 
 export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chatOwner, setChatOwner] = useState("guest");
+  const [conversations, setConversations] = useState<StoredChatConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [placesOpen, setPlacesOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const storageHydratedRef = useRef(false);
 
   const language = (locale === "en" ? "en" : "vi") as "vi" | "en";
   const labels = SOURCE_LABELS[language];
+
+  useEffect(() => {
+    const loadOwnerConversations = () => {
+    const owner = getChatStorageOwner(getUser());
+    const stored = loadChatConversations(owner);
+    const initial = stored[0] ?? createEmptyConversation();
+
+    storageHydratedRef.current = false;
+    setChatOwner(owner);
+    setConversations(stored);
+    setActiveConversationId(initial.id);
+    setSessionId(initial.sessionId);
+    setMessages(initial.messages as Message[]);
+    setError(null);
+    setLoading(false);
+    window.setTimeout(() => {
+      storageHydratedRef.current = true;
+    }, 0);
+    };
+
+    loadOwnerConversations();
+    window.addEventListener(AUTH_CHANGED_EVENT, loadOwnerConversations);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, loadOwnerConversations);
+  }, []);
+
+  useEffect(() => {
+    if (!storageHydratedRef.current || !activeConversationId) return;
+    if (messages.length === 0) return;
+
+    const conversation: StoredChatConversation = {
+      id: activeConversationId,
+      sessionId,
+      title: "",
+      updatedAt: Date.now(),
+      messages,
+    };
+    setConversations(saveChatConversation(chatOwner, conversation));
+  }, [activeConversationId, chatOwner, messages, sessionId]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
   }, []);
 
   useEffect(() => {
-    if (isNearBottom || loading) {
+    if (messages.length > 0 && (isNearBottom || loading)) {
       scrollToBottom("smooth");
     }
   }, [messages, isNearBottom, loading, scrollToBottom]);
@@ -239,6 +295,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, [messages, handleSubmit]);
 
   const handleClearConversation = useCallback(() => {
+    const next = createEmptyConversation();
+    setActiveConversationId(next.id);
+    setSessionId(next.sessionId);
     setMessages([]);
     setError(null);
     setLoading(false);
@@ -247,8 +306,49 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     textareaRef.current?.focus();
   }, []);
 
+  const handleSelectConversation = useCallback(
+    (conversationId: string) => {
+      const conversation = conversations.find((item) => item.id === conversationId);
+      if (!conversation || loading) return;
+
+      setActiveConversationId(conversation.id);
+      setSessionId(conversation.sessionId);
+      setMessages(conversation.messages as Message[]);
+      setError(null);
+      setInput("");
+      setSidebarOpen(false);
+      setIsNearBottom(true);
+    },
+    [conversations, loading],
+  );
+
   // Derived from messages — needed by quick reply derivation and status bar
   const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const latestPlaces =
+    [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.places?.length)
+      ?.places ?? [];
+  const recentQuestions = messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .slice(-2)
+    .reverse();
+  const conversationSummaries: ChatConversationSummary[] = toConversationSummaries(conversations);
+  const placeTranslations = {
+    placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
+    viewOnMap: translations.viewOnMap ?? "View on Map",
+    scoreLabel: translations.scoreLabel ?? "Score",
+    noRating: translations.noRating ?? "No rating",
+    scoreBreakdown: translations.scoreBreakdown ?? "Score Breakdown",
+    explanation: translations.explanation ?? "Why this place?",
+    providerSource: translations.providerSource ?? "Source",
+    providerStatus: translations.providerStatus ?? "Status",
+    scoreDataLimited:
+      translations.scoreDataLimited ?? "Limited scoring data available",
+    accessibilityNote:
+      translations.accessibilityNote ?? "Accessibility info",
+  };
   const sourceCount = lastAssistant?.citations?.length ?? 0;
   const activeStatus = lastAssistant?.streamStatus
     ? STATUS_LABELS[language][lastAssistant.streamStatus]
@@ -362,43 +462,38 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   }, [input]);
 
   return (
-    <div className="relative flex h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-[#f4eddf] md:h-[calc(100dvh-5rem)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(12,95,99,0.18),transparent_34%),radial-gradient(circle_at_86%_22%,rgba(232,137,58,0.20),transparent_30%),linear-gradient(135deg,#f7f0e4_0%,#e3f2ee_54%,#fff8e9_100%)]" />
-      <div className="pointer-events-none absolute left-0 top-0 h-full w-full opacity-[0.08] [background-image:linear-gradient(90deg,#0b5f63_1px,transparent_1px),linear-gradient(#0b5f63_1px,transparent_1px)] [background-size:44px_44px]" />
+    <div className="h-[calc(100dvh-4rem)] min-h-[36rem] overflow-hidden bg-white text-[#37352f]">
+      <div
+        className={`grid h-full min-h-0 ${
+          latestPlaces.length > 0
+            ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
+            : "lg:grid-cols-[240px_minmax(0,1fr)]"
+        }`}
+      >
+        <ChatSidebar
+          locale={locale}
+          newQuestion={translations.newQuestion}
+          recentQuestions={recentQuestions}
+          conversationSummaries={conversationSummaries}
+          activeConversationId={activeConversationId}
+          onNewQuestion={handleClearConversation}
+          onSelectConversation={handleSelectConversation}
+          mobileOpen={sidebarOpen}
+          onMobileClose={() => setSidebarOpen(false)}
+        />
 
-      <header className="relative z-10 border-b border-[#0b5f63]/10 bg-[#fffaf0]/78 px-4 py-3 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[#0b5f63] text-[#fffaf0] shadow-lg shadow-[#0b5f63]/20">
-              <Compass className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-[#0b5f63]">
-                <Waves className="size-3.5" />
-                Ham Ninh Guide
-              </div>
-              <h1 className="mt-0.5 truncate text-lg font-semibold tracking-tight text-[#123436] md:text-2xl">
-                {translations.title}
-              </h1>
-            </div>
-          </div>
-          <div className="hidden items-center gap-2 rounded-full border border-[#0b5f63]/15 bg-white/70 px-3 py-1.5 text-xs text-[#426365] shadow-sm md:flex">
-            <ShieldCheck className="size-3.5 text-[#0b5f63]" />
-            {language === "vi" ? "Trợ lý AI - hãy kiểm chứng thông tin quan trọng" : "AI assistant - verify important details"}
-          </div>
-        </div>
-      </header>
+        <main className="relative flex min-h-0 min-w-0 flex-col bg-white">
 
       {/* Full-height scroll region — mobile-first with safe-area bottom padding for the composer */}
       <div
         ref={scrollRef}
-        className="relative z-10 flex-1 overflow-y-auto px-2 pb-[env(safe-area-inset-bottom)] py-3 sm:px-3 sm:py-4 md:px-6"
+        className="relative z-10 flex-1 overflow-y-auto px-3 py-5 sm:px-6"
         role="log"
         aria-live="polite"
         aria-label={translations.title}
         onScroll={handleScroll}
       >
-        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-4 sm:gap-5">
+        <div className="mx-auto flex min-h-full max-w-4xl flex-col gap-6">
           {messages.length === 0 && !error && (
             <WelcomeScreen
               onPromptClick={handlePromptClick}
@@ -493,18 +588,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 copied: translations.copied,
                 retry: translations.retryMessage,
               }}
-              placeTranslations={{
-                placeResultsHeading: translations.placeResultsHeading ?? "Recommended Places",
-                viewOnMap: translations.viewOnMap ?? "View on Map",
-                scoreLabel: translations.scoreLabel ?? "Score",
-                noRating: translations.noRating ?? "No rating",
-                scoreBreakdown: translations.scoreBreakdown ?? "Score Breakdown",
-                explanation: translations.explanation ?? "Why this place?",
-                providerSource: translations.providerSource ?? "Source",
-                providerStatus: translations.providerStatus ?? "Status",
-                scoreDataLimited: translations.scoreDataLimited ?? "Limited scoring data available",
-                accessibilityNote: translations.accessibilityNote ?? "Accessibility info",
-              }}
+              placeTranslations={placeTranslations}
             />
           ))}
 
@@ -543,7 +627,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       {/* Quick reply chips — deterministic, derived from local UI state */}
       {quickReplyChips.length > 0 && !loading && (
-        <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/60 px-2 py-2 sm:px-3 sm:py-2.5">
+        <div className="relative z-10 border-t border-[#e9e9e7] bg-white px-4 py-2.5">
           <div className="mx-auto max-w-4xl">
             <div className="flex items-center gap-2 px-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-[#5d7373]">
               <ArrowRight className="size-3" />
@@ -556,7 +640,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                   type="button"
                   onClick={() => handleQuickReplyClick(label)}
                   disabled={loading}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-[#0b5f63]/20 bg-white/80 px-3 py-1.5 text-xs font-medium text-[#0b5f63] shadow-sm transition-colors hover:bg-[#0b5f63]/10 hover:border-[#0b5f63]/30 active:bg-[#0b5f63]/15 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {label}
                 </button>
@@ -580,16 +664,34 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       )}
 
       {/* Sticky bottom composer — mobile-first with safe-area padding */}
-      <div className="relative z-10 border-t border-[#0b5f63]/10 bg-[#fffaf0]/82 px-2 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] backdrop-blur-xl sm:px-3 sm:py-3 md:px-4">
+      <footer className="relative z-10 shrink-0 border-t border-[#e9e9e7] bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:px-8">
         <div className="mx-auto max-w-4xl">
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                className="mr-1 rounded-md p-1 text-[#787774] hover:bg-[#f7f7f5] lg:hidden"
+                onClick={() => setSidebarOpen(true)}
+                aria-label={language === "vi" ? "Mở menu" : "Open menu"}
+              >
+                <Menu className="size-4" />
+              </button>
+              {latestPlaces.length > 0 && (
+                <button
+                  type="button"
+                  className="mr-1 rounded-md p-1 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
+                  onClick={() => setPlacesOpen(true)}
+                  aria-label={placeTranslations.placeResultsHeading}
+                >
+                  <MapPinned className="size-4" />
+                </button>
+              )}
               {activeStatus && loading && <Loader2 className="size-3 animate-spin" />}
               {activeStatus && <span>{activeStatus}</span>}
             </div>
             <span className="hidden sm:inline">{labels.inputHint}</span>
           </div>
-          <div className="flex items-end gap-1.5 rounded-[1.45rem] border border-white/90 bg-white/90 p-1.5 shadow-2xl shadow-[#0b5f63]/10 ring-1 ring-[#0b5f63]/8 sm:gap-2 sm:p-2">
+          <div className="flex items-end gap-1.5 rounded-2xl border border-[#e9e9e7] bg-white p-1.5 shadow-sm focus-within:border-[#2383e2] focus-within:ring-2 focus-within:ring-[#2383e2]/10 sm:gap-2 sm:p-2">
             <textarea
               ref={textareaRef}
               value={input}
@@ -598,14 +700,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               placeholder={translations.placeholder}
               disabled={loading}
               rows={1}
-              className="max-h-36 min-h-10 flex-1 resize-none rounded-2xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#123436] placeholder:text-[#6f8584] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:text-sm sm:leading-6 sm:px-3 sm:py-2.5"
+              className="max-h-36 min-h-10 flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#37352f] placeholder:text-[#91918e] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:px-3 sm:py-2.5"
               aria-label={translations.placeholder}
             />
             {messages.length > 0 && (
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-10 w-10 shrink-0 rounded-2xl text-[#6f8584] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
+                className="h-10 w-10 shrink-0 rounded-xl text-[#787774] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
                 onClick={handleClearConversation}
                 disabled={loading}
                 aria-label={translations.newConversation ?? "New conversation"}
@@ -618,7 +720,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               onClick={() => handleSubmit()}
               disabled={loading || !input.trim()}
               size="icon"
-              className="h-10 w-10 shrink-0 rounded-2xl bg-[#0b5f63] shadow-md shadow-[#0b5f63]/20 hover:bg-[#084d50] sm:h-11 sm:w-11"
+              className="h-10 w-10 shrink-0 rounded-xl bg-[#2383e2] shadow-sm hover:bg-[#1d6dc3] sm:h-11 sm:w-11"
               aria-label={translations.send}
               title={translations.send}
             >
@@ -626,6 +728,17 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             </Button>
           </div>
         </div>
+      </footer>
+        </main>
+
+        {latestPlaces.length > 0 && (
+          <PlaceResultsPanel
+            places={latestPlaces}
+            translations={placeTranslations}
+            mobileOpen={placesOpen}
+            onMobileClose={() => setPlacesOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
