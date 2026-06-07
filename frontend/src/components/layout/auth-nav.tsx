@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LogIn, LogOut, UserPlus } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "@/i18n/routing";
 import {
@@ -77,17 +77,26 @@ export function AuthNav({ locale, translations }: AuthNavProps) {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <Button variant="ghost" size="sm" asChild className="gap-1.5">
+    <div className="flex items-center gap-1 sm:gap-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        asChild
+        className="h-10 px-2 text-[#005d90] hover:bg-[#f0f3ff] hover:text-[#005d90] sm:px-3"
+      >
         <Link href="/auth/login" aria-label={translations.login} title={translations.login}>
-          <LogIn className="h-4 w-4" />
           <span className="hidden sm:inline">{translations.login}</span>
+          <span className="sm:hidden">Login</span>
         </Link>
       </Button>
-      <Button size="sm" asChild className="gap-1.5">
+      <Button
+        size="sm"
+        asChild
+        className="h-10 rounded-lg bg-[#0077b6] px-3 text-white hover:bg-[#005d90] sm:px-5"
+      >
         <Link href="/auth/register" aria-label={translations.register} title={translations.register}>
-          <UserPlus className="h-4 w-4" />
           <span className="hidden sm:inline">{translations.register}</span>
+          <span className="sm:hidden">Sign Up</span>
         </Link>
       </Button>
     </div>
