@@ -1,8 +1,8 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
-import { AuthCard } from "@/components/auth/auth-card";
 import { RegisterForm } from "@/components/auth/register-form";
+import { RegisterShell } from "@/components/auth/register-shell";
 
 type Props = Readonly<{ params: Promise<{ locale: string }> }>;
 
@@ -14,7 +14,19 @@ export default async function RegisterPage({ params }: Props) {
   const t = await getTranslations("Auth");
 
   return (
-    <AuthCard eyebrow={t("register.eyebrow")} title={t("register.title")}>
+    <RegisterShell
+      locale={locale}
+      title={t("register.title")}
+      description={t("register.description")}
+      heroLineOne={t("register.heroLineOne")}
+      heroLineTwo={t("register.heroLineTwo")}
+      supportPrompt={t("register.supportPrompt")}
+      supportLink={t("register.supportLink")}
+      languageLabel={t("register.languageLabel")}
+      helpLabel={t("register.helpLabel")}
+      copyright={t("register.copyright")}
+      privacyLabel={t("register.privacyLabel")}
+    >
       <RegisterForm
         locale={locale}
         translations={{
@@ -32,8 +44,11 @@ export default async function RegisterPage({ params }: Props) {
           loginLink: t("register.loginLink"),
           successMessage: t("register.successMessage"),
           verifyPrompt: t("register.verifyPrompt"),
+          confirmPasswordLabel: t("register.confirmPasswordLabel"),
+          confirmPasswordPlaceholder: t("register.confirmPasswordPlaceholder"),
+          passwordMismatch: t("register.passwordMismatch"),
         }}
       />
-    </AuthCard>
+    </RegisterShell>
   );
 }
