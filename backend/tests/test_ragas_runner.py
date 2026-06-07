@@ -11,7 +11,7 @@ import pytest
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from agents.ml.ragas_evaluator import (
+from agents.eval.ragas_runner import (
     RAGASEvaluator,
     _RAGAS_AVAILABLE,
     _build_context_lookup,

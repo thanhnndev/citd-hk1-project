@@ -77,7 +77,7 @@ class FeatureExtractor:
             "distance_meters": self._distance_meters(candidate, user_location),
             "price_level": self._price_level(candidate),
             "is_open_now": self._is_open_now(candidate),
-            "local_factor": self._local_factor(candidate),
+            "geo_locality": self._geo_locality(candidate),
             "category_match": self._category_match(candidate, query),
         }
 
@@ -127,9 +127,24 @@ class FeatureExtractor:
         return float(int(candidate.open_now)) if candidate.open_now is not None else _DEFAULT_IS_OPEN_NOW
 
     @staticmethod
-    def _local_factor(candidate: PlaceCandidate) -> float:
-        """Local factor in [0.0–1.0]. Defaults to 0.5 when None."""
-        return float(candidate.local_factor) if candidate.local_factor is not None else _DEFAULT_LOCAL_FACTOR
+    def _geo_locality(candidate: PlaceCandidate) -> float:
+        """Locality in [0.0-1.0] based on distance from HAM_NINH_CENTER."""
+        if candidate.location is None:
+            return 0.1
+
+        dist = haversine(
+            HAM_NINH_CENTER.lat,
+            HAM_NINH_CENTER.lng,
+            candidate.location.lat,
+            candidate.location.lng,
+        )
+        if dist <= 1500:
+            return 1.0
+        elif dist <= 3000:
+            return 0.7
+        elif dist <= 8000:
+            return 0.4
+        return 0.1
 
     @staticmethod
     def _category_match(candidate: PlaceCandidate, query: str) -> float:

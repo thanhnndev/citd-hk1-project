@@ -1,4 +1,4 @@
-"""Tests for EnsembleReranker: 3 decision trees + bagging + boosting pipeline.
+"""Tests for FairnessReranker: 3 decision trees + bagging + boosting pipeline.
 
 Covers all tree branches, bagging average, boosting corrections, final score
 clipping, sorting, rank assignment, and the full end-to-end pipeline.
@@ -11,7 +11,7 @@ import pytest
 from app.models.places import PlaceCandidate, RouteContext
 from app.models.request import LatLng
 from app.models.response import ScoreBreakdown
-from agents.ml.ensemble_reranker import EnsembleReranker, LEARNING_RATE
+from agents.ranking.fairness_reranker import FairnessReranker, LEARNING_RATE
 
 LEARNING_RATE = 0.3
 
@@ -34,7 +34,7 @@ def make_candidate(**overrides: object) -> PlaceCandidate:
     return base.model_copy(update=overrides)
 
 
-reranker = EnsembleReranker()
+reranker = FairnessReranker()
 
 
 # ---------------------------------------------------------------------------
@@ -58,17 +58,17 @@ class TestTree1Locality:
         self, local_factor: float, is_open_now: int, expected: float
     ) -> None:
         feat = {"local_factor": local_factor, "is_open_now": is_open_now}
-        assert EnsembleReranker._tree1_locality(feat) == pytest.approx(expected)
+        assert FairnessReranker._tree1_locality(feat) == pytest.approx(expected)
 
     def test_boundary_local_factor_06(self) -> None:
         """Exactly 0.6 is NOT > 0.6, so falls to the 0.5 branch."""
         feat = {"local_factor": 0.6, "is_open_now": 1}
-        assert EnsembleReranker._tree1_locality(feat) == pytest.approx(0.5)
+        assert FairnessReranker._tree1_locality(feat) == pytest.approx(0.5)
 
     def test_boundary_local_factor_03(self) -> None:
         """Exactly 0.3 is NOT > 0.3, so falls to the 0.2 branch."""
         feat = {"local_factor": 0.3, "is_open_now": 0}
-        assert EnsembleReranker._tree1_locality(feat) == pytest.approx(0.2)
+        assert FairnessReranker._tree1_locality(feat) == pytest.approx(0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -81,13 +81,13 @@ class TestTree2Proximity:
 
     def test_very_close(self) -> None:
         feat = {"distance_meters": 100, "rating": 4.0, "local_factor": 0.5}
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(0.9)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(0.9)
 
     def test_boundary_at_300(self) -> None:
         """Exactly 300 is NOT < 300, falls to 300-800 branch."""
         feat = {"distance_meters": 300, "rating": 4.5, "local_factor": 0.5}
         # 0.65 + (4.5 - 3.0) * 0.1 = 0.65 + 0.15 = 0.8
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(0.8)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(0.8)
 
     @pytest.mark.parametrize(
         "distance,rating,expected",
@@ -100,13 +100,13 @@ class TestTree2Proximity:
         self, distance: int, rating: float, expected: float
     ) -> None:
         feat = {"distance_meters": distance, "rating": rating, "local_factor": 0.5}
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(expected)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(expected)
 
     def test_boundary_at_800(self) -> None:
         """Exactly 800 is NOT < 800, falls to 800-2000 branch."""
         feat = {"distance_meters": 800, "rating": 4.0, "local_factor": 0.7}
         # 0.4 + 0.7 * 0.2 = 0.54
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(0.54)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(0.54)
 
     @pytest.mark.parametrize(
         "distance,local_factor,expected",
@@ -119,16 +119,16 @@ class TestTree2Proximity:
         self, distance: int, local_factor: float, expected: float
     ) -> None:
         feat = {"distance_meters": distance, "rating": 3.0, "local_factor": local_factor}
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(expected)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(expected)
 
     def test_boundary_at_2000(self) -> None:
         """Exactly 2000 is NOT < 2000, falls to >= 2000 branch."""
         feat = {"distance_meters": 2000, "rating": 4.0, "local_factor": 0.9}
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(0.15)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(0.15)
 
     def test_very_far(self) -> None:
         feat = {"distance_meters": 5000, "rating": 5.0, "local_factor": 1.0}
-        assert EnsembleReranker._tree2_proximity(feat) == pytest.approx(0.15)
+        assert FairnessReranker._tree2_proximity(feat) == pytest.approx(0.15)
 
 
 # ---------------------------------------------------------------------------
@@ -151,33 +151,33 @@ class TestTree3Quality:
         self, rating: float, price_level: int, local_factor: float, expected: float
     ) -> None:
         feat = {"rating": rating, "price_level": price_level, "local_factor": local_factor}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(expected)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(expected)
 
     def test_boundary_rating_45(self) -> None:
         """Exactly 4.5 IS >= 4.5, enters premium branch."""
         feat = {"rating": 4.5, "price_level": 2, "local_factor": 0.0}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.85)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.85)
 
     def test_price_level_boundary_2(self) -> None:
         """price_level=2 IS <= 2, so premium branch fires if rating>=4.5."""
         feat = {"rating": 4.6, "price_level": 2, "local_factor": 0.0}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.85)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.85)
 
     def test_good_rating_free_venue(self) -> None:
         """rating>=4.0 and price_level<=1."""
         feat = {"rating": 4.2, "price_level": 0, "local_factor": 0.5}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.75)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.75)
 
     def test_good_rating_boundary_price_1(self) -> None:
         """rating>=4.0 and price_level=1."""
         feat = {"rating": 4.0, "price_level": 1, "local_factor": 0.5}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.75)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.75)
 
     def test_rating_40_price_2_falls_through(self) -> None:
         """rating>=4.0 but price_level=2 (not <=1) → falls to rating>=3.5 branch."""
         feat = {"rating": 4.0, "price_level": 2, "local_factor": 0.5}
         # 0.5 + (2 - 2) * 0.05 = 0.5
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.5)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.5)
 
     @pytest.mark.parametrize(
         "rating,price_level,expected",
@@ -191,16 +191,16 @@ class TestTree3Quality:
         self, rating: float, price_level: int, expected: float
     ) -> None:
         feat = {"rating": rating, "price_level": price_level, "local_factor": 0.0}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(expected)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(expected)
 
     def test_low_rating(self) -> None:
         feat = {"rating": 2.5, "price_level": 1, "local_factor": 0.5}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.2)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.2)
 
     def test_boundary_rating_35(self) -> None:
         """Exactly 3.5 IS >= 3.5, enters mid-quality branch."""
         feat = {"rating": 3.5, "price_level": 2, "local_factor": 0.0}
-        assert EnsembleReranker._tree3_quality(feat) == pytest.approx(0.5)
+        assert FairnessReranker._tree3_quality(feat) == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -212,17 +212,17 @@ class TestBagging:
     """Simple average of the 3 tree scores."""
 
     def test_equal_scores(self) -> None:
-        assert EnsembleReranker._bagging(0.6, 0.6, 0.6) == pytest.approx(0.6)
+        assert FairnessReranker._bagging(0.6, 0.6, 0.6) == pytest.approx(0.6)
 
     def test_mixed_scores(self) -> None:
         # (0.9 + 0.5 + 0.2) / 3 = 1.6 / 3 = 0.5333...
-        assert EnsembleReranker._bagging(0.9, 0.5, 0.2) == pytest.approx(1.6 / 3.0)
+        assert FairnessReranker._bagging(0.9, 0.5, 0.2) == pytest.approx(1.6 / 3.0)
 
     def test_zero_scores(self) -> None:
-        assert EnsembleReranker._bagging(0.0, 0.0, 0.0) == pytest.approx(0.0)
+        assert FairnessReranker._bagging(0.0, 0.0, 0.0) == pytest.approx(0.0)
 
     def test_all_ones(self) -> None:
-        assert EnsembleReranker._bagging(1.0, 1.0, 1.0) == pytest.approx(1.0)
+        assert FairnessReranker._bagging(1.0, 1.0, 1.0) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -235,24 +235,24 @@ class TestBoostingF1:
 
     def test_low_local_factor_penalty(self) -> None:
         """local_factor < 0.1 → Δ1 = -0.15, applied = η × -0.15 = -0.045."""
-        f1, delta = EnsembleReranker._boosting_f1(s_bag=0.6, local_factor=0.05)
+        f1, delta = FairnessReranker._boosting_f1(s_bag=0.6, local_factor=0.05)
         assert delta == pytest.approx(-0.045)
         assert f1 == pytest.approx(0.6 - 0.045)
 
     def test_boundary_local_factor_01(self) -> None:
         """local_factor == 0.1 is NOT < 0.1, so no penalty."""
-        f1, delta = EnsembleReranker._boosting_f1(s_bag=0.6, local_factor=0.1)
+        f1, delta = FairnessReranker._boosting_f1(s_bag=0.6, local_factor=0.1)
         assert delta == pytest.approx(0.0)
         assert f1 == pytest.approx(0.6)
 
     def test_high_local_factor_no_penalty(self) -> None:
-        f1, delta = EnsembleReranker._boosting_f1(s_bag=0.7, local_factor=0.8)
+        f1, delta = FairnessReranker._boosting_f1(s_bag=0.7, local_factor=0.8)
         assert delta == pytest.approx(0.0)
         assert f1 == pytest.approx(0.7)
 
     def test_penalty_applied_to_score(self) -> None:
         """Verify the correction is properly applied: F1 = s_bag + applied_delta."""
-        f1, delta = EnsembleReranker._boosting_f1(s_bag=0.5, local_factor=0.0)
+        f1, delta = FairnessReranker._boosting_f1(s_bag=0.5, local_factor=0.0)
         assert f1 == pytest.approx(0.5 + delta)
 
 
@@ -269,13 +269,13 @@ class TestBoostingF2:
         c = make_candidate(
             accessibility_options={"wheelchairAccessibleEntrance": True}
         )
-        f2, delta = EnsembleReranker._boosting_f2(f1=0.6, candidate=c)
+        f2, delta = FairnessReranker._boosting_f2(f1=0.6, candidate=c)
         assert delta == pytest.approx(0.03)
         assert f2 == pytest.approx(0.63)
 
     def test_not_accessible_no_bonus(self) -> None:
         c = make_candidate(accessibility_options={})
-        f2, delta = EnsembleReranker._boosting_f2(f1=0.6, candidate=c)
+        f2, delta = FairnessReranker._boosting_f2(f1=0.6, candidate=c)
         assert delta == pytest.approx(0.0)
         assert f2 == pytest.approx(0.6)
 
@@ -283,7 +283,7 @@ class TestBoostingF2:
         c = make_candidate(
             accessibility_options={"wheelchairAccessibleEntrance": False}
         )
-        f2, delta = EnsembleReranker._boosting_f2(f1=0.6, candidate=c)
+        f2, delta = FairnessReranker._boosting_f2(f1=0.6, candidate=c)
         assert delta == pytest.approx(0.0)
         assert f2 == pytest.approx(0.6)
 
@@ -297,19 +297,19 @@ class TestFinalScoreClipping:
     """Clip F2 to [0.0, 1.0]."""
 
     def test_above_1_clips(self) -> None:
-        assert EnsembleReranker._compute_final_score(1.5) == pytest.approx(1.0)
+        assert FairnessReranker._compute_final_score(1.5) == pytest.approx(1.0)
 
     def test_below_0_clips(self) -> None:
-        assert EnsembleReranker._compute_final_score(-0.2) == pytest.approx(0.0)
+        assert FairnessReranker._compute_final_score(-0.2) == pytest.approx(0.0)
 
     def test_exactly_1(self) -> None:
-        assert EnsembleReranker._compute_final_score(1.0) == pytest.approx(1.0)
+        assert FairnessReranker._compute_final_score(1.0) == pytest.approx(1.0)
 
     def test_exactly_0(self) -> None:
-        assert EnsembleReranker._compute_final_score(0.0) == pytest.approx(0.0)
+        assert FairnessReranker._compute_final_score(0.0) == pytest.approx(0.0)
 
     def test_normal_value_passthrough(self) -> None:
-        assert EnsembleReranker._compute_final_score(0.72) == pytest.approx(0.72)
+        assert FairnessReranker._compute_final_score(0.72) == pytest.approx(0.72)
 
 
 # ---------------------------------------------------------------------------

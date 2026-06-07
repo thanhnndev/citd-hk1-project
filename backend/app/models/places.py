@@ -223,7 +223,7 @@ class PlaceCandidate(BaseModel):
     serves_vegetarian_food: bool | None = None
     accessibility_score: float | None = Field(default=None, ge=0.0, le=1.0)
     accessibility_warning: str | None = Field(default=None, max_length=240)
-    local_factor: float | None = Field(default=None, ge=0.0, le=1.0)
+    geo_locality: float | None = Field(default=None, ge=0.0, le=1.0)
     fairness_tags: list[str] = Field(default_factory=list, max_length=20)
     route_context: RouteContext | None = None
 
@@ -256,7 +256,7 @@ class FairnessWarningType(StrEnum):
     """Standardized warning vocabulary for fairness audit diagnostics."""
 
     INSUFFICIENT_LOCAL_CANDIDATES = "insufficient_local_candidates"
-    MISSING_LOCAL_FACTOR_METADATA = "missing_local_factor_metadata"
+    MISSING_LOCAL_FACTOR_METADATA = "missing_geo_locality_metadata"
     PROVIDER_NON_OK = "provider_non_ok"
     ROUTE_ENRICHMENT_FALLBACK = "route_enrichment_fallback"
     ENSEMBLE_FALLBACK = "ensemble_fallback"
@@ -274,8 +274,8 @@ class FairnessAudit(BaseModel):
 
     candidate_count: int = Field(default=0, ge=0, description="Total candidate pool size.")
     result_count: int = Field(default=0, ge=0, description="Number of results returned.")
-    top5_local_ratio: float = Field(default=0.0, ge=0.0, le=1.0, description="Fraction of top-5 results with local_factor >= 0.5.")
-    missing_local_factor_count: int = Field(default=0, ge=0, description="Candidates missing local_factor metadata.")
+    top5_local_ratio: float = Field(default=0.0, ge=0.0, le=1.0, description="Fraction of top-5 results with geo_locality >= 0.5.")
+    missing_geo_locality_count: int = Field(default=0, ge=0, description="Candidates missing geo_locality metadata.")
     provider_status: str = Field(default="unknown", max_length=64, description="Safe provider status value (e.g. ok, empty, upstream_error).")
     warnings: list[str] = Field(default_factory=list, max_length=10, description="User-safe fairness warning messages.")
 

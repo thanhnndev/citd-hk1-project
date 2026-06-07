@@ -1,0 +1,17 @@
+weights:
+  relevance: 0.40
+  proximity: 0.25
+  quality: 0.20
+  geo_locality: 0.15
+
+popularity_damping:
+  lambda_factor: 0.15
+
+gates:
+  min_relevance: 0.50
+  min_rating: 3.5
+  max_rating_count_without_penalty: 10
+
+bounds:
+  max_rank_jump: 3
+  significant_relevance_diff: 0.20

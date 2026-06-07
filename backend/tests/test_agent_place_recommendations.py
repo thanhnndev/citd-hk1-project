@@ -18,7 +18,7 @@ def _place(place_id: str = "places/ham-ninh-seafood") -> PlaceResult:
         formatted_address="Ham Ninh, Phu Quoc",
         rating=4.6,
         price_level=2,
-        local_factor=0.8,
+        geo_locality=0.8,
         final_score=0.9,
         score_breakdown=ScoreBreakdown(
             tree1_locality=0.9,
@@ -756,9 +756,9 @@ async def test_fairness_audit_emitted_on_ok_response() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="Local A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/b", display_name="Local B", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c", display_name="Chain C", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="Local A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Local B", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="Chain C", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -790,11 +790,11 @@ async def test_fairness_audit_top5_local_ratio_40_percent_target() -> None:
 
     # 5 candidates: 3 local (factor >= 0.5), 2 non-local
     candidates = [
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l3", display_name="Local 3", local_factor=0.7, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n2", display_name="Chain 2", local_factor=0.05, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l3", display_name="Local 3", geo_locality=0.7, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n2", display_name="Chain 2", geo_locality=0.05, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -827,12 +827,12 @@ async def test_fairness_audit_insufficient_local_candidates_warning() -> None:
 
     # 6 candidates but only 1 local — cannot meet 40% of top-5 (need 2)
     candidates = [
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n2", display_name="Chain 2", local_factor=0.05, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n3", display_name="Chain 3", local_factor=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n4", display_name="Chain 4", local_factor=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/n5", display_name="Chain 5", local_factor=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n2", display_name="Chain 2", geo_locality=0.05, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n3", display_name="Chain 3", geo_locality=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n4", display_name="Chain 4", geo_locality=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/n5", display_name="Chain 5", geo_locality=0.0, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -854,18 +854,18 @@ async def test_fairness_audit_insufficient_local_candidates_warning() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fairness_audit_missing_local_factor_warning() -> None:
-    """Missing local_factor metadata increments missing count and emits warning."""
+async def test_fairness_audit_missing_geo_locality_warning() -> None:
+    """Missing geo_locality metadata increments missing count and emits warning."""
     from datetime import UTC, datetime
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
-    # Some candidates with local_factor=None
+    # Some candidates with geo_locality=None
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/b", display_name="B", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c", display_name="C", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="B", geo_locality=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="C", geo_locality=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -883,8 +883,8 @@ async def test_fairness_audit_missing_local_factor_warning() -> None:
 
     audit = response.fairness_audit
     assert audit is not None
-    assert audit.missing_local_factor_count >= 2
-    assert "missing_local_factor_metadata" in audit.warnings
+    assert audit.missing_geo_locality_count >= 2
+    assert "missing_geo_locality_metadata" in audit.warnings
 
 
 @pytest.mark.asyncio
@@ -954,9 +954,9 @@ async def test_fairness_audit_route_enrichment_fallback_warning() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="Local A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/b", display_name="Local B", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c", display_name="Chain C", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="Local A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Local B", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c", display_name="Chain C", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -991,7 +991,7 @@ async def test_fairness_audit_reasoning_log_contains_status() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -1022,7 +1022,7 @@ async def test_fairness_audit_no_secret_exposure() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -1051,7 +1051,7 @@ async def test_fairness_audit_no_secret_exposure() -> None:
 # T02: Fairness balancing — _balance_fairness unit tests
 # ============================================================================
 
-def _make_result(place_id: str, local_factor: float | None, final_score: float = 0.5) -> PlaceResult:
+def _make_result(place_id: str, geo_locality: float | None, final_score: float = 0.5) -> PlaceResult:
     """Helper to build minimal PlaceResult for fairness balancer tests."""
     return PlaceResult(
         place_id=place_id,
@@ -1059,7 +1059,7 @@ def _make_result(place_id: str, local_factor: float | None, final_score: float =
         formatted_address="Test Address",
         location=LatLng(lat=10.18, lng=104.05),
         types=["restaurant"],
-        local_factor=local_factor if local_factor is not None else 0.5,
+        geo_locality=geo_locality if geo_locality is not None else 0.5,
         final_score=final_score,
         score_breakdown=ScoreBreakdown(
             tree1_locality=0.5,
@@ -1087,15 +1087,15 @@ class TestBalanceFairness:
         assert self._balance([]) == []
 
     def test_single_result_returns_unchanged(self):
-        results = [_make_result("p1", local_factor=0.1)]
+        results = [_make_result("p1", geo_locality=0.1)]
         assert self._balance(results) == results
 
     def test_fewer_than_top_k_returns_unchanged(self):
         """Fewer than 5 results — no top-K window to balance."""
         results = [
-            _make_result("p1", local_factor=0.1, final_score=0.9),
-            _make_result("p2", local_factor=0.1, final_score=0.8),
-            _make_result("p3", local_factor=0.8, final_score=0.7),
+            _make_result("p1", geo_locality=0.1, final_score=0.9),
+            _make_result("p2", geo_locality=0.1, final_score=0.8),
+            _make_result("p3", geo_locality=0.8, final_score=0.7),
         ]
         balanced = self._balance(results)
         # Same elements, same order
@@ -1104,11 +1104,11 @@ class TestBalanceFairness:
     def test_already_compliant_no_reordering(self):
         """Top-5 already has 40%+ local — no reordering needed."""
         results = [
-            _make_result("local1", local_factor=0.9, final_score=0.95),
-            _make_result("local2", local_factor=0.8, final_score=0.90),
-            _make_result("chain1", local_factor=0.1, final_score=0.85),
-            _make_result("chain2", local_factor=0.1, final_score=0.80),
-            _make_result("chain3", local_factor=0.1, final_score=0.75),
+            _make_result("local1", geo_locality=0.9, final_score=0.95),
+            _make_result("local2", geo_locality=0.8, final_score=0.90),
+            _make_result("chain1", geo_locality=0.1, final_score=0.85),
+            _make_result("chain2", geo_locality=0.1, final_score=0.80),
+            _make_result("chain3", geo_locality=0.1, final_score=0.75),
         ]
         balanced = self._balance(results)
         # Already has 2/5 = 40% local — no change
@@ -1117,17 +1117,17 @@ class TestBalanceFairness:
     def test_promotes_local_from_below_top5(self):
         """Only 1 local in top-5, but more available below — promotes to hit 40%."""
         results = [
-            _make_result("chain1", local_factor=0.1, final_score=0.95),
-            _make_result("chain2", local_factor=0.1, final_score=0.90),
-            _make_result("chain3", local_factor=0.1, final_score=0.85),
-            _make_result("chain4", local_factor=0.1, final_score=0.80),
-            _make_result("chain5", local_factor=0.1, final_score=0.75),  # NOT local (0.1 < 0.6)
-            _make_result("local1", local_factor=0.9, final_score=0.70),  # local
-            _make_result("local2", local_factor=0.8, final_score=0.65),  # local
+            _make_result("chain1", geo_locality=0.1, final_score=0.95),
+            _make_result("chain2", geo_locality=0.1, final_score=0.90),
+            _make_result("chain3", geo_locality=0.1, final_score=0.85),
+            _make_result("chain4", geo_locality=0.1, final_score=0.80),
+            _make_result("chain5", geo_locality=0.1, final_score=0.75),  # NOT local (0.1 < 0.6)
+            _make_result("local1", geo_locality=0.9, final_score=0.70),  # local
+            _make_result("local2", geo_locality=0.8, final_score=0.65),  # local
         ]
         balanced = self._balance(results)
         top5_ids = [r.place_id for r in balanced[:5]]
-        local_in_top5 = sum(1 for r in balanced[:5] if (r.local_factor or 0.0) >= 0.6)
+        local_in_top5 = sum(1 for r in balanced[:5] if (r.geo_locality or 0.0) >= 0.6)
         assert local_in_top5 >= 2, f"Expected >= 2 local in top-5, got {local_in_top5}. top5: {top5_ids}"
         # Both locals should be promoted into top-5
         assert "local1" in top5_ids
@@ -1136,11 +1136,11 @@ class TestBalanceFairness:
     def test_all_local_no_reordering(self):
         """All results are local — already 100% compliant."""
         results = [
-            _make_result("l1", local_factor=0.9, final_score=0.95),
-            _make_result("l2", local_factor=0.8, final_score=0.90),
-            _make_result("l3", local_factor=0.7, final_score=0.85),
-            _make_result("l4", local_factor=0.6, final_score=0.80),
-            _make_result("l5", local_factor=0.8, final_score=0.75),
+            _make_result("l1", geo_locality=0.9, final_score=0.95),
+            _make_result("l2", geo_locality=0.8, final_score=0.90),
+            _make_result("l3", geo_locality=0.7, final_score=0.85),
+            _make_result("l4", geo_locality=0.6, final_score=0.80),
+            _make_result("l5", geo_locality=0.8, final_score=0.75),
         ]
         balanced = self._balance(results)
         assert [r.place_id for r in balanced] == ["l1", "l2", "l3", "l4", "l5"]
@@ -1148,11 +1148,11 @@ class TestBalanceFairness:
     def test_all_nonlocal_no_reordering(self):
         """No local candidates at all — nothing to promote."""
         results = [
-            _make_result("c1", local_factor=0.1, final_score=0.95),
-            _make_result("c2", local_factor=0.2, final_score=0.90),
-            _make_result("c3", local_factor=0.3, final_score=0.85),
-            _make_result("c4", local_factor=0.4, final_score=0.80),
-            _make_result("c5", local_factor=0.5, final_score=0.75),
+            _make_result("c1", geo_locality=0.1, final_score=0.95),
+            _make_result("c2", geo_locality=0.2, final_score=0.90),
+            _make_result("c3", geo_locality=0.3, final_score=0.85),
+            _make_result("c4", geo_locality=0.4, final_score=0.80),
+            _make_result("c5", geo_locality=0.5, final_score=0.75),
         ]
         balanced = self._balance(results)
         assert [r.place_id for r in balanced] == ["c1", "c2", "c3", "c4", "c5"]
@@ -1160,13 +1160,13 @@ class TestBalanceFairness:
     def test_preserves_element_set(self):
         """Balancing must not add or remove elements — only reorder."""
         results = [
-            _make_result("c1", local_factor=0.1, final_score=0.95),
-            _make_result("c2", local_factor=0.1, final_score=0.90),
-            _make_result("c3", local_factor=0.1, final_score=0.85),
-            _make_result("c4", local_factor=0.1, final_score=0.80),
-            _make_result("c5", local_factor=0.1, final_score=0.75),
-            _make_result("l1", local_factor=0.9, final_score=0.70),
-            _make_result("l2", local_factor=0.8, final_score=0.65),
+            _make_result("c1", geo_locality=0.1, final_score=0.95),
+            _make_result("c2", geo_locality=0.1, final_score=0.90),
+            _make_result("c3", geo_locality=0.1, final_score=0.85),
+            _make_result("c4", geo_locality=0.1, final_score=0.80),
+            _make_result("c5", geo_locality=0.1, final_score=0.75),
+            _make_result("l1", geo_locality=0.9, final_score=0.70),
+            _make_result("l2", geo_locality=0.8, final_score=0.65),
         ]
         balanced = self._balance(results)
         original_ids = {r.place_id for r in results}
@@ -1175,14 +1175,14 @@ class TestBalanceFairness:
         assert len(balanced) == len(results)
 
     def test_exactly_at_threshold_counts_as_local(self):
-        """local_factor exactly 0.6 (the threshold) counts as local."""
+        """geo_locality exactly 0.6 (the threshold) counts as local."""
         results = [
-            _make_result("c1", local_factor=0.1, final_score=0.95),
-            _make_result("c2", local_factor=0.1, final_score=0.90),
-            _make_result("c3", local_factor=0.1, final_score=0.85),
-            _make_result("c4", local_factor=0.1, final_score=0.80),
-            _make_result("c5", local_factor=0.1, final_score=0.75),
-            _make_result("border", local_factor=0.6, final_score=0.70),
+            _make_result("c1", geo_locality=0.1, final_score=0.95),
+            _make_result("c2", geo_locality=0.1, final_score=0.90),
+            _make_result("c3", geo_locality=0.1, final_score=0.85),
+            _make_result("c4", geo_locality=0.1, final_score=0.80),
+            _make_result("c5", geo_locality=0.1, final_score=0.75),
+            _make_result("border", geo_locality=0.6, final_score=0.70),
         ]
         balanced = self._balance(results)
         top5_ids = [r.place_id for r in balanced[:5]]
@@ -1190,32 +1190,32 @@ class TestBalanceFairness:
         assert "border" in top5_ids
 
     def test_just_below_threshold_not_local(self):
-        """local_factor = 0.59 does NOT count as local."""
+        """geo_locality = 0.59 does NOT count as local."""
         from agents.services.place_recommendation_service import _is_local
-        r = _make_result("x", local_factor=0.59)
+        r = _make_result("x", geo_locality=0.59)
         assert not _is_local(r)
 
-    def test_local_factor_none_not_local(self):
-        """local_factor = None does NOT count as local."""
+    def test_geo_locality_none_not_local(self):
+        """geo_locality = None does NOT count as local."""
         from agents.services.place_recommendation_service import _is_local
-        r = _make_result("x", local_factor=0.5)  # 0.5 < 0.6 threshold
+        r = _make_result("x", geo_locality=0.5)  # 0.5 < 0.6 threshold
         assert not _is_local(r)
 
     def test_seven_candidates_two_need_promotion(self):
         """7 candidates, 0 local in top-5, 3 local below — promote 2 to hit 40%."""
         results = [
-            _make_result("c1", local_factor=0.1, final_score=0.95),
-            _make_result("c2", local_factor=0.1, final_score=0.90),
-            _make_result("c3", local_factor=0.1, final_score=0.85),
-            _make_result("c4", local_factor=0.1, final_score=0.80),
-            _make_result("c5", local_factor=0.1, final_score=0.75),
-            _make_result("l1", local_factor=0.9, final_score=0.70),
-            _make_result("l2", local_factor=0.8, final_score=0.65),
-            _make_result("l3", local_factor=0.7, final_score=0.60),
+            _make_result("c1", geo_locality=0.1, final_score=0.95),
+            _make_result("c2", geo_locality=0.1, final_score=0.90),
+            _make_result("c3", geo_locality=0.1, final_score=0.85),
+            _make_result("c4", geo_locality=0.1, final_score=0.80),
+            _make_result("c5", geo_locality=0.1, final_score=0.75),
+            _make_result("l1", geo_locality=0.9, final_score=0.70),
+            _make_result("l2", geo_locality=0.8, final_score=0.65),
+            _make_result("l3", geo_locality=0.7, final_score=0.60),
         ]
         balanced = self._balance(results)
         top5 = balanced[:5]
-        local_in_top5 = sum(1 for r in top5 if (r.local_factor or 0.0) >= 0.6)
+        local_in_top5 = sum(1 for r in top5 if (r.geo_locality or 0.0) >= 0.6)
         assert local_in_top5 >= 2
         assert len(balanced) == 8  # no elements lost
 
@@ -1235,13 +1235,13 @@ async def test_fairness_balancing_promotes_local_in_mixed_pool() -> None:
 
     # 7 candidates: top 5 by score are all non-local, 2 locals ranked lower
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1258,7 +1258,7 @@ async def test_fairness_balancing_promotes_local_in_mixed_pool() -> None:
     response = await service.answer(session_id="s-balance", message="tìm nhà hàng", language="vi")
 
     top5 = response.places[:5]
-    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    local_in_top5 = sum(1 for p in top5 if (p.geo_locality or 0.0) >= 0.6)
     assert local_in_top5 >= 2, f"Expected >= 2 local in top-5 after balancing, got {local_in_top5}"
 
 
@@ -1271,11 +1271,11 @@ async def test_fairness_balancing_no_local_candidates() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1306,12 +1306,12 @@ async def test_fairness_balancing_insufficient_local_candidates() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.3, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1334,20 +1334,20 @@ async def test_fairness_balancing_insufficient_local_candidates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fairness_balancing_missing_local_factor_metadata() -> None:
-    """Candidates with local_factor=None count as missing metadata, warning emitted."""
+async def test_fairness_balancing_missing_geo_locality_metadata() -> None:
+    """Candidates with geo_locality=None count as missing metadata, warning emitted."""
     from datetime import UTC, datetime
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1365,8 +1365,8 @@ async def test_fairness_balancing_missing_local_factor_metadata() -> None:
 
     audit = response.fairness_audit
     assert audit is not None
-    assert audit.missing_local_factor_count >= 2
-    assert "missing_local_factor_metadata" in audit.warnings
+    assert audit.missing_geo_locality_count >= 2
+    assert "missing_geo_locality_metadata" in audit.warnings
 
 
 @pytest.mark.asyncio
@@ -1378,11 +1378,11 @@ async def test_fairness_balancing_top5_already_compliant() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=0.2, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1414,13 +1414,13 @@ async def test_fairness_balancing_fallback_grounded_results() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1443,7 +1443,7 @@ async def test_fairness_balancing_fallback_grounded_results() -> None:
     assert audit is not None
     assert "ensemble_fallback" in audit.warnings
     top5 = response.places[:5]
-    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    local_in_top5 = sum(1 for p in top5 if (p.geo_locality or 0.0) >= 0.6)
     assert local_in_top5 >= 2, f"Expected >= 2 local in top-5 after balancing grounded results, got {local_in_top5}"
 
 
@@ -1456,13 +1456,13 @@ async def test_fairness_balancing_route_enrichment_fallback() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l2", display_name="Local 2", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l2", display_name="Local 2", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1485,25 +1485,25 @@ async def test_fairness_balancing_route_enrichment_fallback() -> None:
     assert audit is not None
     assert "route_enrichment_fallback" in audit.warnings
     top5 = response.places[:5]
-    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    local_in_top5 = sum(1 for p in top5 if (p.geo_locality or 0.0) >= 0.6)
     assert local_in_top5 >= 2
 
 
 @pytest.mark.asyncio
 async def test_reasoning_log_contains_fairness_diagnostics() -> None:
-    """reasoning_log must include top5_local_ratio, missing_local_factor count, and warnings."""
+    """reasoning_log must include top5_local_ratio, missing_geo_locality count, and warnings."""
     from datetime import UTC, datetime
     from app.models.places import PlaceCandidate, PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from app.models.request import LatLng
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/c1", display_name="Chain 1", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c2", display_name="Chain 2", local_factor=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c3", display_name="Chain 3", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c4", display_name="Chain 4", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/c5", display_name="Chain 5", local_factor=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/l1", display_name="Local 1", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c1", display_name="Chain 1", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c2", display_name="Chain 2", geo_locality=None, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c3", display_name="Chain 3", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c4", display_name="Chain 4", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/c5", display_name="Chain 5", geo_locality=0.1, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/l1", display_name="Local 1", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1521,7 +1521,7 @@ async def test_reasoning_log_contains_fairness_diagnostics() -> None:
 
     log = response.reasoning_log or ""
     assert "top5_local_ratio=" in log, f"reasoning_log missing top5_local_ratio: {log}"
-    assert "missing_local_factor=" in log, f"reasoning_log missing missing_local_factor: {log}"
+    assert "missing_geo_locality=" in log, f"reasoning_log missing missing_geo_locality: {log}"
     assert "warnings=" in log, f"reasoning_log missing warnings: {log}"
 
 
@@ -1534,7 +1534,7 @@ async def test_reasoning_log_no_secret_exposure() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -1565,8 +1565,8 @@ async def test_display_name_grounded_in_results() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="Quán Biển Xanh", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/b", display_name="Nhà Hàng Hải Sản", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="Quán Biển Xanh", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="Nhà Hàng Hải Sản", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -1596,8 +1596,8 @@ async def test_s01_no_rag_no_citation_behavior_preserved() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="A", local_factor=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
-        PlaceCandidate(place_id="places/b", display_name="B", local_factor=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/a", display_name="A", geo_locality=0.9, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
+        PlaceCandidate(place_id="places/b", display_name="B", geo_locality=0.8, types=["restaurant"], location=LatLng(lat=10.18, lng=104.05)),
     ]
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -1740,7 +1740,7 @@ def _budget_candidate(
     place_id: str,
     display_name: str,
     price_level: int | None = None,
-    local_factor: float | None = None,
+    geo_locality: float | None = None,
     accessibility_options: dict | None = None,
 ) -> "PlaceCandidate":
     """Helper to build a PlaceCandidate for preference tests."""
@@ -1752,7 +1752,7 @@ def _budget_candidate(
         types=["restaurant"],
         location=LatLng(lat=10.18, lng=104.05),
         price_level=price_level,
-        local_factor=local_factor,
+        geo_locality=geo_locality,
         accessibility_options=accessibility_options or {},
     )
 
@@ -1765,10 +1765,10 @@ async def test_budget_filter_excludes_expensive_venues() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        _budget_candidate("cheap1", "Cheap Eats", price_level=0, local_factor=0.8),
-        _budget_candidate("mid1", "Mid Range", price_level=2, local_factor=0.7),
-        _budget_candidate("exp1", "Fine Dining", price_level=3, local_factor=0.9),
-        _budget_candidate("lux1", "Luxury", price_level=4, local_factor=0.6),
+        _budget_candidate("cheap1", "Cheap Eats", price_level=0, geo_locality=0.8),
+        _budget_candidate("mid1", "Mid Range", price_level=2, geo_locality=0.7),
+        _budget_candidate("exp1", "Fine Dining", price_level=3, geo_locality=0.9),
+        _budget_candidate("lux1", "Luxury", price_level=4, geo_locality=0.6),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1802,8 +1802,8 @@ async def test_budget_filter_preserves_unknown_price_level() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        _budget_candidate("known", "Known Price", price_level=3, local_factor=0.8),
-        _budget_candidate("unknown", "Unknown Price", price_level=None, local_factor=0.7),
+        _budget_candidate("known", "Known Price", price_level=3, geo_locality=0.8),
+        _budget_candidate("unknown", "Unknown Price", price_level=None, geo_locality=0.7),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1843,7 +1843,7 @@ async def test_invalid_budget_label_fails_closed() -> None:
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
             price_level=4,
-            local_factor=0.8,
+            geo_locality=0.8,
         ),
         PlaceCandidate(
             place_id="places/cheap1",
@@ -1851,7 +1851,7 @@ async def test_invalid_budget_label_fails_closed() -> None:
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
             price_level=0,
-            local_factor=0.7,
+            geo_locality=0.7,
         ),
     ]
     request = PlaceSearchRequest(query="restaurant")
@@ -1884,8 +1884,8 @@ async def test_no_candidates_after_strict_budget_filter() -> None:
 
     # All expensive venues, user wants free
     candidates = [
-        _budget_candidate("exp1", "Fancy 1", price_level=3, local_factor=0.8),
-        _budget_candidate("exp2", "Fancy 2", price_level=4, local_factor=0.7),
+        _budget_candidate("exp1", "Fancy 1", price_level=3, geo_locality=0.8),
+        _budget_candidate("exp2", "Fancy 2", price_level=4, geo_locality=0.7),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -1922,7 +1922,7 @@ async def test_accessibility_preference_boosts_accessible_places() -> None:
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
             price_level=2,
-            local_factor=0.8,
+            geo_locality=0.8,
             accessibility_options={"wheelchair_accessible_entrance": True},
         ),
         PlaceCandidate(
@@ -1931,7 +1931,7 @@ async def test_accessibility_preference_boosts_accessible_places() -> None:
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
             price_level=2,
-            local_factor=0.7,
+            geo_locality=0.7,
             accessibility_options={},
         ),
     ]
@@ -1966,7 +1966,7 @@ async def test_user_location_preference_in_request() -> None:
         status=PlaceToolStatus.OK,
         source=PlaceToolSource.MOCK,
         candidates=[
-            _budget_candidate("nearby", "Nearby Place", local_factor=0.9),
+            _budget_candidate("nearby", "Nearby Place", geo_locality=0.9),
         ],
         request=PlaceSearchRequest(query="cafe"),
         retrieved_at=datetime.now(UTC),
@@ -2004,7 +2004,7 @@ async def test_user_location_invalid_coordinates_fail_closed() -> None:
             display_name="Place 1",
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
-            local_factor=0.8,
+            geo_locality=0.8,
         ),
     ]
     request = PlaceSearchRequest(query="cafe")
@@ -2043,7 +2043,7 @@ async def test_preferences_change_request_fields() -> None:
     places_tool.text_search.return_value = PlaceToolResponse(
         status=PlaceToolStatus.OK,
         source=PlaceToolSource.MOCK,
-        candidates=[_budget_candidate("p1", "Place 1", local_factor=0.8)],
+        candidates=[_budget_candidate("p1", "Place 1", geo_locality=0.8)],
         request=PlaceSearchRequest(query="cafe"),
         retrieved_at=datetime.now(UTC),
     )
@@ -2083,13 +2083,13 @@ async def test_fairness_still_applies_after_preference_rerank() -> None:
     # 7 candidates: top 5 by score are all non-local chains, 2 locals below
     # Budget filter allows all (moderate = 0,1,2)
     candidates = [
-        _budget_candidate("c1", "Chain 1", price_level=1, local_factor=0.1),
-        _budget_candidate("c2", "Chain 2", price_level=2, local_factor=0.2),
-        _budget_candidate("c3", "Chain 3", price_level=1, local_factor=0.1),
-        _budget_candidate("c4", "Chain 4", price_level=2, local_factor=0.3),
-        _budget_candidate("c5", "Chain 5", price_level=1, local_factor=0.1),
-        _budget_candidate("l1", "Local 1", price_level=2, local_factor=0.9),
-        _budget_candidate("l2", "Local 2", price_level=1, local_factor=0.8),
+        _budget_candidate("c1", "Chain 1", price_level=1, geo_locality=0.1),
+        _budget_candidate("c2", "Chain 2", price_level=2, geo_locality=0.2),
+        _budget_candidate("c3", "Chain 3", price_level=1, geo_locality=0.1),
+        _budget_candidate("c4", "Chain 4", price_level=2, geo_locality=0.3),
+        _budget_candidate("c5", "Chain 5", price_level=1, geo_locality=0.1),
+        _budget_candidate("l1", "Local 1", price_level=2, geo_locality=0.9),
+        _budget_candidate("l2", "Local 2", price_level=1, geo_locality=0.8),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -2109,7 +2109,7 @@ async def test_fairness_still_applies_after_preference_rerank() -> None:
     audit = response.fairness_audit
     assert audit is not None
     top5 = response.places[:5]
-    local_in_top5 = sum(1 for p in top5 if (p.local_factor or 0.0) >= 0.6)
+    local_in_top5 = sum(1 for p in top5 if (p.geo_locality or 0.0) >= 0.6)
     assert local_in_top5 >= 2, f"Expected >= 2 local in top-5 after preference filter, got {local_in_top5}"
     assert "insufficient_local_candidates" not in audit.warnings
 
@@ -2121,7 +2121,7 @@ async def test_no_rag_citations_introduced_by_preferences() -> None:
     from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
-    candidates = [_budget_candidate("p1", "Place 1", price_level=1, local_factor=0.8)]
+    candidates = [_budget_candidate("p1", "Place 1", price_level=1, geo_locality=0.8)]
     request = PlaceSearchRequest(query="cafe")
     places_tool = AsyncMock()
     places_tool.text_search.return_value = PlaceToolResponse(
@@ -2152,7 +2152,7 @@ async def test_no_preferences_still_works_backward_compat() -> None:
     from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
-    candidates = [_budget_candidate("p1", "Place 1", local_factor=0.8)]
+    candidates = [_budget_candidate("p1", "Place 1", geo_locality=0.8)]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
     places_tool.text_search.return_value = PlaceToolResponse(
@@ -2380,8 +2380,8 @@ async def test_preference_diagnostics_in_reasoning_log() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        _budget_candidate("cheap", "Cheap Place", price_level=0, local_factor=0.8),
-        _budget_candidate("exp", "Expensive", price_level=4, local_factor=0.9),
+        _budget_candidate("cheap", "Cheap Place", price_level=0, geo_locality=0.8),
+        _budget_candidate("exp", "Expensive", price_level=4, geo_locality=0.9),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -2417,7 +2417,7 @@ async def test_preference_diagnostics_no_secret_exposure() -> None:
     from app.models.places import PlaceSearchRequest, PlaceToolResponse, PlaceToolSource, PlaceToolStatus
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
-    candidates = [_budget_candidate("p1", "Place 1", local_factor=0.8)]
+    candidates = [_budget_candidate("p1", "Place 1", geo_locality=0.8)]
     request = PlaceSearchRequest(query="cafe")
     places_tool = AsyncMock()
     places_tool.text_search.return_value = PlaceToolResponse(
@@ -2459,12 +2459,12 @@ async def test_commercial_ok_message_includes_cultural_context_vi() -> None:
         PlaceCandidate(
             place_id="places/seafood-a", display_name="Quán Hải Sản A",
             types=["restaurant", "seafood_restaurant"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8,
         ),
         PlaceCandidate(
             place_id="places/seafood-b", display_name="Quán B",
             types=["restaurant"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.7,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.7,
         ),
     ]
     request = PlaceSearchRequest(query="hải sản")
@@ -2497,7 +2497,7 @@ async def test_commercial_ok_message_includes_cultural_context_en() -> None:
         PlaceCandidate(
             place_id="places/seafood-a", display_name="Ham Ninh Seafood",
             types=["restaurant", "seafood_restaurant"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8,
         ),
     ]
     request = PlaceSearchRequest(query="seafood", language_code="en")
@@ -2529,7 +2529,7 @@ async def test_hotel_ok_message_includes_cultural_context() -> None:
         PlaceCandidate(
             place_id="places/hotel-a", display_name="Ham Ninh Hotel",
             types=["lodging", "hotel"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.6,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.6,
         ),
     ]
     request = PlaceSearchRequest(query="khách sạn")
@@ -2559,7 +2559,7 @@ async def test_cafe_ok_message_includes_cultural_context() -> None:
         PlaceCandidate(
             place_id="places/cafe-a", display_name="Cafe Biển",
             types=["cafe", "food"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.9,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.9,
         ),
     ]
     request = PlaceSearchRequest(query="cafe")
@@ -2590,7 +2590,7 @@ async def test_non_commercial_ok_message_has_no_cultural_context() -> None:
         PlaceCandidate(
             place_id="places/park-a", display_name="Công viên Hàm Ninh",
             types=["park", "tourist_attraction"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8,
         ),
     ]
     request = PlaceSearchRequest(query="quán công viên")
@@ -2692,7 +2692,7 @@ async def test_commercial_message_no_invented_place_names() -> None:
         PlaceCandidate(
             place_id="places/a", display_name="Quán A",
             types=["restaurant"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8,
         ),
     ]
     request = PlaceSearchRequest(query="nhà hàng gần chợ")
@@ -2728,7 +2728,7 @@ async def test_commercial_message_no_document_citations() -> None:
         PlaceCandidate(
             place_id="places/homestay-a", display_name="Homнинь Homestay",
             types=["lodging", "homestay"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.9,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.9,
         ),
     ]
     request = PlaceSearchRequest(query="homestay")
@@ -2757,12 +2757,12 @@ async def test_commercial_message_place_names_with_unusual_punctuation() -> None
         PlaceCandidate(
             place_id="places/weird-a", display_name="Quán 'Đặc Biệt' & Co. — Seafood <bar>",
             types=["restaurant", "seafood_restaurant"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.8,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8,
         ),
         PlaceCandidate(
             place_id="places/weird-b", display_name="Cafe @ Beach — https://example.com",
             types=["cafe"],
-            location=LatLng(lat=10.18, lng=104.05), local_factor=0.7,
+            location=LatLng(lat=10.18, lng=104.05), geo_locality=0.7,
         ),
     ]
     request = PlaceSearchRequest(query="quán lạ")
@@ -2921,9 +2921,9 @@ async def test_commercial_message_result_count_matches() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="p1", display_name="R1", types=["restaurant"], location=LatLng(lat=10, lng=104), local_factor=0.8),
-        PlaceCandidate(place_id="p2", display_name="R2", types=["restaurant"], location=LatLng(lat=10, lng=104), local_factor=0.7),
-        PlaceCandidate(place_id="p3", display_name="R3", types=["restaurant"], location=LatLng(lat=10, lng=104), local_factor=0.6),
+        PlaceCandidate(place_id="p1", display_name="R1", types=["restaurant"], location=LatLng(lat=10, lng=104), geo_locality=0.8),
+        PlaceCandidate(place_id="p2", display_name="R2", types=["restaurant"], location=LatLng(lat=10, lng=104), geo_locality=0.7),
+        PlaceCandidate(place_id="p3", display_name="R3", types=["restaurant"], location=LatLng(lat=10, lng=104), geo_locality=0.6),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -2957,7 +2957,7 @@ async def test_recommendation_service_emits_explanation_for_each_place() -> None
         open_now=True,
         business_status="OPERATIONAL",
         accessibility_options={"wheelchair_accessible_entrance": True},
-        local_factor=0.9,
+        geo_locality=0.9,
         route_context=RouteContext(travel_mode="drive", distance_meters=1500, duration_seconds=420),
         map_uri="https://maps.example/explainable",
     )
@@ -3022,10 +3022,10 @@ async def test_grounded_fallback_explanation_uses_conservative_defaults() -> Non
 
     place = response.places[0]
     assert place.explanation.primary_reason.startswith("Recommended using fallback")
-    assert place.explanation.fairness_note == "local_factor missing; fairness treatment is conservative"
+    assert place.explanation.fairness_note == "geo_locality missing; fairness treatment is conservative"
     assert place.explanation.accessibility_note == "accessibility metadata unknown"
     assert place.explanation.route_summary == "route metadata unavailable"
-    assert place.explanation.score_factors["local_factor"] is None
+    assert place.explanation.score_factors["geo_locality"] is None
 
 
 # ===========================================================================
@@ -3052,7 +3052,7 @@ async def test_decision_trace_present_on_successful_recommendation() -> None:
         display_name="Traced Seafood",
         location=LatLng(lat=10.1794, lng=104.0491),
         types=["restaurant"],
-        local_factor=0.8,
+        geo_locality=0.8,
     )
     request = PlaceSearchRequest(query="seafood")
     places_tool = AsyncMock()
@@ -3350,7 +3350,7 @@ async def test_decision_trace_records_fairness_balanced() -> None:
         display_name="Fair Test",
         location=LatLng(lat=10.1794, lng=104.0491),
         types=["restaurant"],
-        local_factor=0.8,
+        geo_locality=0.8,
     )
     request = PlaceSearchRequest(query="test")
     places_tool = AsyncMock()
@@ -3557,9 +3557,9 @@ async def test_explanation_on_every_place_through_recommend() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/a", display_name="Place A", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.9, price_level=2, rating=4.5),
-        PlaceCandidate(place_id="places/b", display_name="Place B", types=["cafe"], location=LatLng(lat=10.19, lng=104.06), local_factor=0.7, price_level=1),
-        PlaceCandidate(place_id="places/c", display_name="Place C", types=["hotel"], location=LatLng(lat=10.17, lng=104.04), local_factor=0.3),
+        PlaceCandidate(place_id="places/a", display_name="Place A", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), geo_locality=0.9, price_level=2, rating=4.5),
+        PlaceCandidate(place_id="places/b", display_name="Place B", types=["cafe"], location=LatLng(lat=10.19, lng=104.06), geo_locality=0.7, price_level=1),
+        PlaceCandidate(place_id="places/c", display_name="Place C", types=["hotel"], location=LatLng(lat=10.17, lng=104.04), geo_locality=0.3),
     ]
     request = PlaceSearchRequest(query="restaurants")
     places_tool = AsyncMock()
@@ -3593,8 +3593,8 @@ async def test_explanation_budget_match_through_recommend() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/cheap", display_name="Cheap Eats", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.8, price_level=0),
-        PlaceCandidate(place_id="places/mid", display_name="Mid Range", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.7, price_level=2),
+        PlaceCandidate(place_id="places/cheap", display_name="Cheap Eats", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8, price_level=0),
+        PlaceCandidate(place_id="places/mid", display_name="Mid Range", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), geo_locality=0.7, price_level=2),
     ]
     request = PlaceSearchRequest(query="restaurant")
     places_tool = AsyncMock()
@@ -3633,7 +3633,7 @@ async def test_explanation_accessibility_match_through_recommend() -> None:
             display_name="Accessible Place",
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
-            local_factor=0.8,
+            geo_locality=0.8,
             accessibility_options={"wheelchair_accessible_entrance": True},
         ),
         PlaceCandidate(
@@ -3641,7 +3641,7 @@ async def test_explanation_accessibility_match_through_recommend() -> None:
             display_name="Non Accessible",
             types=["restaurant"],
             location=LatLng(lat=10.18, lng=104.05),
-            local_factor=0.7,
+            geo_locality=0.7,
             accessibility_options={},
         ),
     ]
@@ -3674,7 +3674,7 @@ async def test_explanation_provider_source_through_recommend() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/ps", display_name="Source Test", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.8),
+        PlaceCandidate(place_id="places/ps", display_name="Source Test", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8),
     ]
     request = PlaceSearchRequest(query="test")
     places_tool = AsyncMock()
@@ -3702,7 +3702,7 @@ async def test_explanation_no_display_name_in_primary_reason() -> None:
     from agents.services.place_recommendation_service import PlaceRecommendationService
 
     candidates = [
-        PlaceCandidate(place_id="places/noecho", display_name="Secret Restaurant Name", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), local_factor=0.8),
+        PlaceCandidate(place_id="places/noecho", display_name="Secret Restaurant Name", types=["restaurant"], location=LatLng(lat=10.18, lng=104.05), geo_locality=0.8),
     ]
     request = PlaceSearchRequest(query="test")
     places_tool = AsyncMock()

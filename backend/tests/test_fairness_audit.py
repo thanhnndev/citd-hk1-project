@@ -21,7 +21,7 @@ from app.models.request import LatLng
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_place(place_id: str, local_factor: float) -> PlaceResult:
+def _make_place(place_id: str, geo_locality: float) -> PlaceResult:
     """Build a minimal PlaceResult for testing."""
     return PlaceResult(
         place_id=place_id,
@@ -35,7 +35,7 @@ def _make_place(place_id: str, local_factor: float) -> PlaceResult:
         price_level=2,
         open_now=True,
         business_status="OPERATIONAL",
-        local_factor=local_factor,
+        geo_locality=geo_locality,
         final_score=0.8,
         score_breakdown=ScoreBreakdown(
             tree1_locality=0.8,
@@ -97,7 +97,7 @@ class TestFairnessAuditLog:
         assert record["mean"] == pytest.approx(0.4, abs=0.01)
         assert record["min"] == pytest.approx(0.1)
         assert record["max"] == pytest.approx(0.8)
-        assert record["local_factors"] == [0.8, 0.3, 0.1]
+        assert record["geo_localitys"] == [0.8, 0.3, 0.1]
         assert "distribution" in record
         assert record["distribution"]["<0.1"] == 0
         assert record["distribution"]["0.1-0.3"] == 1  # 0.1 is in this bucket (< 0.3)
@@ -115,8 +115,8 @@ class TestFairnessAuditLog:
 
         assert list(audit_dir.glob("*.jsonl")) == []
 
-    def test_handles_place_without_local_factor(self, tmp_path):
-        """Places without local_factor are skipped (but others are logged)."""
+    def test_handles_place_without_geo_locality(self, tmp_path):
+        """Places without geo_locality are skipped (but others are logged)."""
         svc = _make_agent_service()
         audit_dir = tmp_path / "fairness_audit"
 
@@ -132,7 +132,7 @@ class TestFairnessAuditLog:
         from agents.graph.agent_service import AgentService
 
         factors = [0.05, 0.09, 0.1, 0.29, 0.3, 0.49, 0.5, 0.7, 0.99]
-        buckets = AgentService._bucket_local_factors(factors)
+        buckets = AgentService._bucket_geo_localitys(factors)
 
         assert buckets["<0.1"] == 2    # 0.05, 0.09
         assert buckets["0.1-0.3"] == 2  # 0.1, 0.29
@@ -230,7 +230,7 @@ class TestAdminFairnessAggregate:
                 "mean": 0.4,
                 "min": 0.1,
                 "max": 0.8,
-                "local_factors": [0.8, 0.3, 0.1],
+                "geo_localitys": [0.8, 0.3, 0.1],
                 "distribution": {"<0.1": 0, "0.1-0.3": 1, "0.3-0.5": 1, ">0.5": 1},
             }) + "\n",
             "20260102.jsonl": json.dumps({
@@ -239,7 +239,7 @@ class TestAdminFairnessAggregate:
                 "mean": 0.6,
                 "min": 0.2,
                 "max": 0.9,
-                "local_factors": [0.9, 0.2],
+                "geo_localitys": [0.9, 0.2],
                 "distribution": {"<0.1": 0, "0.1-0.3": 1, "0.3-0.5": 0, ">0.5": 1},
             }) + "\n",
         }
@@ -256,12 +256,12 @@ class TestAdminFairnessAggregate:
         assert data["total_audits"] == 2
         assert data["latest_timestamp"] == "2026-01-02T12:00:00+00:00"
 
-        dist = data["local_factor_distribution"]
+        dist = data["geo_locality_distribution"]
         assert dist is not None
         assert "buckets" in dist
         assert "mean" in dist
         assert "count" in dist
-        # 5 total local_factors: 0.8, 0.3, 0.1, 0.9, 0.2
+        # 5 total geo_localitys: 0.8, 0.3, 0.1, 0.9, 0.2
         assert dist["count"] == 5
         assert dist["mean"] == pytest.approx(0.46, abs=0.01)
         assert dist["buckets"]["<0.1"] == 0
@@ -372,7 +372,7 @@ class TestFairnessGracefulDegradation:
         (audit_dir / "good.jsonl").write_text(
             json.dumps({
                 "timestamp": "2026-01-01T00:00:00+00:00",
-                "local_factors": [0.6],
+                "geo_localitys": [0.6],
             }) + "\n"
         )
 
@@ -388,4 +388,4 @@ class TestFairnessGracefulDegradation:
         assert response.status_code == 200
         data = response.json()
         assert data["total_audits"] == 2
-        assert data["local_factor_distribution"]["count"] == 1
+        assert data["geo_locality_distribution"]["count"] == 1

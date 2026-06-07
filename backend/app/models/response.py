@@ -9,36 +9,17 @@ from app.models.request import LatLng
 
 
 class ScoreBreakdown(BaseModel):
-    """Ensemble scoring components for the 3-tree reranker pipeline.
+    """Deterministic fairness re-ranking score components."""
 
-    Replaces the legacy 5-field schema (relevance, proximity, price, rating,
-    accessibility) with the ensemble schema defined in REQUIREMENTS.md §7.8.
-    """
-
-    tree1_locality: float = Field(
-        description="Tree 1 locality-first score (0-1).",
-    )
-    tree2_proximity: float = Field(
-        description="Tree 2 proximity-first score (0-1).",
-    )
-    tree3_quality: float = Field(
-        description="Tree 3 quality-first score (0-1).",
-    )
-    s_bag: float = Field(
-        description="Bagged average of the 3 tree scores (0-1).",
-    )
-    delta1_fairness: float = Field(
-        description="Applied fairness correction: η × Δ1 (can be negative).",
-    )
-    delta2_access: float = Field(
-        description="Applied accessibility correction: η × Δ2.",
-    )
-    final_score: float = Field(
-        description="Clipped final score F2, bounded to [0, 1].",
-    )
-    rank: int = Field(
-        description="1-based rank after stable sort by final_score descending.",
-    )
+    relevance: float = Field(description="Relevance score (0-1).")
+    proximity: float = Field(description="Proximity score (0-1).")
+    quality: float = Field(description="Quality score (0-1).")
+    geo_locality: float = Field(description="Locality score based on coordinates (0-1).")
+    popularity_damping: float = Field(description="Applied popularity damping penalty.")
+    weights: dict[str, float] = Field(description="Weights applied to each component.")
+    gate_passed: bool = Field(description="Whether the place passed the relevance/quality gate.")
+    final_score: float = Field(description="Clipped final score, bounded to [0, 1].")
+    rank: int = Field(description="1-based rank after stable sort by final_score descending.")
 
 
 class AccessibilityInfo(BaseModel):
@@ -94,16 +75,17 @@ class PlaceResult(BaseModel):
                     "price_level": 2,
                     "open_now": True,
                     "business_status": "OPERATIONAL",
-                    "local_factor": 0.8,
+                    "geo_locality": 1.0,
                     "final_score": 0.87,
                     "score_breakdown": {
-                        "tree1_locality": 0.90,
-                        "tree2_proximity": 0.65,
-                        "tree3_quality": 0.75,
-                        "s_bag": 0.767,
-                        "delta1_fairness": -0.045,
-                        "delta2_access": 0.0,
-                        "final_score": 0.72,
+                        "relevance": 0.90,
+                        "proximity": 0.65,
+                        "quality": 0.75,
+                        "geo_locality": 1.0,
+                        "popularity_damping": 0.045,
+                        "weights": {"relevance": 0.40, "proximity": 0.25, "quality": 0.20, "geo_locality": 0.15},
+                        "gate_passed": True,
+                        "final_score": 0.87,
                         "rank": 1,
                     },
                     "accessibility_score": 0.75,
@@ -170,9 +152,9 @@ class PlaceResult(BaseModel):
     reviews: list[dict] = Field(default_factory=list, description="Bounded provider reviews from Place Details.")
     photos: list[str] = Field(default_factory=list, description="Bounded provider photo resource names from Place Details.")
     service_options: dict[str, bool | None] = Field(default_factory=dict, description="Dining/service flags such as takeout, delivery, dine_in, reservable, serves_*.")
-    local_factor: float | None = Field(
+    geo_locality: float | None = Field(
         default=None,
-        description="Locality signal when available; null means provider metadata did not support a local ownership inference.",
+        description="Locality signal based on location; null if unknown.",
     )
     final_score: float = Field(
         description="Composite ranking score used for sorting results (0-1)."

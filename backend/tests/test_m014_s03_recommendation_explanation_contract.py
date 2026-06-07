@@ -50,8 +50,8 @@ from agents.services.place_recommendation_service import (
     _build_recommendation_frame,
     FAIRNESS_LOCAL_THRESHOLD,
 )
-from agents.ml.feature_extractor import FeatureExtractor
-from agents.ml.ensemble_reranker import EnsembleReranker
+from agents.ranking.feature_extractor import FeatureExtractor
+from agents.ranking.fairness_reranker import FairnessReranker
 
 
 
