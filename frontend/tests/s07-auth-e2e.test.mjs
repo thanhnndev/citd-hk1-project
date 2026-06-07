@@ -132,7 +132,10 @@ async function installAuthMocks(page, seenRequests) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ args: ['--no-sandbox'] });
+  const browser = await chromium.launch({
+    args: ['--no-sandbox'],
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   const consoleErrors = [];

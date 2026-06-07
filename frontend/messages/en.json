@@ -35,14 +35,23 @@
     },
     "login": {
       "eyebrow": "Welcome back",
-      "title": "Log in",
-      "emailPlaceholder": "email@example.com",
+      "title": "Sign in to your account",
+      "description": "Securely access the Phu Quoc tour and service management system",
+      "heroLineOne": "Discover the beauty,",
+      "heroLineTwo": "Manage the future.",
+      "emailPlaceholder": "employee@phuquoc.vn",
       "passwordPlaceholder": "Password",
       "submitButton": "Log in",
       "submitting": "Logging in...",
       "registerPrompt": "Don't have an account?",
       "registerLink": "Register",
-      "verifyError": "Email not verified. Please check your inbox and verify your email before logging in."
+      "verifyError": "Email not verified. Please check your inbox and verify your email before logging in.",
+      "rememberLogin": "Remember me",
+      "forgotPassword": "Forgot password?",
+      "supportPrompt": "Need help?",
+      "supportLink": "Contact IT Support",
+      "languageLabel": "Switch to Vietnamese",
+      "helpLabel": "Contact support"
     },
     "verify": {
       "eyebrow": "Email verification",

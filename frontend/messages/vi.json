@@ -35,14 +35,23 @@
     },
     "login": {
       "eyebrow": "Chào mừng trở lại",
-      "title": "Đăng nhập",
-      "emailPlaceholder": "email@example.com",
+      "title": "Đăng nhập tài khoản",
+      "description": "Truy cập an toàn vào hệ thống quản lý tour và dịch vụ Phú Quốc",
+      "heroLineOne": "Khám phá vẻ đẹp,",
+      "heroLineTwo": "Quản trị tương lai.",
+      "emailPlaceholder": "nhanvien@phuquoc.vn",
       "passwordPlaceholder": "Mật khẩu",
       "submitButton": "Đăng nhập",
       "submitting": "Đang đăng nhập...",
       "registerPrompt": "Chưa có tài khoản?",
       "registerLink": "Đăng ký ngay",
-      "verifyError": "Email chưa được xác thực. Vui lòng kiểm tra hộp thư và xác thực email trước khi đăng nhập."
+      "verifyError": "Email chưa được xác thực. Vui lòng kiểm tra hộp thư và xác thực email trước khi đăng nhập.",
+      "rememberLogin": "Ghi nhớ đăng nhập",
+      "forgotPassword": "Quên mật khẩu?",
+      "supportPrompt": "Cần hỗ trợ?",
+      "supportLink": "Liên hệ Bộ phận IT",
+      "languageLabel": "Đổi sang tiếng Anh",
+      "helpLabel": "Liên hệ hỗ trợ"
     },
     "verify": {
       "eyebrow": "Xác thực email",
