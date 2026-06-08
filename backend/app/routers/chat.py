@@ -171,6 +171,8 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                 message=body.message,
                 language=body.language,
                 user_location=user_loc_dict,
+                budget_filter=body.budget_filter,
+                accessibility_required=body.accessibility_required,
             )
 
             # Convert GraphResult to ChatResponse
@@ -300,6 +302,8 @@ async def chat_stream(
     language: str = Query("vi"),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
+    budget: str | None = Query(None),
+    accessibility: bool | None = Query(None),
 ) -> StreamingResponse:
     """Stream a grounded assistant answer as Server-Sent Events."""
     query = message.strip()
@@ -376,6 +380,8 @@ async def chat_stream(
                     message=query,
                     language=language,
                     user_location=stream_user_loc,
+                    budget_filter=budget,
+                    accessibility_required=accessibility if accessibility is not None else True,
                 ):
                     yield _sse_payload(sse_marker)
 

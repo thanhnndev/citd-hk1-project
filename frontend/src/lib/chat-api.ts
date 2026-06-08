@@ -172,12 +172,15 @@ export async function sendChat(
   message: string,
   sessionId?: string,
   language: "vi" | "en" = "vi",
+  budgetFilter?: string | null,
+  accessibilityRequired?: boolean,
 ): Promise<ChatResponse> {
   const body: ChatRequest = {
     session_id: sessionId ?? crypto.randomUUID(),
     message,
     language,
-    accessibility_required: true,
+    budget_filter: budgetFilter,
+    accessibility_required: accessibilityRequired ?? true,
   };
 
   const res = await fetch("/api/chat", {
@@ -199,12 +202,21 @@ export async function streamChat(
   sessionId: string,
   language: "vi" | "en",
   callbacks: StreamChatCallbacks,
+  budgetFilter?: string | null,
+  accessibilityRequired?: boolean,
 ): Promise<void> {
   const params = new URLSearchParams({
     message,
     session_id: sessionId,
     language,
   });
+
+  if (budgetFilter) {
+    params.set('budget', budgetFilter);
+  }
+  if (accessibilityRequired !== undefined) {
+    params.set('accessibility', String(accessibilityRequired));
+  }
 
   const res = await fetch(`/api/chat/stream?${params.toString()}`, {
     headers: { Accept: "text/event-stream" },
