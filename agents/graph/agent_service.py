@@ -55,6 +55,21 @@ from agents.graph.followup import (
     resolve_followup_before_tool_routing as _resolve_followup_before_tool_routing_impl,
     resolve_followup_decision,
 )
+
+# Streaming adapter for LangGraph (T04)
+try:
+    from agents.graph.streaming import StreamingAdapter, stream_graph_to_sse
+    _STREAMING_ADAPTER_AVAILABLE = True
+except Exception:
+    _STREAMING_ADAPTER_AVAILABLE = False
+
+# HamNinhGraph for new StateGraph pipeline (T01-T03)
+try:
+    from agents.graph.ham_ninh_graph import HamNinhGraph
+    _HAM_NINH_GRAPH_AVAILABLE = True
+except Exception:
+    _HAM_NINH_GRAPH_AVAILABLE = False
+    HamNinhGraph = None  # type: ignore
 from agents.graph.state import (
     END,
     START,
@@ -159,6 +174,22 @@ class AgentService:
         return response
 
     async def answer_stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
+        # Try to use HamNinhGraph if available (T01-T03)
+        if _HAM_NINH_GRAPH_AVAILABLE and HamNinhGraph is not None:
+            try:
+                async for event in self._stream_via_graph(session_id, message, language):
+                    yield event
+                return
+            except Exception as exc:
+                logger.warning(
+                    "agent.graph_stream_failed",
+                    session_id=session_id,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                # Fall through to legacy streaming
+        
+        # Legacy streaming path
         started = time.perf_counter()
         state = await self._initial_state(session_id, message, language)
         # Resolve contextual follow-ups before tool routing (R052 / T03)
@@ -214,6 +245,71 @@ class AgentService:
     async def stream(self, *, session_id: str, message: str, language: str = "vi") -> AsyncGenerator[str, None]:
         async for event in self.answer_stream(session_id=session_id, message=message, language=language):
             yield event
+
+    async def _stream_via_graph(
+        self, session_id: str, message: str, language: str
+    ) -> AsyncGenerator[str, None]:
+        """Stream response using HamNinhGraph with streaming adapter (T04).
+        
+        This method:
+        1. Creates or retrieves the HamNinhGraph instance
+        2. Builds initial state
+        3. Streams through graph.astream() with the adapter
+        4. Yields SSE markers
+        
+        Falls back to legacy streaming if graph execution fails.
+        """
+        if not _STREAMING_ADAPTER_AVAILABLE:
+            raise RuntimeError("StreamingAdapter not available")
+        
+        # Get or create graph instance
+        graph_instance = getattr(self, "_ham_ninh_graph", None)
+        if graph_instance is None:
+            graph_instance = HamNinhGraph()
+            self._ham_ninh_graph = graph_instance
+        
+        # Build initial state
+        started = time.perf_counter()
+        state = await self._initial_state(session_id, message, language)
+        
+        # Add v4.2.0 fields expected by the graph
+        state.update({
+            "intent_confidence": None,
+            "routing_tier": None,
+            "needs_location": False,
+            "guardrail_flags": {},
+            "grade_score": None,
+            "grade_label": None,
+            "rewrite_count": 0,
+            "rewritten_query": None,
+            "history_included": False,
+            "location_consent": False,
+            "sort_by_nearest": False,
+            "user_location": None,
+        })
+        
+        # Config with thread_id for checkpointing
+        config = {"configurable": {"thread_id": session_id}}
+        
+        # Stream through graph with adapter
+        async for sse_marker in stream_graph_to_sse(graph_instance.graph, state, config):
+            yield sse_marker
+        
+        # Save turn to checkpoint (for followup context)
+        # Note: graph state already has response_text, citations, etc.
+        # We just need to save for followup context tracking
+        try:
+            # Get final state from graph (last checkpoint)
+            final_state = graph_instance.graph.get_state(config)
+            if final_state and final_state.values:
+                response_text = final_state.values.get("response_text", "")
+                await self._save_turn(session_id, message, response_text)
+        except Exception as exc:
+            logger.warning(
+                "agent.graph_save_turn_failed",
+                session_id=session_id,
+                reason=type(exc).__name__,
+            )
 
     async def _initial_state(self, session_id: str, message: str, language: str) -> AgentState:
         try:
