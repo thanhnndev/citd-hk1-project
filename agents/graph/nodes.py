@@ -35,11 +35,13 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+from langgraph.types import interrupt
 
 from agents.graph.state import (
     AgentState,
@@ -232,6 +234,28 @@ async def input_guardrails_node(state: AgentState) -> dict[str, Any]:
 # 2. intent_router_node (REAL)
 # ---------------------------------------------------------------------------
 
+def _checkpoint_history(state: AgentState) -> list[dict[str, str]]:
+    """Return prior chat turns from checkpointed messages, excluding current user turn."""
+    explicit_history = state.get("history") or []
+    if explicit_history:
+        return explicit_history
+
+    current_message = state.get("message", "")
+    raw_messages = state.get("messages") or []
+    history: list[dict[str, str]] = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if role == "user" and content == current_message:
+            continue
+        history.append({"role": role, "content": str(content)})
+    return history[-12:]
+
+
 _INTENT_ROUTER_SYSTEM_PROMPT = """\
 You are an intent classifier for the Ham Ninh tourism assistant.
 Classify the user's message into one of these intents:
@@ -245,7 +269,11 @@ Classify the user's message into one of these intents:
 Also determine:
 - confidence: your confidence in the classification (0.0 to 1.0)
 - is_followup: whether the message references prior conversation context
-- needs_location: whether the query requires user GPS (nearby, directions)
+- needs_location: whether the query requires the user's current GPS.
+  Set true only for queries like "near me", "nearby", "nearest", "from my current location",
+  or "give me directions from where I am".
+  Set false for route questions that already include an explicit origin, e.g.
+  "Từ Dương Đông đi Hàm Ninh thế nào?" because no user GPS is needed.
 """
 
 
@@ -263,7 +291,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
     """
     t0 = time.perf_counter()
     message = state.get("message", "")
-    history = state.get("history", [])
+    history = _checkpoint_history(state)
     language = state.get("language", "vi")
     session_id = state.get("session_id", "")
     query_hash = _hash_query(message)
@@ -288,7 +316,8 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
             for item in (history or [])[-4:]:
                 if item.get("role") in {"user", "assistant"} and item.get("content"):
                     messages.append({"role": item["role"], "content": item["content"]})
-            messages.append({"role": "user", "content": message})
+            original_message = message
+            messages.append({"role": "user", "content": original_message})
 
             completion = await client.chat.completions.parse(
                 model=services.model,
@@ -373,10 +402,8 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
             confidence = 0.4
 
     routing_tier = _routing_tier_from_confidence(confidence)
-    needs_location = any(
-        term in (message or "").lower()
-        for term in ("gần đây", "nearby", "gần nhất", "nearest", "directions", "chỉ đường")
-    )
+    # Let LLM decide needs_location from message context (no hardcode)
+    needs_location = False  # Default for heuristic fallback; LLM path sets this properly
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(
@@ -505,7 +532,7 @@ async def conversational_node(state: AgentState) -> dict[str, Any]:
     """
     t0 = time.perf_counter()
     message = state.get("message", "")
-    history = state.get("history", [])
+    history = _checkpoint_history(state)
     language = state.get("language", "vi")
     session_id = state.get("session_id", "")
 
@@ -671,7 +698,10 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
             reason=f"intent_{intent}",
             duration_ms=elapsed,
         )
-        return {"guardrail_flags": flags}
+        update: dict[str, Any] = {"guardrail_flags": flags}
+        if response_text:
+            update["messages"] = [{"role": "assistant", "content": response_text}]
+        return update
 
     citations = state.get("citations", [])
     grounding_result = verify_grounding(response_text, citations or None)
@@ -692,7 +722,10 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
         reason=grounding_result.reason,
         duration_ms=elapsed,
     )
-    return {"guardrail_flags": flags}
+    update: dict[str, Any] = {"guardrail_flags": flags}
+    if response_text:
+        update["messages"] = [{"role": "assistant", "content": response_text}]
+    return update
 
 
 # ---------------------------------------------------------------------------
@@ -1167,7 +1200,7 @@ async def maps_agent_node(state: AgentState) -> dict[str, Any]:
     """
     t0 = time.perf_counter()
     session_id = state.get("session_id", "")
-    message = state.get("message", "")
+    message = state.get("resolved_query") or state.get("message", "")
     user_location = state.get("user_location")
     language = state.get("language", "vi")
     needs_location = state.get("needs_location", False)
@@ -1181,27 +1214,36 @@ async def maps_agent_node(state: AgentState) -> dict[str, Any]:
         mode="place_recommendation",
     )
 
-    # Location consent check: if location is needed but not provided, prompt user
+    # Location consent: use interrupt() pattern per LangGraph docs
+    # Frontend will detect interrupt, request geolocation, and resume with Command(resume=user_location)
     if needs_location and user_location is None:
         elapsed = round((time.perf_counter() - t0) * 1000, 3)
         logger.info(
             "graph.node_exit",
             node="maps_agent",
             session_id=session_id,
-            mode="location_consent_needed",
+            mode="location_interrupt",
             duration_ms=elapsed,
         )
-        consent_message = (
-            "Để gợi ý địa điểm phù hợp gần bạn, mình cần biết vị trí hiện tại. "
-            "Bạn có thể chia sẻ vị trí không?"
-            if language == "vi"
-            else "To recommend places near you, I need your current location. "
-            "Can you share your location?"
+        # Pause graph and request location from frontend
+        user_location = interrupt({
+            "type": "location_request",
+            "message": (
+                "Để gợi ý địa điểm phù hợp gần bạn, mình cần biết vị trí hiện tại. "
+                "Trình duyệt sẽ yêu cầu quyền truy cập vị trí."
+                if language == "vi"
+                else "To recommend places near you, I need your current location. "
+                "The browser will request location permission."
+            ),
+            "requires_geolocation": True,
+        })
+        # After resume, user_location will be populated
+        logger.info(
+            "graph.node_resume",
+            node="maps_agent",
+            session_id=session_id,
+            location_received=user_location is not None,
         )
-        return {
-            "places": [],
-            "response_text": consent_message,
-        }
 
     # Get PlaceRecommendationService from dependency injection
     services = get_services()

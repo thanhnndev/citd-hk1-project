@@ -22,6 +22,7 @@ TimeoutPolicy:
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Literal
 
@@ -61,11 +62,13 @@ except Exception:  # pragma: no cover - optional runtime dependency
 try:
     from langgraph.graph import END, START, StateGraph
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.errors import GraphInterrupt
 except Exception:  # pragma: no cover - optional runtime dependency
     END = "__end__"
     START = "__start__"
     StateGraph = None
     MemorySaver = None
+    GraphInterrupt = None
 
 logger = structlog.get_logger(__name__)
 
@@ -386,41 +389,18 @@ class HamNinhGraph:
         Raises:
             NodeTimeoutError: If a node exceeds its timeout (logged and re-raised).
         """
-        # Build initial state
+        # Build initial state as a delta over checkpointed memory.
+        # Keep prior checkpointed messages/history intact and only inject the
+        # current turn plus any fresh request fields.
         state: AgentState = {
             "session_id": session_id,
             "message": message,
             "language": language,
             "history": history or [],
-            "messages": [],
+            "messages": [{"role": "user", "content": message}],
             "tool_calls": [],
-            "citations": [],
-            "places": [],
-            "suggestions": [],
-            "reasoning_log": None,
-            "intent": None,
-            "response_text": "",
             "langfuse_trace_id": None,
-            "prior_context": None,
-            "followup_decision": None,
-            "context_source": None,
-            "tool_call_signatures": [],
-            "knowledge_chunks": [],
-            "knowledge_response_ready": False,
-            "intent_confidence": None,
-            "routing_tier": None,
-            "needs_location": False,
-            "next_node": None,
-            "guardrail_flags": {},
-            "grade_score": None,
-            "grade_label": None,
-            "rewrite_count": 0,
-            "rewritten_query": None,
-            "history_included": False,
-            "location_consent": False,
-            "sort_by_nearest": False,
             "user_location": user_location,
-            "blocked": False,
             "budget_filter": budget_filter,
             "accessibility_required": accessibility_required,
         }
@@ -506,41 +486,18 @@ class HamNinhGraph:
         """
         from agents.graph.streaming import StreamingAdapter
 
-        # Build initial state
+        # Build initial state as a delta over checkpointed memory.
+        # Keep prior checkpointed messages/history intact and only inject the
+        # current turn plus any fresh request fields.
         state: AgentState = {
             "session_id": session_id,
             "message": message,
             "language": language,
             "history": history or [],
-            "messages": [],
+            "messages": [{"role": "user", "content": message}],
             "tool_calls": [],
-            "citations": [],
-            "places": [],
-            "suggestions": [],
-            "reasoning_log": None,
-            "intent": None,
-            "response_text": "",
             "langfuse_trace_id": None,
-            "prior_context": None,
-            "followup_decision": None,
-            "context_source": None,
-            "tool_call_signatures": [],
-            "knowledge_chunks": [],
-            "knowledge_response_ready": False,
-            "intent_confidence": None,
-            "routing_tier": None,
-            "needs_location": False,
-            "next_node": None,
-            "guardrail_flags": {},
-            "grade_score": None,
-            "grade_label": None,
-            "rewrite_count": 0,
-            "rewritten_query": None,
-            "history_included": False,
-            "location_consent": False,
-            "sort_by_nearest": False,
             "user_location": user_location,
-            "blocked": False,
             "budget_filter": budget_filter,
             "accessibility_required": accessibility_required,
         }
@@ -572,6 +529,7 @@ class HamNinhGraph:
 
         # Stream with updates + custom modes for full observability
         adapter = StreamingAdapter()
+        stream_interrupted = False
 
         try:
             graph_stream = self.graph.astream(
@@ -583,6 +541,29 @@ class HamNinhGraph:
 
             async for sse_marker in adapter.adapt_stream(graph_stream):
                 yield sse_marker
+
+            # After stream completes, check if graph was interrupted
+            # LangGraph's astream() doesn't raise GraphInterrupt - it stops normally
+            # We need to check the final state for pending interrupts
+            final_state = self.graph.get_state(config)
+            if final_state.next:  # Has pending tasks = interrupted
+                # Extract interrupt value from tasks
+                for task in final_state.tasks:
+                    if hasattr(task, 'interrupts') and task.interrupts:
+                        for interrupt_obj in task.interrupts:
+                            if hasattr(interrupt_obj, 'value'):
+                                interrupt_value = interrupt_obj.value
+                                logger.info(
+                                    "graph.interrupt_detected",
+                                    session_id=session_id,
+                                    interrupt_type=interrupt_value.get("type"),
+                                    requires_geolocation=interrupt_value.get("requires_geolocation"),
+                                )
+                                yield f"[INTERRUPT] {json.dumps(interrupt_value)}"
+                                stream_interrupted = True
+                                break
+                    if stream_interrupted:
+                        break
 
         except NodeTimeoutError as exc:
             logger.error(

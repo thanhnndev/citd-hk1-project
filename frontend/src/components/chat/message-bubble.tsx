@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { CitationCard } from "./citation-card";
 import { PlaceCard } from "./place-card";
 import { MessageActions } from "./message-actions";
 import { AccessibilityBadge } from "@/components/reasoning/accessibility-badge";
@@ -12,8 +11,13 @@ import {
   Loader2,
   UserRound,
   ArrowRight,
+  FileText,
+  MapPinned,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import type { ChatStreamStatus, Citation, PlaceResult } from "@/lib/chat-api";
+import { submitFeedback } from "@/lib/chat-api";
 
 const markdownComponents: Components = {
   p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
@@ -103,6 +107,14 @@ interface MessageBubbleProps {
     retry?: string;
   };
   onRetry?: () => void;
+  onOpenPlacesPanel?: () => void;
+  onOpenSourcesPanel?: () => void;
+  /** Unique message identifier for feedback tracking. */
+  messageId?: string;
+  /** Session ID for feedback context. */
+  sessionId?: string;
+  /** Turn index in conversation. */
+  turnIndex?: number;
 }
 
 export function MessageBubble({
@@ -125,6 +137,11 @@ export function MessageBubble({
   placeTranslations,
   actionTranslations,
   onRetry,
+  onOpenPlacesPanel,
+  onOpenSourcesPanel,
+  messageId,
+  sessionId,
+  turnIndex,
 }: MessageBubbleProps) {
   const isUser = role === "user";
   const isPending = !content;
@@ -133,6 +150,63 @@ export function MessageBubble({
   const hasStatusHistory = !isUser && statusHistory && statusHistory.length > 0;
   const isStreaming = status === "streaming" || status === "submitted";
   const [showAllPlaces, setShowAllPlaces] = useState(false);
+  const [feedbackState, setFeedbackState] = useState<"like" | "dislike" | null>(null);
+  const [showReasonInput, setShowReasonInput] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const handleFeedback = async (type: "like" | "dislike") => {
+    if (!messageId) return;
+    
+    // Toggle off if clicking same button
+    if (feedbackState === type) {
+      setFeedbackState(null);
+      setShowReasonInput(false);
+      return;
+    }
+    
+    // If switching to dislike, show reason input
+    if (type === "dislike") {
+      setFeedbackState("dislike");
+      setShowReasonInput(true);
+      return;
+    }
+    
+    // Submit like immediately
+    setFeedbackState("like");
+    setShowReasonInput(false);
+    
+    try {
+      await submitFeedback({
+        message_id: messageId,
+        feedback_type: "like",
+        session_id: sessionId ?? null,
+        turn_index: turnIndex ?? null,
+        message_content: content.slice(0, 200),
+      });
+    } catch (err) {
+      console.error("Failed to submit feedback:", err);
+    }
+  };
+
+  const submitReasonFeedback = async () => {
+    if (!messageId) return;
+    
+    try {
+      await submitFeedback({
+        message_id: messageId,
+        feedback_type: "dislike",
+        reason: reason || null,
+        session_id: sessionId ?? null,
+        turn_index: turnIndex ?? null,
+        message_content: content.slice(0, 200),
+      });
+    } catch (err) {
+      console.error("Failed to submit feedback:", err);
+    }
+    
+    setShowReasonInput(false);
+    setReason("");
+  };
 
   /** Build a compact post-response summary from status history + data signals. */
   const postResponseSummary = (() => {
@@ -220,14 +294,73 @@ export function MessageBubble({
             )}
           </div>
 
-          {/* Hover actions — copy, retry */}
+          {/* Hover actions — copy, retry, feedback */}
           {!isUser && !isPending && content && (
-            <div className="absolute -bottom-3 right-3 rounded-md border border-[#e9e9e7] bg-white shadow-sm">
+            <div className="absolute -bottom-9 right-3 flex items-center gap-2 rounded-md border border-[#e9e9e7] bg-white px-2 py-1 shadow-sm">
               <MessageActions
                 content={content}
                 onRetry={onRetry}
                 translations={actionTranslations}
               />
+              {messageId && status === "complete" && (
+                <div className="flex items-center gap-1 border-l border-[#e9e9e7] pl-2">
+                  <button
+                    type="button"
+                    onClick={() => handleFeedback("like")}
+                    className={`rounded p-1 transition-colors ${
+                      feedbackState === "like"
+                        ? "text-[#0b5f63] bg-[#0b5f63]/10"
+                        : "text-[#6b7f7e] hover:text-[#0b5f63] hover:bg-[#0b5f63]/5"
+                    }`}
+                    aria-label="Like this response"
+                    title="Phản hồi hữu ích"
+                  >
+                    <ThumbsUp className="size-3.5" fill={feedbackState === "like" ? "currentColor" : "none"} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFeedback("dislike")}
+                    className={`rounded p-1 transition-colors ${
+                      feedbackState === "dislike"
+                        ? "text-[#b45a5a] bg-[#b45a5a]/10"
+                        : "text-[#6b7f7e] hover:text-[#b45a5a] hover:bg-[#b45a5a]/5"
+                    }`}
+                    aria-label="Dislike this response"
+                    title="Phản hồi chưa tốt"
+                  >
+                    <ThumbsDown className="size-3.5" fill={feedbackState === "dislike" ? "currentColor" : "none"} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Optional reason input for dislike */}
+          {showReasonInput && (
+            <div className="absolute -bottom-20 right-3 z-10 flex items-center gap-2 rounded-md border border-[#e9e9e7] bg-white px-3 py-2 shadow-md">
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Lý do (không bắt buộc)..."
+                className="w-48 rounded border border-[#e9e9e7] px-2 py-1 text-xs focus:border-[#0b5f63] focus:outline-none"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    submitReasonFeedback();
+                  } else if (e.key === "Escape") {
+                    setShowReasonInput(false);
+                    setReason("");
+                  }
+                }}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={submitReasonFeedback}
+                className="rounded bg-[#0b5f63] px-2 py-1 text-xs text-white hover:bg-[#0b5f63]/90"
+              >
+                Gửi
+              </button>
             </div>
           )}
 
@@ -242,6 +375,31 @@ export function MessageBubble({
               />
             )}
         </div>
+
+        {!isUser && status === "complete" && (hasSources || (places && places.length > 0)) && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {places && places.length > 0 && (
+              <button
+                type="button"
+                onClick={onOpenPlacesPanel}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#2383e2]/20 bg-[#2383e2]/8 px-3 py-1.5 text-xs font-semibold text-[#0b5f63] hover:bg-[#2383e2]/12"
+              >
+                <MapPinned className="size-3.5" />
+                {placeTranslations?.placeResultsHeading ?? "Map"} ({places.length})
+              </button>
+            )}
+            {hasSources && (
+              <button
+                type="button"
+                onClick={onOpenSourcesPanel}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#2383e2]/20 bg-[#f7f7f5] px-3 py-1.5 text-xs font-semibold text-[#37352f] hover:bg-[#efefed]"
+              >
+                <FileText className="size-3.5" />
+                {sourcesLabel} ({citations!.length})
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Thinking timeline — useful while waiting, hidden after completion for end users. */}
         {!isUser && isStreaming && hasStatusHistory && streamStatusLabels && (
@@ -280,25 +438,6 @@ export function MessageBubble({
               </div>
             )}
           </div>
-        )}
-
-        {/* Citations — collapsible sources drawer */}
-        {!isUser && hasSources && (
-          <details
-            className="mt-3 max-w-full rounded-lg bg-[#f7f7f5] p-3"
-            aria-label={sourcesLabel}
-          >
-            <summary className="cursor-pointer list-none px-1 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#787774]">
-              {sourcesLabel} ({citations!.length})
-            </summary>
-            <div className="mt-2 grid max-w-full gap-2 overflow-hidden">
-              {citations!.map((citation, i) => (
-                <div key={`${citation.source}-${i}`} id={citationAnchorId(i)}>
-                  <CitationCard citation={citation} index={i + 1} />
-                </div>
-              ))}
-            </div>
-          </details>
         )}
 
         {/* Place cards — curated first, with progressive disclosure for more results. */}

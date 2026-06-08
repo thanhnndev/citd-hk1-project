@@ -4,12 +4,16 @@ Routes both POST and SSE chat transports through the shared AgentService while
 preserving the established response and stream wire contracts.
 """
 
+import datetime
+import json
 import time
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.middleware.rate_limiter import get_limiter
@@ -40,6 +44,122 @@ router = APIRouter(prefix="/chat")
 limiter = get_limiter()
 chat_rate_limit = get_settings().RATE_LIMIT_CHAT
 
+FEEDBACK_LOG_PATH = Path("/tmp/chat_feedback.jsonl")
+
+
+class FeedbackRequest(BaseModel):
+    """User feedback on assistant response."""
+    message_id: str = Field(..., description="Unique message identifier")
+    feedback_type: str = Field(..., description="like or dislike")
+    reason: str | None = Field(None, description="Optional reason for dislike")
+    session_id: str | None = Field(None, description="Chat session ID")
+    turn_index: int | None = Field(None, description="Turn index in conversation")
+    message_content: str | None = Field(None, description="Message content snippet")
+
+
+@router.post("/feedback")
+async def submit_feedback(feedback: FeedbackRequest) -> dict[str, str]:
+    """Record user feedback (like/dislike) on assistant responses."""
+    feedback_data = {
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "message_id": feedback.message_id,
+        "feedback_type": feedback.feedback_type,
+        "reason": feedback.reason,
+        "session_id": feedback.session_id,
+        "turn_index": feedback.turn_index,
+        "message_content": feedback.message_content[:200] if feedback.message_content else None,
+    }
+    
+    try:
+        FEEDBACK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(FEEDBACK_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(feedback_data, ensure_ascii=False) + "\n")
+        logger.info(
+            "feedback.submitted",
+            message_id=feedback.message_id,
+            feedback_type=feedback.feedback_type,
+            session_id=feedback.session_id,
+        )
+        return {"status": "ok", "message_id": feedback.message_id}
+    except Exception as exc:
+        logger.error("feedback.log_failed", error=str(exc), message_id=feedback.message_id)
+        raise HTTPException(status_code=500, detail="Failed to log feedback")
+
+
+class ResumeRequest(BaseModel):
+    """Resume a paused graph with user input (e.g., geolocation)."""
+    session_id: str = Field(..., description="Session ID of the paused graph")
+    resume_value: dict = Field(..., description="User input to resume with (e.g., {lat, lng})")
+
+
+@router.post("/resume")
+async def resume_graph(body: ResumeRequest, request: Request) -> ChatResponse:
+    """Resume a paused HamNinhGraph with user input.
+
+    When the graph calls interrupt() and pauses, this endpoint accepts
+    the user's response (e.g., geolocation) and resumes execution via
+    Command(resume=...). Returns the final response from the graph.
+    """
+    t0 = time.perf_counter()
+
+    if not _ham_ninh_graph_available(request):
+        logger.error("chat.resume.graph_unavailable", session_id=body.session_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "service_unavailable",
+                "message": "HamNinhGraph not available",
+                "session_id": body.session_id,
+            },
+        )
+
+    ham_ninh_graph = getattr(request.app.state, "ham_ninh_graph", None)
+
+    try:
+        # Resume the paused graph with user input
+        result = await ham_ninh_graph.resume(
+            session_id=body.session_id,
+            resume_value=body.resume_value,
+        )
+
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "chat.resume_complete",
+            session_id=body.session_id,
+            duration_ms=round(elapsed_ms, 2),
+        )
+
+        return ChatResponse(
+            session_id=body.session_id,
+            message=result.response_text,
+            citations=result.citations,
+            places=result.places,
+            suggestions=result.suggestions,
+            reasoning_log=result.reasoning_log,
+            intent=result.intent,
+            routing_tier=result.routing_tier,
+            guardrail_status=result.guardrail_status,
+            langfuse_trace_id=result.langfuse_trace_id,
+            latency_ms=elapsed_ms,
+        )
+
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.error(
+            "chat.resume_failed",
+            session_id=body.session_id,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            duration_ms=round(elapsed_ms, 2),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "resume_failed",
+                "message": str(exc),
+                "session_id": body.session_id,
+            },
+        )
 
 
 def _error_stream(reason: str) -> StreamingResponse:
@@ -306,6 +426,7 @@ async def chat_stream(
     lng: float | None = Query(None),
     budget: str | None = Query(None),
     accessibility: bool | None = Query(None),
+    history: str | None = Query(None),
 ) -> StreamingResponse:
     """Stream a grounded assistant answer as Server-Sent Events."""
     query = message.strip()
@@ -344,6 +465,21 @@ async def chat_stream(
             )
             # Fail-open: continue to stream
 
+    parsed_history: list[dict[str, str]] = []
+    if history:
+        try:
+            raw_history = json.loads(history)
+            if isinstance(raw_history, list):
+                for item in raw_history[-8:]:
+                    if not isinstance(item, dict):
+                        continue
+                    role = item.get("role")
+                    content = item.get("content")
+                    if role in {"user", "assistant"} and isinstance(content, str) and content.strip():
+                        parsed_history.append({"role": role, "content": content[:2000]})
+        except json.JSONDecodeError:
+            logger.warning("sse.history_parse_failed", session_id=sid)
+
     agent_service = getattr(request.app.state, "agent_service", None)
     ham_ninh_graph = getattr(request.app.state, "ham_ninh_graph", None)
 
@@ -381,6 +517,7 @@ async def chat_stream(
                     session_id=sid,
                     message=query,
                     language=language,
+                    history=parsed_history,
                     user_location=stream_user_loc,
                     budget_filter=budget,
                     accessibility_required=accessibility if accessibility is not None else True,

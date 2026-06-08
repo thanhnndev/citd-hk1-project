@@ -6,7 +6,7 @@ import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { ChatSidebar } from "./chat-sidebar";
 import { PlaceResultsPanel } from "./place-results-panel";
-import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
+import { sendChat, streamChat, type ChatHistoryTurn, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
 import { AUTH_CHANGED_EVENT, getUser } from "@/lib/auth-store";
 import {
   createEmptyConversation,
@@ -107,8 +107,11 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [placesOpen, setPlacesOpen] = useState(false);
+  const [placesPanelOpen, setPlacesPanelOpen] = useState(true);
+  const [sourcesPanelOpen, setSourcesPanelOpen] = useState(true);
   const [budgetFilter, setBudgetFilter] = useState<string | null>(null);
   const [accessibilityRequired, setAccessibilityRequired] = useState<boolean>(true);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -186,6 +189,19 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     });
   }, []);
 
+  const getBrowserLocation = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      throw new Error(language === "vi" ? "Trình duyệt không hỗ trợ chia sẻ vị trí." : "Browser location is unavailable.");
+    }
+    return new Promise<{ lat: number; lng: number }>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
+        () => reject(new Error(language === "vi" ? "Không lấy được vị trí. Hãy bật quyền vị trí rồi thử lại." : "Could not access location. Enable location permission and try again.")),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 },
+      );
+    });
+  }, [language]);
+
   const handleSubmit = useCallback(
     async (overrideMessage?: string) => {
       const messageText = overrideMessage ?? input.trim();
@@ -194,6 +210,30 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       setError(null);
       setLoading(true);
       setIsNearBottom(true);
+
+      const lastAssistantBeforeSubmit = [...messages].reverse().find((message) => message.role === "assistant");
+      const normalized = messageText.trim().toLowerCase();
+      const confirmsLocation = /^(có|co|ok|okay|được|duoc|yes|yep|sure)$/i.test(normalized);
+      const pendingLocation = Boolean(
+        lastAssistantBeforeSubmit?.content &&
+        /chia sẻ vị trí|biết vị trí|current location|share your location/i.test(lastAssistantBeforeSubmit.content),
+      );
+      let requestLocation = userLocation;
+      if (pendingLocation && confirmsLocation && !requestLocation) {
+        try {
+          requestLocation = await getBrowserLocation();
+          setUserLocation(requestLocation);
+        } catch (err) {
+          setLoading(false);
+          setError(err instanceof Error ? err.message : translations.error);
+          return;
+        }
+      }
+
+      const requestHistory: ChatHistoryTurn[] = messages
+        .filter((message): message is Message & { content: string } => Boolean(message.content) && (message.role === "user" || message.role === "assistant"))
+        .slice(-8)
+        .map((message) => ({ role: message.role, content: message.content }));
 
       const userMsg: Message = { role: "user", content: messageText, status: "complete" };
       const assistantPlaceholder: Message = {
@@ -219,7 +259,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       const renderPostFallback = async () => {
         updateLastAssistant((message) => ({ ...message, status: "submitted" }));
-        const response: ChatResponse = await sendChat(messageText, sessionId, language, budgetFilter, accessibilityRequired);
+        const response: ChatResponse = await sendChat(messageText, sessionId, language, budgetFilter, accessibilityRequired, requestLocation);
         const displayText = response.message?.trim() ? response.message : translations.noEvidence;
 
         updateLastAssistant((message) => ({
@@ -260,6 +300,36 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onCitations: (citations) => updateLastAssistant((message) => ({ ...message, citations })),
           onPlaces: (places) => updateLastAssistant((message) => ({ ...message, places })),
           onSuggestions: (suggestions) => updateLastAssistant((message) => ({ ...message, suggestions })),
+          onInterrupt: async (interruptData) => {
+            // LangGraph interrupt detected - backend needs user input
+            console.log('Interrupt received:', interruptData);
+            
+            if (interruptData.requires_geolocation) {
+              // Automatically request geolocation from browser
+              try {
+                const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+                  navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                  });
+                });
+                
+                const location = {
+                  lat: position.coords.latitude,
+                  lng: position.coords.longitude
+                };
+                
+                console.log('Geolocation obtained:', location);
+                return location;
+              } catch (error) {
+                console.warn('Geolocation request failed:', error);
+                return null;
+              }
+            }
+            
+            return null;
+          },
           onDone: () => {
             updateLastAssistant((message) => ({ ...message, status: "complete", streamStatus: null }));
             setLoading(false);
@@ -268,7 +338,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             streamFailed = true;
             streamErrorMessage = err;
           },
-        }, budgetFilter, accessibilityRequired);
+        }, budgetFilter, accessibilityRequired, requestLocation, requestHistory);
 
         if (streamFailed) {
           try {
@@ -286,7 +356,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         setLoading(false);
       }
     },
-    [input, loading, sessionId, language, translations, updateLastAssistant, budgetFilter, accessibilityRequired],
+    [input, loading, sessionId, language, translations, updateLastAssistant, budgetFilter, accessibilityRequired, userLocation, messages, getBrowserLocation],
   );
 
   const handleRetry = useCallback(() => {
@@ -331,6 +401,12 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       .reverse()
       .find((message) => message.role === "assistant" && message.places?.length)
       ?.places ?? [];
+  const latestCitations =
+    [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.citations?.length)
+      ?.citations ?? [];
+  const hasEvidencePanel = latestPlaces.length > 0 || latestCitations.length > 0;
   const recentQuestions = messages
     .filter((message) => message.role === "user")
     .map((message) => message.content)
@@ -350,6 +426,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       translations.scoreDataLimited ?? "Limited scoring data available",
     accessibilityNote:
       translations.accessibilityNote ?? "Accessibility info",
+    sourcesHeading: translations.citations ?? "Sources",
   };
   const sourceCount = lastAssistant?.citations?.length ?? 0;
   const activeStatus = lastAssistant?.streamStatus
@@ -467,7 +544,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     <div className="h-[calc(100dvh-4rem)] min-h-[36rem] overflow-hidden bg-white text-[#37352f]">
       <div
         className={`grid h-full min-h-0 ${
-          latestPlaces.length > 0
+          hasEvidencePanel
             ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
             : "lg:grid-cols-[240px_minmax(0,1fr)]"
         }`}
@@ -591,6 +668,17 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 retry: translations.retryMessage,
               }}
               placeTranslations={placeTranslations}
+              onOpenPlacesPanel={() => {
+                setPlacesPanelOpen(true);
+                setPlacesOpen(true);
+              }}
+              onOpenSourcesPanel={() => {
+                setSourcesPanelOpen(true);
+                setPlacesOpen(true);
+              }}
+              messageId={msg.role === "assistant" ? `msg-${sessionId}-${i}` : undefined}
+              sessionId={msg.role === "assistant" ? sessionId : undefined}
+              turnIndex={msg.role === "assistant" ? i : undefined}
             />
           ))}
 
@@ -705,7 +793,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               >
                 <Menu className="size-4" />
               </button>
-              {latestPlaces.length > 0 && (
+              {hasEvidencePanel && (
                 <button
                   type="button"
                   className="mr-1 rounded-md p-1 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
@@ -760,12 +848,17 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       </footer>
         </main>
 
-        {latestPlaces.length > 0 && (
+        {hasEvidencePanel && (
           <PlaceResultsPanel
             places={latestPlaces}
+            citations={latestCitations}
             translations={placeTranslations}
             mobileOpen={placesOpen}
+            placesOpen={placesPanelOpen}
+            sourcesOpen={sourcesPanelOpen}
             onMobileClose={() => setPlacesOpen(false)}
+            onTogglePlaces={() => setPlacesPanelOpen((open) => !open)}
+            onToggleSources={() => setSourcesPanelOpen((open) => !open)}
           />
         )}
       </div>

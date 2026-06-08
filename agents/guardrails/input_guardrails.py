@@ -96,11 +96,29 @@ _INJECTION_RE: list[tuple[str, re.Pattern[str]]] = [
 # Topic allowlist / blocklist
 # ---------------------------------------------------------------------------
 
+# Out-of-scope locations (not Ham Ninh / Phu Quoc)
+_OUT_OF_SCOPE_LOCATIONS: list[tuple[str, str]] = [
+    ("hanoi", r"\b(hà nội|hanoi|ha noi)\b"),
+    ("saigon", r"\b(sài gòn|saigon|sai gon|hồ chí minh|ho chi minh|hcm)\b"),
+    ("danang", r"\b(đà nẵng|danang|da nang)\b"),
+    ("hue", r"\b(huế|hue)\b"),
+    ("nhatrang", r"\b(nha trang|nhatrang)\b"),
+    ("dalat", r"\b(đà lạt|dalat|da lat)\b"),
+    ("hoian", r"\b(hội an|hoian|hoi an)\b"),
+    ("hanoi_airport", r"\b(nội bài|noi bai)\b"),
+    ("saigon_airport", r"\b(tân sơn nhất|tan son nhat)\b"),
+]
+
+_OUT_OF_SCOPE_LOCATIONS_RE: list[tuple[str, re.Pattern[str]]] = [
+    (label, re.compile(pattern, re.IGNORECASE))
+    for label, pattern in _OUT_OF_SCOPE_LOCATIONS
+]
+
 _OFF_TOPIC_ALLOWLIST_VI: set[str] = {
     # Greetings
     "xin chào", "chào", "hello", "hi", "hey",
-    # Tourism-adjacent
-    "thời tiết", "weather", "khách sạn", "hotel", "resort",
+    # Tourism-adjacent (only valid if in scope)
+    "khách sạn", "hotel", "resort",
     "vận chuyển", "transport", "xe", "taxi", "bus",
     "biển", "beach", "ăn uống", "food", "restaurant",
     "du lịch", "travel", "tourism", "tham quan",
@@ -111,7 +129,7 @@ _OFF_TOPIC_ALLOWLIST_VI: set[str] = {
 _OFF_TOPIC_ALLOWLIST_EN: set[str] = {
     "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
     "how are you", "greetings",
-    "weather", "hotel", "resort", "transport", "taxi", "bus",
+    "hotel", "resort", "transport", "taxi", "bus",
     "beach", "food", "restaurant", "travel", "tourism",
     "attraction", "shopping", "price", "cost", "ticket",
     "direction", "map", "guide", "itinerary",
@@ -174,17 +192,16 @@ def block_injection(message: str) -> GuardrailResult:
 
 
 def reject_off_topic(message: str) -> GuardrailResult:
-    """Reject clearly off-topic queries that fall outside tourism scope.
+    """Reject clearly off-topic queries that fall outside Ham Ninh tourism scope.
 
-    Uses keyword matching with an allowlist (tourism-adjacent, greetings)
-    and a blocklist (programming, explicit content, politics, etc.).
-
-    If no keywords match either list, the message passes through
-    (conservative — we'd rather let a borderline query through than
-    block a legitimate one).
+    Uses scope-based approach:
+    1. Check location scope — reject if mentions out-of-scope locations (Hanoi, Saigon, etc.)
+    2. Check blocklist — reject programming, explicit content, politics, etc.
+    3. Check allowlist — accept tourism-adjacent keywords if in scope
+    4. Conservative pass-through for borderline cases
 
     Returns:
-        GuardrailResult with verdict="blocked" for blocklisted topics,
+        GuardrailResult with verdict="blocked" for out-of-scope or blocklisted topics,
         verdict="pass" otherwise.
     """
     if not message or not message.strip():
@@ -194,7 +211,25 @@ def reject_off_topic(message: str) -> GuardrailResult:
     normalized = _normalize(cleaned)
     query_hash = _hash_query(message)
 
-    # Check blocklist first — these are hard rejects
+    # Check location scope first — reject queries about other locations
+    for label, pattern in _OUT_OF_SCOPE_LOCATIONS_RE:
+        if pattern.search(normalized):
+            logger.warning(
+                "guardrail.topic_rejected",
+                verdict="blocked",
+                reason="out_of_scope_location",
+                location=label,
+                query_hash=query_hash,
+                severity="medium",
+            )
+            return GuardrailResult(
+                verdict="blocked",
+                reason="off_topic",
+                details=f"out_of_scope:{label}",
+                severity="medium",
+            )
+
+    # Check blocklist — these are hard rejects
     for label, pattern in _OFF_TOPIC_BLOCKLIST_RE:
         if pattern.search(normalized):
             logger.warning(

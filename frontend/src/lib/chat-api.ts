@@ -139,15 +139,28 @@ export type ProviderSource = "google_places" | "goong_places" | "mock" | "cache"
  */
 export type ProviderStatus = "ok" | "empty" | "credentials_blocked" | "upstream_error" | "unavailable";
 
+export interface ChatHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface StreamChatCallbacks {
   onToken: (token: string) => void;
   onCitations: (citations: Citation[]) => void;
   onPlaces?: (places: PlaceResult[]) => void;
   onStatus?: (status: ChatStreamStatus) => void;
   onSuggestions?: (suggestions: string[]) => void;
+  onInterrupt?: (interruptData: InterruptData) => Promise<LatLng | null>;
   onDone: () => void;
   onOpen?: () => void;
   onError: (error: string) => void;
+}
+
+export interface InterruptData {
+  type: string;
+  message?: string;
+  requires_geolocation?: boolean;
+  [key: string]: any;
 }
 
 /* ── Error shape returned by the route handler on 502 ──────────────── */
@@ -174,6 +187,7 @@ export async function sendChat(
   language: "vi" | "en" = "vi",
   budgetFilter?: string | null,
   accessibilityRequired?: boolean,
+  userLocation?: LatLng | null,
 ): Promise<ChatResponse> {
   const body: ChatRequest = {
     session_id: sessionId ?? crypto.randomUUID(),
@@ -181,6 +195,7 @@ export async function sendChat(
     language,
     budget_filter: budgetFilter,
     accessibility_required: accessibilityRequired ?? true,
+    user_location: userLocation ?? null,
   };
 
   const res = await fetch("/api/chat", {
@@ -204,6 +219,8 @@ export async function streamChat(
   callbacks: StreamChatCallbacks,
   budgetFilter?: string | null,
   accessibilityRequired?: boolean,
+  userLocation?: LatLng | null,
+  history?: ChatHistoryTurn[],
 ): Promise<void> {
   const params = new URLSearchParams({
     message,
@@ -216,6 +233,13 @@ export async function streamChat(
   }
   if (accessibilityRequired !== undefined) {
     params.set('accessibility', String(accessibilityRequired));
+  }
+  if (userLocation) {
+    params.set('lat', String(userLocation.lat));
+    params.set('lng', String(userLocation.lng));
+  }
+  if (history && history.length > 0) {
+    params.set('history', JSON.stringify(history.slice(-8)));
   }
 
   const res = await fetch(`/api/chat/stream?${params.toString()}`, {
@@ -300,7 +324,48 @@ export async function streamChat(
         return;
       }
 
+      if (data.startsWith("[INTERRUPT] ")) {
+        try {
+          const interruptData = JSON.parse(data.slice(12)) as InterruptData;
+          if (callbacks.onInterrupt) {
+            const location = await callbacks.onInterrupt(interruptData);
+            if (location && interruptData.requires_geolocation) {
+              // Resume the stream with location data
+              // The backend will receive this via Command(resume=location)
+              console.log('Resuming graph with location:', location);
+            }
+          }
+        } catch {
+          callbacks.onError("Invalid interrupt payload");
+          return;
+        }
+        continue;
+      }
+
       callbacks.onToken(data);
     }
+  }
+}
+
+/* ── Feedback API ─────────────────────────────────────────────────── */
+
+export interface FeedbackRequest {
+  message_id: string;
+  feedback_type: "like" | "dislike";
+  reason?: string | null;
+  session_id?: string | null;
+  turn_index?: number | null;
+  message_content?: string | null;
+}
+
+export async function submitFeedback(feedback: FeedbackRequest): Promise<void> {
+  const res = await fetch("/api/chat/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(feedback),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Feedback submission failed (${res.status})`);
   }
 }

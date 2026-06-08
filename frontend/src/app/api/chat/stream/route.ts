@@ -13,17 +13,31 @@ export async function GET(request: NextRequest) {
   const message = searchParams.get("message")?.trim();
   const sessionId = searchParams.get("session_id")?.trim();
   const language = searchParams.get("language")?.trim() ?? "vi";
+  const budget = searchParams.get("budget")?.trim();
+  const accessibility = searchParams.get("accessibility")?.trim();
+  const lat = searchParams.get("lat")?.trim();
+  const lng = searchParams.get("lng")?.trim();
+  const history = searchParams.get("history")?.trim();
   const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
   if (!message || !sessionId) {
     return NextResponse.json({ error: "missing_params" }, { status: 400 });
   }
 
-  const backendUrl =
-    `http://localhost:${BACKEND_PORT}/chat/stream` +
-    `?message=${encodeURIComponent(message)}` +
-    `&session_id=${encodeURIComponent(sessionId)}` +
-    `&language=${encodeURIComponent(language)}`;
+  const backendParams = new URLSearchParams({
+    message,
+    session_id: sessionId,
+    language,
+  });
+  if (budget) backendParams.set("budget", budget);
+  if (accessibility) backendParams.set("accessibility", accessibility);
+  if (lat && lng) {
+    backendParams.set("lat", lat);
+    backendParams.set("lng", lng);
+  }
+  if (history) backendParams.set("history", history);
+
+  const backendUrl = `http://localhost:${BACKEND_PORT}/chat/stream?${backendParams.toString()}`;
 
   let backendRes: globalThis.Response;
   try {

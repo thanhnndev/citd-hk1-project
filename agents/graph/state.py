@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from app.models.response import ChatResponse, Citation
 
@@ -14,12 +14,16 @@ except Exception:  # pragma: no cover - optional runtime dependency
 
 try:
     from langgraph.graph import END, START, StateGraph
+    from langgraph.graph.message import add_messages
     from langgraph.checkpoint.memory import MemorySaver
 except Exception:  # pragma: no cover - optional runtime dependency
     END = "__end__"
     START = "__start__"
     StateGraph = None
     MemorySaver = None
+
+    def add_messages(left: list[Any], right: list[Any]) -> list[Any]:
+        return [*(left or []), *(right or [])]
 
 NODE_TIMEOUT_LLM = 20
 NODE_TIMEOUT_TOOL = 15
@@ -57,7 +61,7 @@ class AgentState(TypedDict, total=False):
     message: str
     language: str
     history: list[dict[str, str]]
-    messages: list[dict[str, Any]]
+    messages: Annotated[list[dict[str, Any]], add_messages]
     tool_calls: list[Any]
     citations: list[Citation]
     places: list[Any]
@@ -70,6 +74,7 @@ class AgentState(TypedDict, total=False):
     prior_context: Any | None
     followup_decision: FollowUpDecision | None
     context_source: str | None
+    resolved_query: str | None
     tool_call_signatures: list[str]
     knowledge_chunks: list[Any]
     knowledge_response_ready: bool

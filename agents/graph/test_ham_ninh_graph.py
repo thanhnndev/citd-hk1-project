@@ -441,9 +441,10 @@ class TestMapsAgent:
         assert result["response_text"] == "Nearby place"
 
     @pytest.mark.asyncio
-    async def test_maps_agent_location_consent_prompt(self):
-        """Verify consent prompt when needs_location=True but user_location=None."""
+    async def test_maps_agent_location_interrupt(self):
+        """Verify interrupt() is called when needs_location=True but user_location=None."""
         from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+        from unittest.mock import patch
 
         # Arrange: service should NOT be called
         mock_service = AsyncMock()
@@ -457,17 +458,65 @@ class TestMapsAgent:
             "user_location": None,
             "needs_location": True,
         }
+
+        # Mock interrupt() to return a location (simulating user providing location after interrupt)
+        with patch('agents.graph.nodes.interrupt') as mock_interrupt:
+            mock_interrupt.return_value = {"lat": 10.0, "lng": 103.0}
+            result = await maps_agent_node(state)
+
+            # Assert: interrupt was called with location_request
+            mock_interrupt.assert_called_once()
+            interrupt_arg = mock_interrupt.call_args[0][0]
+            assert interrupt_arg["type"] == "location_request"
+            assert interrupt_arg["requires_geolocation"] is True
+
+        # Assert: service called after location received
+        mock_service.recommend.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_no_location_needed(self):
+        """Verify service is called directly when needs_location=False."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+        from app.models.response import ChatResponse
+
+        mock_service = AsyncMock()
+        mock_service.recommend = AsyncMock(return_value=ChatResponse(
+            message="Test",
+            places=[],
+            session_id="test-session",
+            latency_ms=100.0
+        ))
+        configure_services(NodeServices(places_service=mock_service))
+
+        state: AgentState = {
+            "session_id": "test-nav-duong-dong",
+            "message": "Từ Dương Đông đi Hàm Ninh thế nào?",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": False,  # LLM decided no location needed
+        }
         result = await maps_agent_node(state)
 
-        # Assert: service NOT called (consent check happens first)
-        mock_service.recommend.assert_not_called()
-
-        # Assert: consent prompt returned
-        assert "places" in result
+        # Assert: service called (no interrupt, no hardcoded logic)
+        mock_service.recommend.assert_called_once()
         assert result["places"] == []
-        assert "response_text" in result
-        # Vietnamese consent message
-        assert "vị trí" in result["response_text"] or "location" in result["response_text"].lower()
+        assert result["response_text"] == "Test"
+
+    @pytest.mark.asyncio
+    async def test_streaming_adapter_emits_maps_response_text(self):
+        """SSE adapter must emit maps_agent response_text, not only status markers."""
+        adapter = StreamingAdapter()
+
+        async def graph_stream():
+            yield {"type": "updates", "data": {"maps_agent": {
+                "places": [],
+                "response_text": "Từ Dương Đông đi Hàm Ninh mất khoảng 25-35 phút.",
+            }}}
+
+        events = [event async for event in adapter.adapt_stream(graph_stream())]
+
+        assert "[STATUS] processing:maps" in events
+        assert "Từ Dương Đông đi Hàm Ninh mất khoảng 25-35 phút." in events
 
     @pytest.mark.asyncio
     async def test_maps_agent_service_failure(self):

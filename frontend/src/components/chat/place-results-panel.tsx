@@ -1,37 +1,87 @@
 "use client";
 
-import { BadgeCheck, X } from "lucide-react";
-import type { PlaceResult } from "@/lib/chat-api";
+import { BadgeCheck, ChevronDown, ChevronUp, FileText, X } from "lucide-react";
+import type { Citation, PlaceResult } from "@/lib/chat-api";
 import { PlaceCard, type PlaceCardTranslations } from "./place-card";
+import { CitationCard } from "./citation-card";
 
 interface PlaceResultsPanelProps {
   places: PlaceResult[];
+  citations?: Citation[];
   translations: PlaceCardTranslations & {
     placeResultsHeading: string;
+    sourcesHeading?: string;
   };
   mobileOpen: boolean;
+  placesOpen: boolean;
+  sourcesOpen: boolean;
   onMobileClose: () => void;
+  onTogglePlaces: () => void;
+  onToggleSources: () => void;
 }
 
 export function PlaceResultsPanel({
   places,
+  citations = [],
   translations,
   mobileOpen,
+  placesOpen,
+  sourcesOpen,
   onMobileClose,
+  onTogglePlaces,
+  onToggleSources,
 }: PlaceResultsPanelProps) {
-  if (places.length === 0) return null;
+  if (places.length === 0 && citations.length === 0) return null;
 
-  const cards = (
-    <div className="space-y-5 p-5">
-      {places.slice(0, 6).map((place, index) => (
-        <PlaceCard
-          key={place.place_id}
-          place={place}
-          rank={index + 1}
-          variant="panel"
-          translations={translations}
-        />
-      ))}
+  const sourcesHeading = translations.sourcesHeading ?? "Sources";
+
+  const sectionButton = (kind: "places" | "sources", label: string, count: number, open: boolean, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center justify-between gap-2 border-b border-[#e9e9e7] px-5 py-3 text-left hover:bg-[#f7f7f5]"
+      aria-expanded={open}
+    >
+      <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#37352f]">
+        {kind === "places" ? <BadgeCheck className="size-4 text-[#2eaadc]" /> : <FileText className="size-4 text-[#2eaadc]" />}
+        {label} ({count})
+      </span>
+      {open ? <ChevronUp className="size-4 text-[#787774]" /> : <ChevronDown className="size-4 text-[#787774]" />}
+    </button>
+  );
+
+  const content = (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      {places.length > 0 && (
+        <section>
+          {sectionButton("places", translations.placeResultsHeading, places.length, placesOpen, onTogglePlaces)}
+          {placesOpen && (
+            <div className="space-y-5 p-5">
+              {places.slice(0, 6).map((place, index) => (
+                <PlaceCard
+                  key={place.place_id}
+                  place={place}
+                  rank={index + 1}
+                  variant="panel"
+                  translations={translations}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+      {citations.length > 0 && (
+        <section>
+          {sectionButton("sources", sourcesHeading, citations.length, sourcesOpen, onToggleSources)}
+          {sourcesOpen && (
+            <div className="space-y-3 p-5">
+              {citations.map((citation, index) => (
+                <CitationCard key={`${citation.source}-${index}`} citation={citation} index={index + 1} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 
@@ -47,7 +97,7 @@ export function PlaceResultsPanel({
             {translations.placeResultsHeading}
           </h2>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{cards}</div>
+        {content}
       </aside>
 
       {mobileOpen && (
@@ -62,7 +112,7 @@ export function PlaceResultsPanel({
                 <X className="size-4" />
               </button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">{cards}</div>
+            {content}
           </aside>
         </div>
       )}
