@@ -259,6 +259,20 @@ class EvalResultResponse(BaseModel):
         default_factory=dict,
         description="Evaluation metrics dict (empty when blocked).",
     )
+    threshold_results: dict = Field(
+        default_factory=dict,
+        description=(
+            "Per-metric threshold check results. Each key maps to a dict with "
+            "'score', 'threshold', and 'passed' fields."
+        ),
+    )
+    all_passed: bool = Field(
+        default=False,
+        description=(
+            "True when every evaluated metric meets or exceeds its threshold. "
+            "False when any metric falls below threshold or no metrics were evaluated."
+        ),
+    )
     timestamp: str = Field(
         description="ISO-8601 timestamp of the evaluation.",
     )

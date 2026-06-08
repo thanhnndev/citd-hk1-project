@@ -221,6 +221,50 @@ def _resolve_eval_dataset_path(requested: str | None) -> str:
     return _DEFAULT_EVAL_DATASET
 
 
+def _check_thresholds(aggregate_scores: dict) -> tuple[dict, bool]:
+    """Check each metric against its threshold.
+
+    Thresholds:
+        - Faithfulness ≥ 0.85
+        - Answer Relevance ≥ 0.80
+        - Context Precision ≥ 0.80
+        - Context Recall ≥ 0.75
+
+    Returns:
+        Tuple of (threshold_results dict, all_passed bool).
+        threshold_results maps metric names to {score, threshold, passed}.
+        all_passed is True only when all evaluated metrics meet their thresholds.
+    """
+    thresholds = {
+        "faithfulness": 0.85,
+        "answer_relevancy": 0.80,
+        "context_precision": 0.80,
+        "context_recall": 0.75,
+    }
+
+    threshold_results = {}
+    all_passed = False
+
+    if not aggregate_scores:
+        return threshold_results, all_passed
+
+    for metric_name, threshold_value in thresholds.items():
+        if metric_name in aggregate_scores:
+            score = aggregate_scores[metric_name]
+            passed = score >= threshold_value
+            threshold_results[metric_name] = {
+                "score": score,
+                "threshold": threshold_value,
+                "passed": passed,
+            }
+
+    # all_passed is True only if we have results and all passed
+    if threshold_results:
+        all_passed = all(r["passed"] for r in threshold_results.values())
+
+    return threshold_results, all_passed
+
+
 @router.post(
     "/eval/trigger",
     response_model=EvalResultResponse,
@@ -239,7 +283,7 @@ async def trigger_eval(
     Returns:
         EvalResultResponse with verdict, metrics, timestamp, and result path.
     """
-    from agents.ml.ragas_evaluator import RAGASEvaluator
+    from agents.eval.ragas_runner import RAGASEvaluator
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     dataset_path = _resolve_eval_dataset_path(
@@ -265,15 +309,23 @@ async def trigger_eval(
 
     latency_ms = result.get("latency_seconds", 0) * 1000
 
+    # Extract aggregate scores and enforce thresholds
+    aggregate_scores = result.get("aggregate_scores", {})
+    threshold_results, all_passed = _check_thresholds(aggregate_scores)
+
     logger.info(
         "eval.completed",
         verdict=result.get("verdict"),
         latency_ms=round(latency_ms, 2),
+        threshold_results=threshold_results,
+        all_passed=all_passed,
     )
 
     return EvalResultResponse(
         verdict=result.get("verdict", "unknown"),
-        metrics=result.get("metrics", {}),
+        metrics=aggregate_scores,
+        threshold_results=threshold_results,
+        all_passed=all_passed,
         timestamp=result.get("timestamp", ""),
         dataset_size=result.get("dataset_size", 0),
         latency_ms=round(latency_ms, 2),
