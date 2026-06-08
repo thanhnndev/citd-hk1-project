@@ -1,6 +1,6 @@
 """Node functions for the HamNinhGraph LangGraph StateGraph (v4.2.0).
 
-Provides 9 node functions (5 real + 3 stubs + 1 supervisor) that form the
+Provides 9 node functions (6 real + 3 stubs) that form the
 graph topology.  Each node is an ``async def`` that accepts an ``AgentState``
 dict and returns a partial state-update dict — the standard LangGraph node
 contract.
@@ -11,9 +11,9 @@ Real nodes:
     - supervisor_node        — confidence-ladder routing decision
     - conversational_node    — direct / clarification / LLM conversational
     - output_guardrails_node — grounding verification
+    - rag_agent_node         — hybrid retrieval + Cohere rerank + LLM answer
 
 Stub nodes (passthrough, wired for T02+ expansion):
-    - rag_agent_stub_node
     - grade_documents_stub_node
     - rewrite_query_stub_node
     - maps_agent_stub_node
@@ -34,6 +34,7 @@ Emits structured log events:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -56,6 +57,7 @@ from agents.graph.routing import (
     _get_default_suggestions,
     _messages_for_llm,
 )
+from agents.tools.retriever import citation_from_chunk
 
 logger = structlog.get_logger(__name__)
 
@@ -692,43 +694,165 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 6. rag_agent_stub_node (STUB — passthrough for T02+ expansion)
+# 6. rag_agent_node (REAL — hybrid retrieval + Cohere rerank + LLM answer)
 # ---------------------------------------------------------------------------
 
 
-async def rag_agent_stub_node(state: AgentState) -> dict[str, Any]:
-    """Stub: RAG agent node for knowledge retrieval and answer composition.
+async def rag_agent_node(state: AgentState) -> dict[str, Any]:
+    """RAG agent node: retrieve, rerank, and generate a grounded answer.
 
-    This is a passthrough stub that sets ``knowledge_response_ready = False``
-    and returns without performing retrieval.  The graph assembler (T02) will
-    replace this with a real implementation that calls the retriever and
-    LLM answer service.
+    Pipeline:
+        1. Retrieve top-10 chunks via the injected retriever (hybrid or BM25).
+        2. Rerank with Cohere cross-encoder (top-5) when available.
+        3. Build citations from the reranked chunks.
+        4. Generate a grounded answer via LLMAnswerService when available.
+        5. Fall back to deterministic text on any LLM or retrieval failure.
 
     Reads:
-        - ``state["message"]``
+        - ``state["message"]``, ``state["language"]``, ``state["session_id"]``
     Writes:
-        - ``knowledge_response_ready``, ``knowledge_chunks``
+        - ``knowledge_chunks``, ``citations``, ``response_text``,
+          ``knowledge_response_ready``
     """
     t0 = time.perf_counter()
+    message = state.get("message", "")
+    language = state.get("language", "vi")
     session_id = state.get("session_id", "")
 
     logger.info(
         "graph.node_enter",
-        node="rag_agent_stub",
+        node="rag_agent",
         session_id=session_id,
     )
+
+    services = get_services()
+    retriever = services.retriever
+    cohere_reranker = services.cohere_reranker
+    llm_answer_service = services.llm_answer_service
+
+    # ------------------------------------------------------------------
+    # Step 1: Retrieve top-10 chunks
+    # ------------------------------------------------------------------
+    chunks: list[Any] = []
+
+    if retriever is not None:
+        try:
+            result = retriever.search(message, top_k=10)
+            # Handle both sync (Retriever) and async (HybridRetriever)
+            if inspect.isawaitable(result):
+                result = await result
+            chunks = list(result.chunks) if result else []
+        except Exception as exc:
+            logger.warning(
+                "rag_agent.retrieve_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                session_id=session_id,
+            )
+            chunks = []
+
+    # ------------------------------------------------------------------
+    # Step 2: Rerank with Cohere cross-encoder (top-5)
+    # ------------------------------------------------------------------
+    if cohere_reranker is not None and chunks:
+        try:
+            chunks = await cohere_reranker.rerank(message, chunks, top_n=5)
+        except Exception as exc:
+            # CohereReranker already handles its own graceful degradation,
+            # but catch any unexpected failure here too.
+            logger.warning(
+                "rag_agent.rerank_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                session_id=session_id,
+            )
+            chunks = chunks[:5]
+
+    # ------------------------------------------------------------------
+    # Step 3: Build citations from chunks
+    # ------------------------------------------------------------------
+    citations: list[Any] = [citation_from_chunk(c) for c in chunks]
+
+    # ------------------------------------------------------------------
+    # Step 4: Generate grounded answer via LLM
+    # ------------------------------------------------------------------
+    response_text = ""
+    mode = "no_llm"
+
+    if llm_answer_service is not None and chunks:
+        try:
+            response = await llm_answer_service.answer(
+                chunks=chunks,
+                citations=citations,
+                query=message,
+                language=language,
+                session_id=session_id,
+            )
+            response_text = response.message
+            mode = "llm"
+        except Exception as exc:
+            logger.warning(
+                "rag_agent.llm_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                fallback=True,
+                session_id=session_id,
+            )
+            response_text = ""
+            mode = "llm_failed"
+
+    # ------------------------------------------------------------------
+    # Step 5: Fallback response when LLM unavailable or failed
+    # ------------------------------------------------------------------
+    if not response_text:
+        if chunks:
+            # Deterministic fallback: summarize first chunk(s)
+            if language == "vi":
+                response_text = (
+                    f"Dựa trên thông tin có sẵn, đây là điều mình tìm được:\n\n"
+                    f"**{chunks[0].title}**: {chunks[0].text[:300]}"
+                )
+                if len(chunks) > 1:
+                    response_text += f"\n\n**{chunks[1].title}**: {chunks[1].text[:200]}"
+            else:
+                response_text = (
+                    f"Based on available information, here is what I found:\n\n"
+                    f"**{chunks[0].title}**: {chunks[0].text[:300]}"
+                )
+                if len(chunks) > 1:
+                    response_text += f"\n\n**{chunks[1].title}**: {chunks[1].text[:200]}"
+            mode = "deterministic"
+        else:
+            # No chunks available at all
+            if language == "vi":
+                response_text = (
+                    "Mình chưa có thông tin cụ thể về khoản này, "
+                    "nhưng bạn có thể hỏi thêm về văn hóa, lịch sử, "
+                    "hoặc các địa điểm ở Hàm Ninh nhé!"
+                )
+            else:
+                response_text = (
+                    "I don't have specific information about this yet, "
+                    "but feel free to ask about Ham Ninh's culture, history, "
+                    "or places!"
+                )
+            mode = "no_chunks"
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(
         "graph.node_exit",
-        node="rag_agent_stub",
+        node="rag_agent",
         session_id=session_id,
-        mode="stub_passthrough",
+        mode=mode,
+        chunk_count=len(chunks),
+        citation_count=len(citations),
         duration_ms=elapsed,
     )
     return {
-        "knowledge_response_ready": False,
-        "knowledge_chunks": [],
+        "knowledge_chunks": chunks,
+        "citations": citations,
+        "response_text": response_text,
+        "knowledge_response_ready": True,
     }
 
 
