@@ -52,6 +52,14 @@ DEFAULT_TIMEOUT = 60  # seconds per request
 HEALTH_WAIT_TIMEOUT = 120  # seconds to wait for all services healthy
 HEALTH_POLL_INTERVAL = 5  # seconds between health polls
 
+REQUIRED_EVAL_METRICS = [
+    "faithfulness",
+    "answer_relevancy",
+    "context_precision",
+    "context_recall",
+]
+EXPECTED_EVAL_DATASET_SIZE = 12
+
 # Auth credentials — register+login flow for admin endpoints
 TEST_EMAIL = "integration@test.hamninh.ai"
 TEST_PASSWORD = "IntegTest2026!"
@@ -848,11 +856,70 @@ def test_graceful_degradation(base_url: str) -> TestResult:
     )
 
 
-def test_eval_pipeline(base_url: str, token: str) -> TestResult:
+def _format_metric_score(value: object) -> str:
+    """Format metric values defensively for verifier console output."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if math.isfinite(float(value)):
+            return f"{float(value):.4f}"
+    return "missing"
+
+
+def validate_strict_eval_response(body: dict, require_thresholds: bool = False) -> tuple[bool, list[str]]:
+    """Validate POST /admin/eval/trigger response for strict S09 eval evidence."""
+    verdict = body.get("verdict", "")
+    metrics = body.get("metrics", {}) or {}
+    threshold_results = body.get("threshold_results", {}) or {}
+    all_passed = body.get("all_passed", False)
+    dataset_size = body.get("dataset_size", 0)
+    latency_ms = body.get("latency_ms", 0)
+    result_path = body.get("result_path")
+
+    checks: list[tuple[str, bool]] = []
+    checks.append((f"verdict: {verdict}", verdict == "completed"))
+    checks.append((f"dataset_size: {dataset_size} / {EXPECTED_EVAL_DATASET_SIZE}", dataset_size == EXPECTED_EVAL_DATASET_SIZE))
+    checks.append((f"all_passed: {all_passed}", all_passed is True))
+    checks.append((f"latency_ms: {latency_ms}", isinstance(latency_ms, (int, float)) and latency_ms >= 0))
+    checks.append((f"result_path: {result_path or 'missing'}", bool(result_path)))
+
+    if not isinstance(metrics, dict):
+        checks.append(("metrics is an object", False))
+        metrics = {}
+    if not isinstance(threshold_results, dict):
+        checks.append(("threshold_results is an object", False))
+        threshold_results = {}
+
+    for metric in REQUIRED_EVAL_METRICS:
+        score = metrics.get(metric)
+        threshold_row = threshold_results.get(metric)
+        has_score = isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(float(score))
+        checks.append((f"metric {metric}: {_format_metric_score(score)}", has_score))
+
+        if isinstance(threshold_row, dict):
+            threshold = threshold_row.get("threshold")
+            row_score = threshold_row.get("score")
+            row_passed = threshold_row.get("passed")
+            has_threshold_row = isinstance(threshold, (int, float)) and isinstance(row_score, (int, float))
+            checks.append((f"threshold {metric}: {_format_metric_score(row_score)} >= {_format_metric_score(threshold)} ({'PASS' if row_passed else 'FAIL'})", has_threshold_row and row_passed is True))
+        else:
+            checks.append((f"threshold {metric}: missing", False))
+
+    if require_thresholds and len(threshold_results) != len(REQUIRED_EVAL_METRICS):
+        checks.append((f"threshold row count: {len(threshold_results)} / {len(REQUIRED_EVAL_METRICS)}", False))
+    if require_thresholds and len(metrics) < len(REQUIRED_EVAL_METRICS):
+        checks.append((f"metric count: {len(metrics)} / {len(REQUIRED_EVAL_METRICS)}", False))
+
+    passed = all(ok for _, ok in checks)
+    details_lines = [f"{'✅' if ok else '❌'} {desc}" for desc, ok in checks]
+    return passed, details_lines
+
+
+def test_eval_pipeline(base_url: str, token: str, require_thresholds: bool = False) -> TestResult:
     """Test 7: Eval pipeline — POST /admin/eval/trigger with threshold checks."""
     t0 = time.perf_counter()
 
+    metrics = REQUIRED_EVAL_METRICS if require_thresholds else ["faithfulness", "answer_relevancy"]
     print("  📊 Eval pipeline test: POST /admin/eval/trigger")
+    print(f"    Metrics: {', '.join(metrics)}")
 
     try:
         resp = retry_request(
@@ -861,7 +928,7 @@ def test_eval_pipeline(base_url: str, token: str) -> TestResult:
             headers=auth_headers(token),
             json={
                 "dataset_path": None,
-                "metrics": ["faithfulness", "answer_relevancy"],
+                "metrics": metrics,
             },
             timeout=300,  # eval can take a long time
         )
@@ -877,7 +944,6 @@ def test_eval_pipeline(base_url: str, token: str) -> TestResult:
     elapsed = (time.perf_counter() - t0) * 1000
 
     if resp.status_code != 200:
-        # 401 = auth issue, not a pipeline failure
         if resp.status_code == 401:
             return TestResult(
                 name="Eval Pipeline (RAGAS)",
@@ -892,57 +958,20 @@ def test_eval_pipeline(base_url: str, token: str) -> TestResult:
             duration_ms=elapsed,
         )
 
-    body = resp.json()
-    verdict = body.get("verdict", "")
-    metrics = body.get("metrics", {})
-    threshold_results = body.get("threshold_results", {})
-    all_passed = body.get("all_passed", False)
-    dataset_size = body.get("dataset_size", 0)
-    latency_ms = body.get("latency_ms", 0)
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        return TestResult(
+            name="Eval Pipeline (RAGAS)",
+            passed=False,
+            error=f"Malformed JSON response: {exc}",
+            duration_ms=elapsed,
+        )
 
-    checks = []
-
-    # Verdict should be 'completed' (not 'failed' or 'credential_blocked')
-    verdict_ok = verdict in ("completed", "pass")
-    checks.append((f"verdict is '{verdict}'", verdict_ok))
-
-    # Should have metrics
-    has_metrics = len(metrics) > 0
-    checks.append((f"metrics returned ({len(metrics)} metrics)", has_metrics))
-
-    # Should have evaluated at least 1 question
-    has_dataset = dataset_size > 0
-    checks.append((f"dataset_size > 0 ({dataset_size})", has_dataset))
-
-    # Threshold results should exist when metrics are present
-    if threshold_results:
-        has_thresholds = len(threshold_results) > 0
-        checks.append((f"threshold checks present ({len(threshold_results)})", has_thresholds))
-
-        # Log individual threshold results
-        for metric_name, result in threshold_results.items():
-            score = result.get("score", 0)
-            threshold = result.get("threshold", 0)
-            passed_thresh = result.get("passed", False)
-            checks.append(
-                (
-                    f"  {metric_name}: {score:.4f} >= {threshold} ({'PASS' if passed_thresh else 'FAIL'})",
-                    True,  # informational, don't fail the test
-                )
-            )
-
-        checks.append((f"all thresholds passed: {all_passed}", True))
+    if require_thresholds:
+        passed, details_lines = validate_strict_eval_response(body, require_thresholds=True)
     else:
-        # Credential blocked is acceptable (no OpenAI key for eval)
-        if verdict == "credential_blocked":
-            checks.append(("credential_blocked — OPENAI_API_KEY not configured", True))
-            print("    ℹ️  Eval credential_blocked: OPENAI_API_KEY may not be configured")
-        else:
-            checks.append(("threshold results present", False))
-
-    passed = all(ok for _, ok in checks)
-    details_lines = [f"{'✅' if ok else '❌'} {desc}" for desc, ok in checks]
-    details_lines.append(f"Latency: {latency_ms:.0f}ms")
+        passed, details_lines = validate_legacy_eval_response(body)
 
     return TestResult(
         name="Eval Pipeline (RAGAS)",
@@ -951,6 +980,38 @@ def test_eval_pipeline(base_url: str, token: str) -> TestResult:
         duration_ms=elapsed,
     )
 
+
+def validate_legacy_eval_response(body: dict) -> tuple[bool, list[str]]:
+    """Validate the permissive S08 smoke-test eval contract."""
+    verdict = body.get("verdict", "")
+    metrics = body.get("metrics", {}) or {}
+    threshold_results = body.get("threshold_results", {}) or {}
+    all_passed = body.get("all_passed", False)
+    dataset_size = body.get("dataset_size", 0)
+    latency_ms = body.get("latency_ms", 0)
+
+    checks = []
+    checks.append((f"verdict is '{verdict}'", verdict in ("completed", "pass")))
+    checks.append((f"metrics returned ({len(metrics)} metrics)", len(metrics) > 0))
+    checks.append((f"dataset_size > 0 ({dataset_size})", dataset_size > 0))
+
+    if threshold_results:
+        checks.append((f"threshold checks present ({len(threshold_results)})", len(threshold_results) > 0))
+        for metric_name, result in threshold_results.items():
+            score = result.get("score", 0)
+            threshold = result.get("threshold", 0)
+            passed_thresh = result.get("passed", False)
+            checks.append((f"  {metric_name}: {score:.4f} >= {threshold} ({'PASS' if passed_thresh else 'FAIL'})", True))
+        checks.append((f"all thresholds passed: {all_passed}", True))
+    elif verdict == "credential_blocked":
+        checks.append(("credential_blocked — OPENAI_API_KEY not configured", True))
+        print("    ℹ️  Eval credential_blocked: OPENAI_API_KEY may not be configured")
+    else:
+        checks.append(("threshold results present", False))
+
+    details_lines = [f"{'✅' if ok else '❌'} {desc}" for desc, ok in checks]
+    details_lines.append(f"Latency: {latency_ms:.0f}ms")
+    return all(ok for _, ok in checks), details_lines
 
 # ---------------------------------------------------------------------------
 # Operational verification tests (T02 — S08)
@@ -1373,6 +1434,16 @@ def main() -> int:
         help="Skip eval pipeline test (requires OPENAI_API_KEY + long runtime)",
     )
     parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="Run only the authenticated eval pipeline check.",
+    )
+    parser.add_argument(
+        "--require-eval-thresholds",
+        action="store_true",
+        help="Require all four eval metrics and threshold rows to pass.",
+    )
+    parser.add_argument(
         "--skip-operational",
         action="store_true",
         help="Skip operational verification tests 8-11 (requires Docker/APIs)",
@@ -1394,6 +1465,21 @@ def main() -> int:
     print(f"Base URL: {base_url}")
     print(f"Started:  {time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
     print("=" * 72)
+
+    if args.eval_only:
+        print("\n[eval-only] Eval Pipeline (RAGAS)")
+        register_user(base_url)
+        token = login_user(base_url)
+        if token:
+            suite.add(test_eval_pipeline(base_url, token, require_thresholds=args.require_eval_thresholds))
+        else:
+            suite.add(TestResult(
+                name="Eval Pipeline (RAGAS)",
+                passed=False,
+                error="Could not obtain JWT token — auth may not be configured",
+            ))
+        suite.print_summary()
+        return 0 if suite.failed == 0 else 1
 
     # --- Test 1: Service Health ---
     print("\n[1/11] Service Health Check")
@@ -1446,7 +1532,7 @@ def main() -> int:
         register_user(base_url)
         token = login_user(base_url)
         if token:
-            suite.add(test_eval_pipeline(base_url, token))
+            suite.add(test_eval_pipeline(base_url, token, require_thresholds=args.require_eval_thresholds))
         else:
             suite.add(TestResult(
                 name="Eval Pipeline (RAGAS)",

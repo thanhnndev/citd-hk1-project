@@ -545,3 +545,100 @@ class TestRAGASEvaluatorCredentialBlocked:
         assert result["metrics"] == {}
         assert "OPENAI_API_KEY" in result["reason"]
         assert "timestamp" in result
+
+
+# ===========================================================================
+# 7. Strict eval verifier script logic — negative tests for S09 live gate
+# ===========================================================================
+
+class TestStrictEvalVerifier:
+    """Script-level strict verifier rejects incomplete or failed eval responses."""
+
+    def _valid_body(self):
+        return {
+            "verdict": "completed",
+            "dataset_size": 12,
+            "metrics": {
+                "faithfulness": 0.90,
+                "answer_relevancy": 0.85,
+                "context_precision": 0.82,
+                "context_recall": 0.78,
+            },
+            "threshold_results": {
+                "faithfulness": {"score": 0.90, "threshold": 0.85, "passed": True},
+                "answer_relevancy": {"score": 0.85, "threshold": 0.80, "passed": True},
+                "context_precision": {"score": 0.82, "threshold": 0.80, "passed": True},
+                "context_recall": {"score": 0.78, "threshold": 0.75, "passed": True},
+            },
+            "all_passed": True,
+            "latency_ms": 12000.0,
+            "result_path": "data/eval_results/eval_test.json",
+        }
+
+    def test_strict_verifier_accepts_complete_passing_response(self):
+        from scripts.integration_test import validate_strict_eval_response
+
+        passed, details = validate_strict_eval_response(self._valid_body(), require_thresholds=True)
+
+        assert passed is True
+        assert any("faithfulness" in line for line in details)
+        assert any("result_path" in line for line in details)
+
+    @pytest.mark.parametrize("verdict", ["credential_blocked", "failed"])
+    def test_strict_verifier_rejects_non_completed_verdicts(self, verdict):
+        from scripts.integration_test import validate_strict_eval_response
+
+        body = self._valid_body()
+        body["verdict"] = verdict
+
+        passed, details = validate_strict_eval_response(body, require_thresholds=True)
+
+        assert passed is False
+        assert any(f"verdict: {verdict}" in line and line.startswith("❌") for line in details)
+
+    def test_strict_verifier_rejects_missing_required_metric(self):
+        from scripts.integration_test import validate_strict_eval_response
+
+        body = self._valid_body()
+        body["metrics"].pop("context_recall")
+
+        passed, details = validate_strict_eval_response(body, require_thresholds=True)
+
+        assert passed is False
+        assert any("metric context_recall: missing" in line for line in details)
+
+    def test_strict_verifier_rejects_missing_threshold_row(self):
+        from scripts.integration_test import validate_strict_eval_response
+
+        body = self._valid_body()
+        body["threshold_results"].pop("context_precision")
+
+        passed, details = validate_strict_eval_response(body, require_thresholds=True)
+
+        assert passed is False
+        assert any("threshold context_precision: missing" in line for line in details)
+
+    def test_strict_verifier_rejects_threshold_failure(self):
+        from scripts.integration_test import validate_strict_eval_response
+
+        body = self._valid_body()
+        body["all_passed"] = False
+        body["threshold_results"]["answer_relevancy"]["passed"] = False
+        body["threshold_results"]["answer_relevancy"]["score"] = 0.50
+
+        passed, details = validate_strict_eval_response(body, require_thresholds=True)
+
+        assert passed is False
+        assert any("all_passed: False" in line for line in details)
+        assert any("threshold answer_relevancy" in line and "FAIL" in line for line in details)
+
+    def test_strict_verifier_rejects_wrong_dataset_size(self):
+        from scripts.integration_test import validate_strict_eval_response
+
+        body = self._valid_body()
+        body["dataset_size"] = 11
+
+        passed, details = validate_strict_eval_response(body, require_thresholds=True)
+
+        assert passed is False
+        assert any("dataset_size: 11 / 12" in line for line in details)
