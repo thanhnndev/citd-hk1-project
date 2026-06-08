@@ -324,6 +324,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         app.state.ham_ninh_graph = None
 
+    # Link the pre-configured ham_ninh_graph to agent_service for fallback pathways
+    if app.state.agent_service is not None and app.state.ham_ninh_graph is not None:
+        app.state.agent_service._ham_ninh_graph = app.state.ham_ninh_graph
+
     # 5. Initialize UserService (PostgreSQL-backed auth)
     app.state.user_service = None
     dsn = os.environ.get("DATABASE_URL")

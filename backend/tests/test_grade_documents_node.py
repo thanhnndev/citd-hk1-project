@@ -38,9 +38,12 @@ class FakeChunk:
 def _make_completion(binary_score: str) -> MagicMock:
     """Create a mock LLM completion response."""
     import json
+    from agents.graph.state import GradeDocuments
     mock = MagicMock()
     mock.choices = [MagicMock()]
     mock.choices[0].message.content = json.dumps({"binary_score": binary_score})
+    mock.choices[0].message.parsed = GradeDocuments(binary_score=binary_score)
+    mock.choices[0].message.refusal = None
     return mock
 
 
@@ -130,7 +133,7 @@ class TestLLMGrading:
     async def test_all_relevant_chunks(self):
         """All chunks relevant → grade_score=1.0, grade_label='relevant'."""
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             return_value=_make_completion("yes")
         )
         configure_services(NodeServices(llm_client=mock_client, model="gpt-4o-mini"))
@@ -147,13 +150,13 @@ class TestLLMGrading:
         result = await grade_documents_node(state)
         assert result["grade_score"] == 1.0
         assert result["grade_label"] == "relevant"
-        assert mock_client.chat.completions.create.call_count == 2
+        assert mock_client.chat.completions.parse.call_count == 2
 
     @pytest.mark.asyncio
     async def test_all_irrelevant_chunks(self):
         """All chunks irrelevant → grade_score=0.0, grade_label='irrelevant'."""
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             return_value=_make_completion("no")
         )
         configure_services(NodeServices(llm_client=mock_client, model="gpt-4o-mini"))
@@ -176,7 +179,7 @@ class TestLLMGrading:
         """Mixed results → correct aggregate score."""
         mock_client = MagicMock()
         # First chunk relevant, second irrelevant
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             side_effect=[
                 _make_completion("yes"),
                 _make_completion("no"),
@@ -201,7 +204,7 @@ class TestLLMGrading:
     async def test_top5_limit_enforced(self):
         """Only top-5 chunks are graded even if more are provided."""
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             return_value=_make_completion("yes")
         )
         configure_services(NodeServices(llm_client=mock_client, model="gpt-4o-mini"))
@@ -216,13 +219,13 @@ class TestLLMGrading:
         assert result["grade_score"] == 1.0
         assert result["grade_label"] == "relevant"
         # Only 5 LLM calls despite 8 chunks
-        assert mock_client.chat.completions.create.call_count == 5
+        assert mock_client.chat.completions.parse.call_count == 5
 
     @pytest.mark.asyncio
     async def test_response_format_is_grade_documents(self):
         """LLM call uses response_format=GradeDocuments."""
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             return_value=_make_completion("yes")
         )
         configure_services(NodeServices(llm_client=mock_client, model="gpt-4o-mini"))
@@ -235,7 +238,7 @@ class TestLLMGrading:
         }
         await grade_documents_node(state)
 
-        call_kwargs = mock_client.chat.completions.create.call_args
+        call_kwargs = mock_client.chat.completions.parse.call_args
         from agents.graph.state import GradeDocuments
         assert call_kwargs.kwargs.get("response_format") is GradeDocuments
 
@@ -252,7 +255,7 @@ class TestLLMFailure:
     async def test_chunk_failure_assumes_relevant(self):
         """Per-chunk LLM failure → assume relevant (score 1.0)."""
         mock_client = MagicMock()
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             side_effect=RuntimeError("API timeout")
         )
         configure_services(NodeServices(llm_client=mock_client, model="gpt-4o-mini"))
@@ -273,7 +276,7 @@ class TestLLMFailure:
         """Some chunks fail, some succeed → mixed scores."""
         mock_client = MagicMock()
         # First succeeds (no), second fails, third succeeds (yes)
-        mock_client.chat.completions.create = AsyncMock(
+        mock_client.chat.completions.parse = AsyncMock(
             side_effect=[
                 _make_completion("no"),
                 RuntimeError("Connection lost"),

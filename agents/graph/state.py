@@ -61,7 +61,7 @@ class AgentState(TypedDict, total=False):
     message: str
     language: str
     history: list[dict[str, str]]
-    messages: Annotated[list[dict[str, Any]], add_messages]
+    messages: Annotated[list[Any], add_messages]
     tool_calls: list[Any]
     citations: list[Citation]
     places: list[Any]
