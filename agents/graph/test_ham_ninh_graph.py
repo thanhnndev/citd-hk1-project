@@ -262,6 +262,53 @@ class TestStreamingIntegration:
         assert len(events) > 0
 
 
+@pytest.mark.skipif(not _HAS_GRAPH, reason="ham_ninh_graph.py not available (T01 artifact missing)")
+class TestUserLocationWiring:
+    """Test that user_location parameter flows through answer() and stream_sse()."""
+
+    @pytest.mark.asyncio
+    async def test_answer_accepts_user_location(self):
+        """answer() accepts user_location parameter without error."""
+        graph = HamNinhGraph()
+        user_loc = {"lat": 10.776, "lng": 106.700}
+        result = await graph.answer(
+            session_id="test-location-001",
+            message="chào bạn",
+            language="vi",
+            user_location=user_loc,
+        )
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_answer_user_location_default_none(self):
+        """answer() works with user_location=None (default)."""
+        graph = HamNinhGraph()
+        result = await graph.answer(
+            session_id="test-location-002",
+            message="chào bạn",
+            language="vi",
+            user_location=None,
+        )
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_stream_sse_accepts_user_location(self):
+        """stream_sse() accepts user_location parameter without error."""
+        graph = HamNinhGraph()
+        user_loc = {"lat": 10.776, "lng": 106.700}
+        events = []
+        async for event in graph.stream_sse(
+            session_id="test-location-003",
+            message="chào bạn",
+            language="vi",
+            user_location=user_loc,
+        ):
+            events.append(event)
+            if len(events) > 10:
+                break
+        assert isinstance(events, list)
+
+
 # ===========================================================================
 # Section 4: Existing test compatibility (always runnable)
 # ===========================================================================

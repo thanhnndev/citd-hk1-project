@@ -161,10 +161,16 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
             pipeline="ham_ninh_graph",
         )
         try:
+            # Convert LatLng Pydantic model to dict for AgentState
+            user_loc_dict: dict[str, float] | None = None
+            if body.user_location is not None:
+                user_loc_dict = {"lat": body.user_location.lat, "lng": body.user_location.lng}
+
             graph_result: GraphResult = await ham_ninh_graph.answer(
                 session_id=body.session_id,
                 message=body.message,
                 language=body.language,
+                user_location=user_loc_dict,
             )
 
             # Convert GraphResult to ChatResponse
@@ -292,6 +298,8 @@ async def chat_stream(
     message: str = Query(...),
     session_id: str = Query(...),
     language: str = Query("vi"),
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
 ) -> StreamingResponse:
     """Stream a grounded assistant answer as Server-Sent Events."""
     query = message.strip()
@@ -358,10 +366,16 @@ async def chat_stream(
                 pipeline="ham_ninh_graph",
             )
             try:
+                # Build user_location dict from query params
+                stream_user_loc: dict[str, float] | None = None
+                if lat is not None and lng is not None:
+                    stream_user_loc = {"lat": lat, "lng": lng}
+
                 async for sse_marker in ham_ninh_graph.stream_sse(
                     session_id=sid,
                     message=query,
                     language=language,
+                    user_location=stream_user_loc,
                 ):
                     yield _sse_payload(sse_marker)
 

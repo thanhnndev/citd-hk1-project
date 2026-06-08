@@ -355,6 +355,7 @@ class HamNinhGraph:
         message: str,
         language: str = "vi",
         history: list[dict[str, str]] | None = None,
+        user_location: dict[str, float] | None = None,
     ) -> GraphResult:
         """Execute the graph and return a structured result.
 
@@ -406,7 +407,7 @@ class HamNinhGraph:
             "history_included": False,
             "location_consent": False,
             "sort_by_nearest": False,
-            "user_location": None,
+            "user_location": user_location,
             "blocked": False,
         }
 
@@ -446,6 +447,7 @@ class HamNinhGraph:
         message: str,
         language: str = "vi",
         history: list[dict[str, str]] | None = None,
+        user_location: dict[str, float] | None = None,
     ) -> AsyncGenerator[str, None]:
         """Execute the graph with streaming and yield SSE markers.
 
@@ -496,7 +498,7 @@ class HamNinhGraph:
             "history_included": False,
             "location_consent": False,
             "sort_by_nearest": False,
-            "user_location": None,
+            "user_location": user_location,
             "blocked": False,
         }
 
