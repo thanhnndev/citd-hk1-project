@@ -78,6 +78,8 @@ class NodeServices:
     model: str = "gpt-4o-mini"
     retriever: Any = None  # Retriever or HybridRetriever or None
     places_service: Any = None  # PlaceRecommendationService or None
+    cohere_reranker: Any = None  # CohereReranker or None (graceful degradation)
+    llm_answer_service: Any = None  # LLMAnswerService or None
 
 
 _default_services = NodeServices()

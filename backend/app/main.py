@@ -40,6 +40,8 @@ from agents.graph.nodes import NodeServices
 from agents.tools.embedding_service import EmbeddingService
 from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from agents.services.llm_answer_service import LLMAnswerService
+from agents.services.cohere_reranker import CohereReranker
+import openai
 from agents.services.place_recommendation_service import PlaceRecommendationService
 from agents.tools.places_service import GooglePlacesService, GoongPlacesService, DualPlacesService
 from agents.tools.routes_service import GoongRoutesService
@@ -211,12 +213,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ham_ninh_checkpoint_mode = "memory"
     ham_ninh_graph_checkpointer = None
     try:
+        # Build OpenAI client for LLM-dependent graph nodes
+        openai_client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        logger.info("openai_client.configured", api_key_present=bool(settings.OPENAI_API_KEY))
+
+        # Build CohereReranker if key present (graceful degradation: None skips reranking)
+        cohere_reranker = None
+        if settings.COHERE_API_KEY:
+            cohere_reranker = CohereReranker(api_key=settings.COHERE_API_KEY)
+        logger.info("cohere.configured", api_key_present=bool(settings.COHERE_API_KEY))
+
         # Build NodeServices with available services
         node_services = NodeServices(
-            llm_client=None,  # Will be injected when LLM service is available
+            llm_client=openai_client,
             model="gpt-4o-mini",
             retriever=app.state.retriever or app.state.hybrid_retriever,
             places_service=app.state.place_recommendation_service,
+            cohere_reranker=cohere_reranker,
+            llm_answer_service=app.state.llm_service or LLMAnswerService(),
         )
 
         # Create HamNinhGraph with AsyncPostgresSaver if DATABASE_URL is available
