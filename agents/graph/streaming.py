@@ -44,20 +44,24 @@ class StreamingAdapter:
             [INTERRUPT], response text, or [ERROR] messages.
         """
         try:
-            async for chunk in graph_stream:
-                chunk_type = chunk.get("type")
+            async for raw_chunk in graph_stream:
+                chunk_type, chunk_data = self._normalize_chunk(raw_chunk)
 
                 if chunk_type == "updates":
                     # Node state update
-                    async for event in self._handle_update(chunk):
+                    async for event in self._handle_update(chunk_data):
                         yield event
                 elif chunk_type == "custom":
                     # Custom stream events from get_stream_writer()
-                    async for event in self._handle_custom(chunk):
+                    async for event in self._handle_custom(chunk_data):
+                        yield event
+                elif chunk_type == "messages":
+                    # LangGraph messages mode emits LLM tokens/messages.
+                    async for event in self._handle_message(chunk_data):
                         yield event
                 elif chunk_type == "interrupt":
                     # LangGraph interrupt - graph paused, waiting for user input
-                    async for event in self._handle_interrupt(chunk):
+                    async for event in self._handle_interrupt(chunk_data):
                         yield event
                 # Ignore other chunk types (e.g., 'values' for final state)
 
@@ -77,9 +81,31 @@ class StreamingAdapter:
             logger.error("graph.execution_error", error_type=error_type, error=str(exc))
             yield f"[ERROR] {error_type}"
 
-    async def _handle_update(self, chunk: dict[str, Any]) -> AsyncGenerator[str, None]:
+    def _normalize_chunk(self, raw_chunk: Any) -> tuple[str | None, dict[str, Any]]:
+        """Normalize LangGraph stream chunks across documented shapes.
+
+        With a single stream mode LangGraph yields raw payloads. With multiple
+        modes it yields ``(mode, payload)`` tuples. Some older code/tests use a
+        dict envelope ``{"type": mode, "data": payload}``. Supporting all
+        three keeps the SSE adapter aligned with LangGraph's documented Python
+        streaming API instead of one local fixture shape.
+        """
+        if isinstance(raw_chunk, tuple) and len(raw_chunk) == 2:
+            mode, payload = raw_chunk
+            return str(mode), payload if isinstance(payload, dict) else {"data": payload}
+
+        if isinstance(raw_chunk, dict) and "type" in raw_chunk:
+            mode = raw_chunk.get("type")
+            payload = raw_chunk.get("data", {})
+            return str(mode), payload if isinstance(payload, dict) else {"data": payload}
+
+        if isinstance(raw_chunk, dict):
+            return "updates", raw_chunk
+
+        return None, {"data": raw_chunk}
+
+    async def _handle_update(self, data: dict[str, Any]) -> AsyncGenerator[str, None]:
         """Handle 'updates' stream mode chunks (node state updates)."""
-        data = chunk.get("data", {})
 
         # LangGraph v2 format: data is {node_name: state_update}
         for node_name, state_update in data.items():
@@ -141,9 +167,8 @@ class StreamingAdapter:
 
         # Other nodes: no status marker (silent)
 
-    async def _handle_custom(self, chunk: dict[str, Any]) -> AsyncGenerator[str, None]:
+    async def _handle_custom(self, data: dict[str, Any]) -> AsyncGenerator[str, None]:
         """Handle 'custom' stream mode chunks (get_stream_writer() events)."""
-        data = chunk.get("data", {})
         event_type = data.get("type")
 
         if event_type == "token":
@@ -163,14 +188,29 @@ class StreamingAdapter:
             if data:
                 yield f"[CUSTOM] {json.dumps(data, ensure_ascii=False)}"
 
-    async def _handle_interrupt(self, chunk: dict[str, Any]) -> AsyncGenerator[str, None]:
+    async def _handle_message(self, data: dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Handle LangGraph messages stream chunks when enabled."""
+        message = data.get("data", data)
+        content = None
+        if isinstance(message, tuple) and message:
+            message = message[0]
+        if hasattr(message, "content"):
+            content = message.content
+        elif isinstance(message, dict):
+            content = message.get("content") or message.get("text")
+        elif isinstance(message, str):
+            content = message
+        if content:
+            self._response_text_emitted = True
+            yield str(content)
+
+    async def _handle_interrupt(self, data: dict[str, Any]) -> AsyncGenerator[str, None]:
         """Handle 'interrupt' stream mode chunks (LangGraph interrupt() calls).
 
         When a node calls interrupt(), the graph pauses and emits an interrupt
         event. The frontend should detect this and provide the requested input
         (e.g., geolocation), then resume the graph.
         """
-        data = chunk.get("data", {})
         if data:
             # Emit interrupt event with the interrupt payload
             yield f"[INTERRUPT] {json.dumps(data, ensure_ascii=False)}"

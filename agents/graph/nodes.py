@@ -1035,16 +1035,14 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
             "grade_label": "relevant",
         }
 
-    # --- Grade each chunk (limit to top-5 for latency) ---
-    import json as _json
+    # --- Grade each chunk in parallel (limit to top-5 for latency) ---
+    import asyncio
 
     gradeable_chunks = chunks[:5]
-    scores: list[float] = []
 
-    for i, chunk in enumerate(gradeable_chunks):
+    async def grade_chunk(i: int, chunk: Any) -> float:
         chunk_text = getattr(chunk, "text", "") or str(chunk)
         chunk_title = getattr(chunk, "title", "") or ""
-
         try:
             user_content = (
                 f"Document title: {chunk_title}\n"
@@ -1062,21 +1060,19 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
                 max_completion_tokens=32,
             )
 
-            message = completion.choices[0].message
-            if message.parsed:
-                binary_score = message.parsed.binary_score
-                score_value = 1.0 if binary_score == "yes" else 0.0
-                scores.append(score_value)
+            message_obj = completion.choices[0].message
+            if message_obj.parsed:
+                binary_score = message_obj.parsed.binary_score
+                return 1.0 if binary_score == "yes" else 0.0
             else:
                 # Assume relevant on refusal/failure (optimistic)
                 logger.warning(
                     "grade_documents.chunk_refused",
                     chunk_index=i,
-                    refusal=message.refusal,
+                    refusal=message_obj.refusal,
                     session_id=session_id,
                 )
-                scores.append(1.0)
-
+                return 1.0
         except Exception as exc:
             logger.warning(
                 "grade_documents.chunk_failed",
@@ -1086,7 +1082,10 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
                 session_id=session_id,
             )
             # Assume relevant on failure (optimistic: avoid unnecessary rewrite)
-            scores.append(1.0)
+            return 1.0
+
+    tasks = [grade_chunk(i, chunk) for i, chunk in enumerate(gradeable_chunks)]
+    scores = await asyncio.gather(*tasks)
 
     # --- Aggregate scores ---
     grade_score = sum(scores) / len(scores) if scores else 0.0
@@ -1149,6 +1148,7 @@ async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
     session_id = state.get("session_id", "")
     message = state.get("message", "")
     rewrite_count = state.get("rewrite_count", 0)
+    history = _checkpoint_history(state)
 
     logger.info(
         "graph.node_enter",
@@ -1180,12 +1180,18 @@ async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
     import json as _json
 
     try:
+        messages = [
+            {"role": "system", "content": _REWRITE_QUERY_SYSTEM_PROMPT},
+        ]
+        # Include recent history for coreference resolution
+        for item in (history or [])[-4:]:
+            if item.get("role") in {"user", "assistant"} and item.get("content"):
+                messages.append({"role": item["role"], "content": item["content"]})
+        messages.append({"role": "user", "content": message})
+
         completion = await client.chat.completions.parse(
             model=services.model,
-            messages=[
-                {"role": "system", "content": _REWRITE_QUERY_SYSTEM_PROMPT},
-                {"role": "user", "content": message},
-            ],
+            messages=messages,
             response_format=RewriteQuery,
             max_completion_tokens=128,
         )

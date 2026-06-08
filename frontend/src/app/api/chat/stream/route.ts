@@ -6,6 +6,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 const BACKEND_PORT = process.env.HN_BACKEND_HOST_PORT ?? "48721";
 
 export async function GET(request: NextRequest) {
@@ -42,7 +45,9 @@ export async function GET(request: NextRequest) {
   let backendRes: globalThis.Response;
   try {
     backendRes = await fetch(backendUrl, {
+      cache: "no-store",
       headers: {
+        "Accept": "text/event-stream",
         "X-Request-ID": requestId,
         "X-API-Key": process.env.HN_API_KEY ?? "",
       },
@@ -54,8 +59,10 @@ export async function GET(request: NextRequest) {
   return new Response(backendRes.body, {
     status: 200,
     headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
       "X-Request-ID": requestId,
     },
   });
