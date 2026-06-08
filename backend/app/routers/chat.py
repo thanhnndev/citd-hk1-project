@@ -188,12 +188,14 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
             ]
 
             response = ChatResponse(
+                session_id=body.session_id,
                 message=graph_result.response_text or "I'm sorry, I couldn't generate a response.",
                 intent=graph_result.intent or "unknown",
                 citations=citations,
                 suggestions=graph_result.suggestions or [],
                 fallback=graph_result.blocked,
                 latency_ms=round((time.perf_counter() - t0) * 1000, 3),
+                langfuse_trace_id=graph_result.langfuse_trace_id,
             )
 
             # Output guardrails
