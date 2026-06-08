@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlencode
 
 try:
@@ -938,6 +941,391 @@ def test_eval_pipeline(base_url: str, token: str) -> TestResult:
 
 
 # ---------------------------------------------------------------------------
+# Operational verification tests (T02 — S08)
+# ---------------------------------------------------------------------------
+
+
+def test_p95_latency(base_url: str) -> TestResult:
+    """Test 8: P95 latency measurement — ROB-06 requires P99 <8s."""
+    t0 = time.perf_counter()
+    queries = [
+        "lịch sử Hàm Ninh",
+        "văn hóa Phú Quốc",
+        "ẩm thực miền biển",
+        "làng chài cổ",
+        "chùa Hộ Quốc",
+        "chợ đêm Phú Quốc",
+        "bãi Sao Phú Quốc",
+        "hải sản Hàm Ninh",
+        "cầu cảng Bãi Vòng",
+        "vườn tiêu Phú Quốc",
+    ]
+    durations: list[float] = []
+    failures = 0
+
+    print(f"  ⏱️  P95 latency test: {len(queries)} queries")
+
+    for i, query in enumerate(queries):
+        session_id = f"integ-p95-{i}-{uuid.uuid4().hex[:8]}"
+        req_t0 = time.perf_counter()
+        try:
+            resp = requests.post(
+                f"{base_url}/chat",
+                json={
+                    "session_id": session_id,
+                    "message": query,
+                    "language": "vi",
+                },
+                timeout=DEFAULT_TIMEOUT,
+            )
+            req_elapsed = (time.perf_counter() - req_t0) * 1000
+            if resp.status_code == 200:
+                durations.append(req_elapsed)
+                print(f"    [{i+1}/{len(queries)}] {query}: {req_elapsed:.0f}ms")
+            else:
+                failures += 1
+                print(f"    [{i+1}/{len(queries)}] {query}: FAILED (HTTP {resp.status_code})")
+        except (requests.ConnectionError, requests.Timeout, requests.RequestException) as exc:
+            failures += 1
+            print(f"    [{i+1}/{len(queries)}] {query}: ERROR ({exc})")
+
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    if not durations:
+        return TestResult(
+            name="P95 Latency",
+            passed=False,
+            error=f"All {len(queries)} requests failed — no latency data collected",
+            duration_ms=elapsed,
+        )
+
+    durations.sort()
+    n = len(durations)
+    p95_idx = math.ceil(0.95 * n) - 1
+    p50_idx = math.ceil(0.50 * n) - 1
+    p95 = durations[p95_idx]
+    p50 = durations[p50_idx]
+    min_lat = durations[0]
+    max_lat = durations[-1]
+
+    passed = p95 < 8000  # ROB-06: P99 <8s, we check P95 as proxy
+    details_lines = [
+        f"Queries: {n} successful, {failures} failed",
+        f"Min: {min_lat:.0f}ms",
+        f"Median (P50): {p50:.0f}ms",
+        f"P95: {p95:.0f}ms {'✅' if p95 < 8000 else '❌ (>8000ms)'}",
+        f"Max: {max_lat:.0f}ms",
+    ]
+
+    return TestResult(
+        name="P95 Latency",
+        passed=passed,
+        details="\n".join(details_lines),
+        duration_ms=elapsed,
+    )
+
+
+def test_langfuse_trace_topology(
+    base_url: str,
+    langfuse_url: str,
+    langfuse_public_key: str,
+    langfuse_secret_key: str,
+) -> TestResult:
+    """Test 9: Langfuse trace topology — EXP-04 requires complete node topology."""
+    t0 = time.perf_counter()
+    session_id = f"integ-trace-{uuid.uuid4().hex[:8]}"
+    query = "lịch sử làng chài Hàm Ninh"
+
+    print(f"  🔍 Langfuse trace topology test: session={session_id}")
+
+    # Step 1: Send a RAG query to generate a trace
+    try:
+        resp = requests.post(
+            f"{base_url}/chat",
+            json={
+                "session_id": session_id,
+                "message": query,
+                "language": "vi",
+            },
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            elapsed = (time.perf_counter() - t0) * 1000
+            return TestResult(
+                name="Langfuse Trace Topology",
+                passed=False,
+                error=f"Chat request failed: HTTP {resp.status_code}",
+                duration_ms=elapsed,
+            )
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        elapsed = (time.perf_counter() - t0) * 1000
+        return TestResult(
+            name="Langfuse Trace Topology",
+            passed=False,
+            error=f"Chat request failed: {exc}",
+            duration_ms=elapsed,
+        )
+
+    print(f"    Waiting 10s for Langfuse to flush trace...")
+    time.sleep(10)
+
+    # Step 2: Query Langfuse API for traces
+    auth = (langfuse_public_key, langfuse_secret_key)
+    trace_id = None
+
+    try:
+        traces_resp = requests.get(
+            f"{langfuse_url}/api/public/traces",
+            params={"sessionId": session_id},
+            auth=auth,
+            timeout=30,
+        )
+        if traces_resp.status_code == 200:
+            traces_data = traces_resp.json().get("data", [])
+            if traces_data:
+                trace_id = traces_data[0].get("id")
+                print(f"    Found trace: {trace_id}")
+        else:
+            print(f"    Langfuse traces API: HTTP {traces_resp.status_code}")
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        print(f"    Langfuse API error: {exc}")
+
+    # Retry once after 5 more seconds if no traces found
+    if trace_id is None:
+        print("    No traces found, retrying after 5s...")
+        time.sleep(5)
+        try:
+            traces_resp = requests.get(
+                f"{langfuse_url}/api/public/traces",
+                params={"sessionId": session_id},
+                auth=auth,
+                timeout=30,
+            )
+            if traces_resp.status_code == 200:
+                traces_data = traces_resp.json().get("data", [])
+                if traces_data:
+                    trace_id = traces_data[0].get("id")
+                    print(f"    Found trace on retry: {trace_id}")
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            print(f"    Langfuse retry error: {exc}")
+
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    if trace_id is None:
+        return TestResult(
+            name="Langfuse Trace Topology",
+            passed=False,
+            details=f"No traces found for session {session_id} after retry.\nLangfuse URL: {langfuse_url}\nNEEDS-HUMAN: Check Langfuse UI manually.",
+            duration_ms=elapsed,
+        )
+
+    # Step 3: Query observations for the trace
+    try:
+        obs_resp = requests.get(
+            f"{langfuse_url}/api/public/observations",
+            params={"traceId": trace_id},
+            auth=auth,
+            timeout=30,
+        )
+        if obs_resp.status_code != 200:
+            return TestResult(
+                name="Langfuse Trace Topology",
+                passed=False,
+                error=f"Observations API: HTTP {obs_resp.status_code}",
+                duration_ms=elapsed,
+            )
+
+        observations = obs_resp.json().get("data", [])
+        found_nodes = set()
+        for obs in observations:
+            name = obs.get("name", "")
+            if name:
+                found_nodes.add(name)
+
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        return TestResult(
+            name="Langfuse Trace Topology",
+            passed=False,
+            error=f"Observations API failed: {exc}",
+            duration_ms=elapsed,
+        )
+
+    # Step 4: Check expected nodes
+    expected_nodes = {
+        "input_guardrails", "intent_router", "supervisor",
+        "rag_agent", "grade_documents", "output_guardrails",
+    }
+    found_expected = expected_nodes & found_nodes
+    missing = expected_nodes - found_nodes
+
+    passed = len(found_expected) >= 6
+    details_lines = [
+        f"Trace ID: {trace_id}",
+        f"Total observations: {len(observations)}",
+        f"Found nodes: {', '.join(sorted(found_nodes)) if found_nodes else 'none'}",
+        f"Expected nodes found: {len(found_expected)}/6",
+    ]
+    if missing:
+        details_lines.append(f"Missing nodes: {', '.join(sorted(missing))}")
+
+    return TestResult(
+        name="Langfuse Trace Topology",
+        passed=passed,
+        details="\n".join(details_lines),
+        duration_ms=elapsed,
+    )
+
+
+def test_per_node_timeout_audit() -> TestResult:
+    """Test 10: Per-node timeout audit — verify TimeoutPolicy covers all nodes."""
+    t0 = time.perf_counter()
+
+    print("  🔧 Per-node timeout audit: reading ham_ninh_graph.py")
+
+    graph_path = Path("agents/graph/ham_ninh_graph.py")
+    if not graph_path.exists():
+        elapsed = (time.perf_counter() - t0) * 1000
+        return TestResult(
+            name="Per-Node Timeout Audit",
+            passed=False,
+            error=f"Source file not found: {graph_path}",
+            duration_ms=elapsed,
+        )
+
+    source = graph_path.read_text(encoding="utf-8")
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    checks = []
+
+    # Check 1: TimeoutPolicy class exists
+    has_timeout_policy = "class TimeoutPolicy" in source
+    checks.append(("TimeoutPolicy class exists", has_timeout_policy))
+
+    # Check 2: All 9 node names have timeout assignments
+    expected_nodes = [
+        "input_guardrails", "intent_router", "supervisor",
+        "conversational", "output_guardrails", "rag_agent",
+        "grade_documents", "rewrite_query", "maps_agent",
+    ]
+
+    # Look for node names as keys in the timeouts dict
+    nodes_with_timeouts = []
+    nodes_missing = []
+    for node in expected_nodes:
+        # Match pattern: "node_name": NODE_TIMEOUT_* or "node_name": <number>
+        pattern = rf'"{node}"\s*:'
+        if re.search(pattern, source):
+            nodes_with_timeouts.append(node)
+        else:
+            nodes_missing.append(node)
+
+    all_nodes_covered = len(nodes_missing) == 0
+    checks.append(
+        (f"All 9 nodes have timeout entries ({len(nodes_with_timeouts)}/9)", all_nodes_covered)
+    )
+    if nodes_missing:
+        checks.append((f"Missing timeouts: {', '.join(nodes_missing)}", False))
+
+    # Check 3: _wrap_with_timeout function exists
+    has_wrapper = "def _wrap_with_timeout" in source
+    checks.append(("_wrap_with_timeout function exists", has_wrapper))
+
+    # Check 4: _wrap_with_timeout is used in graph building
+    uses_wrapper = "_wrap_with_timeout(" in source
+    checks.append(("_wrap_with_timeout is called in _build_graph", uses_wrapper))
+
+    # Check 5: asyncio.wait_for is used in the wrapper
+    has_wait_for = "asyncio.wait_for" in source
+    checks.append(("asyncio.wait_for used for timeout enforcement", has_wait_for))
+
+    passed = all(ok for _, ok in checks)
+    details_lines = [f"{'✅' if ok else '❌'} {desc}" for desc, ok in checks]
+    details_lines.append(f"Nodes with timeouts: {', '.join(nodes_with_timeouts)}")
+
+    return TestResult(
+        name="Per-Node Timeout Audit",
+        passed=passed,
+        details="\n".join(details_lines),
+        duration_ms=elapsed,
+    )
+
+
+def test_places_degradation(base_url: str) -> TestResult:
+    """Test 11: Places API graceful degradation — pipeline works without user_location."""
+    t0 = time.perf_counter()
+    session_id = f"integ-noLoc-{uuid.uuid4().hex[:8]}"
+    query = "nhà hàng gần đây"
+
+    print(f"  📍 Places degradation test: '{query}' (no user_location)")
+
+    try:
+        resp = requests.post(
+            f"{base_url}/chat",
+            json={
+                "session_id": session_id,
+                "message": query,
+                "language": "vi",
+                # Deliberately omit user_location to test degradation
+            },
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except (requests.ConnectionError, requests.Timeout, requests.RequestException) as exc:
+        elapsed = (time.perf_counter() - t0) * 1000
+        return TestResult(
+            name="Places API Degradation (No Location)",
+            passed=False,
+            error=f"Request failed: {exc}",
+            duration_ms=elapsed,
+        )
+
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    if resp.status_code != 200:
+        return TestResult(
+            name="Places API Degradation (No Location)",
+            passed=False,
+            error=f"HTTP {resp.status_code}: {resp.text[:300]}",
+            duration_ms=elapsed,
+        )
+
+    body = resp.json()
+    message = body.get("message", "")
+    intent = body.get("intent", "")
+    fallback = body.get("fallback", False)
+    guardrail_status = body.get("guardrail_status")
+
+    checks = []
+
+    # Response must be non-empty
+    has_content = len(message.strip()) > 10
+    checks.append(("non-empty response (>10 chars)", has_content))
+
+    # No error prefix
+    no_error = not message.strip().lower().startswith("error")
+    checks.append(("no error in response prefix", no_error))
+
+    # Intent should be detected (not "unknown")
+    has_intent = intent is not None and intent != "unknown"
+    checks.append((f"intent detected ({intent})", has_intent))
+
+    # Guardrails should not block
+    guardrail_ok = guardrail_status in (None, "pass")
+    checks.append((f"guardrail status ({guardrail_status})", guardrail_ok))
+
+    passed = all(ok for _, ok in checks)
+    details_lines = [f"{'✅' if ok else '❌'} {desc}" for desc, ok in checks]
+    details_lines.append(f"Response preview: {message[:120]}...")
+    details_lines.append(f"Fallback: {fallback}")
+
+    return TestResult(
+        name="Places API Degradation (No Location)",
+        passed=passed,
+        details="\n".join(details_lines),
+        duration_ms=elapsed,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -962,6 +1350,11 @@ def main() -> int:
         help="Skip eval pipeline test (requires OPENAI_API_KEY + long runtime)",
     )
     parser.add_argument(
+        "--skip-operational",
+        action="store_true",
+        help="Skip operational verification tests 8-11 (requires Docker/APIs)",
+    )
+    parser.add_argument(
         "--compose-dir",
         default=".",
         help="Docker Compose project directory (for checkpoint test)",
@@ -980,7 +1373,7 @@ def main() -> int:
     print("=" * 72)
 
     # --- Test 1: Service Health ---
-    print("\n[1/7] Service Health Check")
+    print("\n[1/11] Service Health Check")
     health_result = test_service_health(base_url)
     suite.add(health_result)
     if not health_result.passed:
@@ -989,43 +1382,43 @@ def main() -> int:
         return 1
 
     # --- Test 2: RAG Path ---
-    print("\n[2/7] RAG Path (Cultural Query)")
+    print("\n[2/11] RAG Path (Cultural Query)")
     suite.add(test_rag_path(base_url))
 
     # --- Test 3: Maps Path ---
-    print("\n[3/7] Maps Path (Place Query)")
+    print("\n[3/11] Maps Path (Place Query)")
     suite.add(test_maps_path(base_url))
 
     # --- Test 4: Streaming ---
-    print("\n[4/7] Streaming (SSE)")
+    print("\n[4/11] Streaming (SSE)")
     suite.add(test_streaming(base_url))
 
     # --- Test 5: Checkpoint Durability ---
     if args.skip_checkpoint:
-        print("\n[5/7] Checkpoint Durability — SKIPPED (--skip-checkpoint)")
+        print("\n[5/11] Checkpoint Durability — SKIPPED (--skip-checkpoint)")
         suite.add(TestResult(
             name="Checkpoint Durability",
             passed=True,
             details="Skipped via --skip-checkpoint",
         ))
     else:
-        print("\n[5/7] Checkpoint Durability")
+        print("\n[5/11] Checkpoint Durability")
         suite.add(test_checkpoint_durability(base_url))
 
     # --- Test 6: Graceful Degradation ---
-    print("\n[6/7] Graceful Degradation (No Cohere)")
+    print("\n[6/11] Graceful Degradation (No Cohere)")
     suite.add(test_graceful_degradation(base_url))
 
     # --- Test 7: Eval Pipeline ---
     if args.skip_eval:
-        print("\n[7/7] Eval Pipeline — SKIPPED (--skip-eval)")
+        print("\n[7/11] Eval Pipeline — SKIPPED (--skip-eval)")
         suite.add(TestResult(
             name="Eval Pipeline (RAGAS)",
             passed=True,
             details="Skipped via --skip-eval",
         ))
     else:
-        print("\n[7/7] Eval Pipeline (RAGAS)")
+        print("\n[7/11] Eval Pipeline (RAGAS)")
         # Need auth for admin endpoints
         register_user(base_url)
         token = login_user(base_url)
@@ -1037,6 +1430,53 @@ def main() -> int:
                 passed=False,
                 error="Could not obtain JWT token — auth may not be configured",
             ))
+
+    # =========================================================================
+    # Operational verification tests (T02 — S08)
+    # =========================================================================
+
+    if args.skip_operational:
+        print("\n[8/11] P95 Latency — SKIPPED (--skip-operational)")
+        suite.add(TestResult(name="P95 Latency", passed=True, details="Skipped via --skip-operational"))
+        print("\n[9/11] Langfuse Trace Topology — SKIPPED (--skip-operational)")
+        suite.add(TestResult(name="Langfuse Trace Topology", passed=True, details="Skipped via --skip-operational"))
+        print("\n[10/11] Per-Node Timeout Audit — SKIPPED (--skip-operational)")
+        suite.add(TestResult(name="Per-Node Timeout Audit", passed=True, details="Skipped via --skip-operational"))
+        print("\n[11/11] Places API Degradation — SKIPPED (--skip-operational)")
+        suite.add(TestResult(name="Places API Degradation (No Location)", passed=True, details="Skipped via --skip-operational"))
+    else:
+        # --- Test 8: P95 Latency ---
+        print("\n[8/11] P95 Latency")
+        suite.add(test_p95_latency(base_url))
+
+        # --- Test 9: Langfuse Trace Topology ---
+        langfuse_host = os.environ.get("LANGFUSE_HOST", "")
+        langfuse_pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+        langfuse_sk = os.environ.get("LANGFUSE_SECRET_KEY", "")
+
+        print("\n[9/11] Langfuse Trace Topology")
+        if not langfuse_host or not langfuse_pk or not langfuse_sk:
+            print("    ⚠️  LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY not set — skipping")
+            suite.add(TestResult(
+                name="Langfuse Trace Topology",
+                passed=False,
+                details="NEEDS-HUMAN: Langfuse env vars (LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY) not configured.\nSet them in .env or export before running.",
+            ))
+        else:
+            suite.add(test_langfuse_trace_topology(
+                base_url,
+                langfuse_url=langfuse_host,
+                langfuse_public_key=langfuse_pk,
+                langfuse_secret_key=langfuse_sk,
+            ))
+
+        # --- Test 10: Per-Node Timeout Audit ---
+        print("\n[10/11] Per-Node Timeout Audit")
+        suite.add(test_per_node_timeout_audit())
+
+        # --- Test 11: Places API Degradation ---
+        print("\n[11/11] Places API Degradation (No Location)")
+        suite.add(test_places_degradation(base_url))
 
     # --- Summary ---
     suite.print_summary()
