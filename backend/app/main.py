@@ -35,6 +35,8 @@ from app.services.langfuse_service import init_langfuse
 
 from agents.tools.corpus_loader import load_corpus
 from agents.graph.agent_service import AgentService, create_agent_checkpointer
+from agents.graph.ham_ninh_graph import create_ham_ninh_graph
+from agents.graph.nodes import NodeServices
 from agents.tools.embedding_service import EmbeddingService
 from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from agents.services.llm_answer_service import LLMAnswerService
@@ -203,6 +205,66 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         langfuse_client=_langfuse_client,
     )
 
+    # 5. Wire HamNinhGraph with AsyncPostgresSaver (LangGraph StateGraph)
+    #    R005: Replace custom checkpointing with LangGraph's AsyncPostgresSaver
+    app.state.ham_ninh_graph = None
+    ham_ninh_checkpoint_mode = "memory"
+    ham_ninh_graph_checkpointer = None
+    try:
+        # Build NodeServices with available services
+        node_services = NodeServices(
+            llm_client=None,  # Will be injected when LLM service is available
+            model="gpt-4o-mini",
+            retriever=app.state.retriever or app.state.hybrid_retriever,
+            places_service=app.state.place_recommendation_service,
+        )
+
+        # Create HamNinhGraph with AsyncPostgresSaver if DATABASE_URL is available
+        dsn = os.environ.get("DATABASE_URL")
+        if dsn:
+            try:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+                from agents.graph.ham_ninh_graph import HamNinhGraph
+                # Create checkpointer and call setup() to create tables
+                ham_ninh_graph_checkpointer = AsyncPostgresSaver.from_conn_string(dsn)
+                await ham_ninh_graph_checkpointer.setup()
+                # Pass checkpointer directly to avoid duplicate connections
+                app.state.ham_ninh_graph = HamNinhGraph(
+                    checkpointer=ham_ninh_graph_checkpointer,
+                    services=node_services,
+                )
+                ham_ninh_checkpoint_mode = "postgres"
+                logger.info("ham_ninh_graph.initialized", checkpoint_mode="postgres")
+            except ImportError:
+                logger.warning("ham_ninh_graph.postgres_unavailable", fallback="memory")
+                app.state.ham_ninh_graph = await create_ham_ninh_graph(
+                    checkpoint_mode="memory",
+                    services=node_services,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ham_ninh_graph.postgres_init_failed",
+                    error_type=type(exc).__name__,
+                    fallback="memory",
+                )
+                app.state.ham_ninh_graph = await create_ham_ninh_graph(
+                    checkpoint_mode="memory",
+                    services=node_services,
+                )
+        else:
+            app.state.ham_ninh_graph = await create_ham_ninh_graph(
+                checkpoint_mode="memory",
+                services=node_services,
+            )
+            logger.info("ham_ninh_graph.initialized", checkpoint_mode="memory")
+    except Exception as exc:
+        logger.warning(
+            "ham_ninh_graph.init_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        app.state.ham_ninh_graph = None
+
     # 5. Initialize UserService (PostgreSQL-backed auth)
     app.state.user_service = None
     dsn = os.environ.get("DATABASE_URL")
@@ -223,6 +285,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
         agent_service_enabled=app.state.agent_service is not None,
+        ham_ninh_graph_enabled=app.state.ham_ninh_graph is not None,
+        ham_ninh_checkpoint_mode=ham_ninh_checkpoint_mode,
         place_recommendation_enabled=app.state.place_recommendation_service is not None,
         place_cache_configured=getattr(app.state, "place_cache", None) is not None,
         user_service_enabled=app.state.user_service is not None,
@@ -241,6 +305,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     place_cache = getattr(app.state, "place_cache", None)
     if place_cache is not None:
         await place_cache.close()
+
+    # Close HamNinhGraph checkpointer (AsyncPostgresSaver connection pool)
+    if ham_ninh_graph_checkpointer is not None:
+        try:
+            close_fn = getattr(ham_ninh_graph_checkpointer, "close", None)
+            if close_fn is not None:
+                await close_fn()
+            logger.info("ham_ninh_graph.checkpointer_closed")
+        except Exception as exc:
+            logger.warning(
+                "ham_ninh_graph.checkpointer_close_failed",
+                error_type=type(exc).__name__,
+            )
 
     # Close user service pool
     user_service = getattr(app.state, "user_service", None)

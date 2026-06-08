@@ -16,6 +16,13 @@ from app.middleware.rate_limiter import get_limiter
 from app.models.request import ChatRequest
 from app.models.response import ChatResponse
 
+# HamNinhGraph — LangGraph StateGraph pipeline (S01)
+try:
+    from agents.graph.ham_ninh_graph import HamNinhGraph, GraphResult
+    _HAM_NINH_GRAPH_AVAILABLE = True
+except Exception:
+    _HAM_NINH_GRAPH_AVAILABLE = False
+
 # Guardrails — input screening and output grounding
 try:
     from agents.guardrails.input_guardrails import (
@@ -67,6 +74,14 @@ def _agent_service_available(request: Request) -> bool:
             getattr(request.app.state, "retriever", None) is not None
             or getattr(request.app.state, "hybrid_retriever", None) is not None
         )
+    )
+
+
+def _ham_ninh_graph_available(request: Request) -> bool:
+    """Check if HamNinhGraph is available on app.state."""
+    return (
+        _HAM_NINH_GRAPH_AVAILABLE
+        and getattr(request.app.state, "ham_ninh_graph", None) is not None
     )
 
 @router.post("", response_model=ChatResponse)
@@ -137,6 +152,89 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
             )
             # Fail-open: continue to agent service
 
+    # --- Route through HamNinhGraph if available (S01 StateGraph pipeline) ---
+    if _ham_ninh_graph_available(request):
+        ham_ninh_graph = request.app.state.ham_ninh_graph
+        logger.info(
+            "chat.routing",
+            session_id=body.session_id,
+            pipeline="ham_ninh_graph",
+        )
+        try:
+            graph_result: GraphResult = await ham_ninh_graph.answer(
+                session_id=body.session_id,
+                message=body.message,
+                language=body.language,
+            )
+
+            # Convert GraphResult to ChatResponse
+            from app.models.response import Citation
+            citations = [
+                c if isinstance(c, Citation) else Citation(
+                    source_id=str(c.get("source_id", "")),
+                    text=str(c.get("text", "")),
+                    score=float(c.get("score", 0.0)),
+                )
+                for c in (graph_result.citations or [])
+                if isinstance(c, (dict, Citation))
+            ]
+
+            response = ChatResponse(
+                message=graph_result.response_text or "I'm sorry, I couldn't generate a response.",
+                intent=graph_result.intent or "unknown",
+                citations=citations,
+                suggestions=graph_result.suggestions or [],
+                fallback=graph_result.blocked,
+                latency_ms=round((time.perf_counter() - t0) * 1000, 3),
+            )
+
+            # Output guardrails
+            if _GUARDRAILS_AVAILABLE:
+                try:
+                    grounding_result = verify_grounding(response.message, response.citations)
+                    if grounding_result.verdict == "flagged":
+                        response.guardrail_status = "output_flagged"
+                        response.guardrail_reason = grounding_result.reason
+                        logger.warning(
+                            "guardrail.output_flagged_endpoint",
+                            session_id=body.session_id,
+                            reason=grounding_result.reason,
+                            pipeline="ham_ninh_graph",
+                        )
+                    else:
+                        response.guardrail_status = "pass"
+                except Exception as exc:
+                    logger.warning(
+                        "guardrail.degraded",
+                        session_id=body.session_id,
+                        error=str(exc),
+                        reason="grounding_check_crash",
+                    )
+
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info(
+                "chat.response",
+                session_id=body.session_id,
+                intent=response.intent,
+                latency_ms=response.latency_ms,
+                total_ms=round(elapsed, 3),
+                has_citations=len(response.citations) > 0,
+                pipeline="ham_ninh_graph",
+                blocked=graph_result.blocked,
+            )
+            return response
+
+        except Exception as exc:
+            logger.error(
+                "chat.ham_ninh_graph_error",
+                session_id=body.session_id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                fallback="agent_service",
+            )
+            # Fall through to AgentService fallback
+
+    # --- Fallback to AgentService ---
     if hasattr(agent_service, "_llm_service"):
         agent_service._llm_service = getattr(request.app.state, "llm_service", None)
 
@@ -182,6 +280,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         has_citations=len(response.citations) > 0,
         checkpoint_mode=getattr(agent_service, "checkpoint_mode", None),
         fallback=response.fallback,
+        pipeline="agent_service",
     )
 
     return response
@@ -232,21 +331,63 @@ async def chat_stream(
             # Fail-open: continue to stream
 
     agent_service = getattr(request.app.state, "agent_service", None)
+    ham_ninh_graph = getattr(request.app.state, "ham_ninh_graph", None)
+
+    # Check if HamNinhGraph can handle this request (preferred path)
+    use_ham_ninh_graph = (
+        _HAM_NINH_GRAPH_AVAILABLE
+        and ham_ninh_graph is not None
+    )
+
     can_answer_without_corpus = bool(
         agent_service is not None
         and hasattr(agent_service, "can_answer_without_corpus")
         and agent_service.can_answer_without_corpus(query)
     )
-    if not _agent_service_available(request) and not can_answer_without_corpus:
+    if not use_ham_ninh_graph and not _agent_service_available(request) and not can_answer_without_corpus:
         logger.error("sse.stream_error", reason="service_unavailable", session_id=sid)
         return _error_stream("service_unavailable")
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        # --- Route through HamNinhGraph if available (S01 StateGraph pipeline) ---
+        if use_ham_ninh_graph:
+            logger.info(
+                "sse.stream_start",
+                language=language,
+                session_id=sid,
+                pipeline="ham_ninh_graph",
+            )
+            try:
+                async for sse_marker in ham_ninh_graph.stream_sse(
+                    session_id=sid,
+                    message=query,
+                    language=language,
+                ):
+                    yield _sse_payload(sse_marker)
+
+                logger.info("sse.stream_complete", session_id=sid, pipeline="ham_ninh_graph")
+                yield _sse_payload("[DONE]")
+                return
+
+            except Exception as exc:
+                reason = type(exc).__name__
+                logger.error(
+                    "sse.stream_error",
+                    error=str(exc),
+                    reason=reason,
+                    session_id=sid,
+                    pipeline="ham_ninh_graph",
+                    fallback="agent_service",
+                )
+                # Fall through to AgentService fallback
+
+        # --- Fallback to AgentService ---
         logger.info(
             "sse.stream_start",
             language=language,
             session_id=sid,
             checkpoint_mode=getattr(agent_service, "checkpoint_mode", None),
+            pipeline="agent_service",
         )
         try:
             async for event in agent_service.answer_stream(
@@ -281,7 +422,7 @@ async def chat_stream(
                     error=str(exc),
                 )
 
-        logger.info("sse.stream_complete", session_id=sid)
+        logger.info("sse.stream_complete", session_id=sid, pipeline="agent_service")
         yield _sse_payload("[DONE]")
 
     return _streaming_response(event_generator())
