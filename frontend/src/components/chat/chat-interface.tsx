@@ -33,6 +33,7 @@ interface Message {
   streamStatus?: ChatStreamStatus | null;
   /** Bounded history of operational phases seen during streaming. */
   statusHistory?: ChatStreamStatus[];
+  reasoningLog?: string | null;
 }
 
 interface ChatInterfaceProps {
@@ -78,8 +79,14 @@ const SOURCE_LABELS = {
   en: { one: "source", many: "sources", searching: "working", inputHint: "Enter to send • Shift+Enter for newline", scroll: "Jump to latest", retrying: "Retrying..." },
 } as const;
 
-const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
+const STATUS_LABELS: Record<"vi" | "en", Record<string, string>> = {
   vi: {
+    validating: "Bảo mật & An toàn",
+    routing: "Phân tích yêu cầu",
+    dispatching: "Tối ưu hóa công bằng",
+    "processing:rag": "Truy xuất kiến thức",
+    "processing:maps": "Tra cứu bản đồ địa điểm",
+    verifying: "Xác thực phản hồi",
     understanding: "Đang hiểu câu hỏi...",
     using_history: "Đang dùng ngữ cảnh cuộc trò chuyện...",
     input_flagged: "Câu hỏi hơi mơ hồ, mình sẽ xử lý thận trọng...",
@@ -88,6 +95,12 @@ const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
     composing: "Đang tổng hợp câu trả lời...",
   },
   en: {
+    validating: "Safety & Security",
+    routing: "Request Analysis",
+    dispatching: "Fairness Optimization",
+    "processing:rag": "Knowledge Retrieval",
+    "processing:maps": "Map & Place Lookup",
+    verifying: "Response Verification",
     understanding: "Understanding your question...",
     using_history: "Using conversation context...",
     input_flagged: "The question is ambiguous, handling carefully...",
@@ -243,8 +256,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         content: "",
         citations: [],
         status: "submitted",
-        streamStatus: "understanding",
-        statusHistory: ["understanding"],
+        streamStatus: "validating",
+        statusHistory: ["validating"],
       };
       setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
       setInput("");
@@ -270,6 +283,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           citations: response.citations ?? [],
           places: response.places ?? [],
           suggestions: response.suggestions ?? [],
+          reasoningLog: response.reasoning_log,
           guardrailStatus: response.guardrail_status,
           fallback: response.fallback,
           langfuseTraceId: response.langfuse_trace_id,
@@ -278,7 +292,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           streamStatus: null,
           statusHistory: message.statusHistory && message.statusHistory.length > 0
             ? message.statusHistory
-            : ["composing"],
+            : ["verifying"],
         }));
       };
 
@@ -321,6 +335,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onCitations: (citations) => updateLastAssistant((message) => ({ ...message, citations })),
           onPlaces: (places) => updateLastAssistant((message) => ({ ...message, places })),
           onSuggestions: (suggestions) => updateLastAssistant((message) => ({ ...message, suggestions })),
+          onReasoning: (reasoningLog) => updateLastAssistant((message) => ({ ...message, reasoningLog })),
           onInterrupt: async (interruptData) => {
             // LangGraph interrupt detected - backend needs user input
             console.log('Interrupt received:', interruptData);
@@ -710,6 +725,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               messageId={msg.role === "assistant" ? `msg-${sessionId}-${i}` : undefined}
               sessionId={msg.role === "assistant" ? sessionId : undefined}
               turnIndex={msg.role === "assistant" ? i : undefined}
+              reasoningLog={msg.reasoningLog}
+              locale={locale}
+              streamStatus={msg.streamStatus}
             />
           ))}
 
@@ -787,33 +805,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       {/* Sticky bottom composer — mobile-first with safe-area padding */}
       <footer className="relative z-10 shrink-0 border-t border-[#e9e9e7] bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:px-8">
         <div className="mx-auto max-w-4xl">
-          {/* Filter chips */}
-          <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
-            <button
-              type="button"
-              onClick={() => setBudgetFilter((prev) => (prev === "moderate" ? null : "moderate"))}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                budgetFilter === "moderate"
-                  ? "bg-[#0b5f63] text-white"
-                  : "bg-[#0b5f63]/10 text-[#0b5f63]"
-              }`}
-              aria-pressed={budgetFilter === "moderate"}
-            >
-              {language === "vi" ? "Vừa túi tiền" : "Budget-friendly"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAccessibilityRequired((prev) => !prev)}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                accessibilityRequired
-                  ? "bg-[#0b5f63] text-white"
-                  : "bg-[#0b5f63]/10 text-[#0b5f63]"
-              }`}
-              aria-pressed={accessibilityRequired}
-            >
-              {language === "vi" ? "Dễ tiếp cận" : "Accessible"}
-            </button>
-          </div>
+          {/* Header row for mobile controls and input hint */}
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
               <button
@@ -839,7 +831,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             </div>
             <span className="hidden sm:inline">{labels.inputHint}</span>
           </div>
-          <div className="flex items-end gap-1.5 rounded-2xl border border-[#e9e9e7] bg-white p-1.5 shadow-sm focus-within:border-[#2383e2] focus-within:ring-2 focus-within:ring-[#2383e2]/10 sm:gap-2 sm:p-2">
+
+          {/* Premium consolidated input area */}
+          <div className="flex flex-col rounded-2xl border border-[#e9e9e7] bg-white p-2.5 shadow-sm focus-within:border-[#0b5f63] focus-within:ring-2 focus-within:ring-[#0b5f63]/10">
+            {/* Top row: text editor */}
             <textarea
               ref={textareaRef}
               value={input}
@@ -848,32 +843,87 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               placeholder={translations.placeholder}
               disabled={loading}
               rows={1}
-              className="max-h-36 min-h-10 flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#37352f] placeholder:text-[#91918e] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:px-3 sm:py-2.5"
+              className="max-h-36 min-h-10 w-full resize-none border-0 bg-transparent px-3 py-1.5 text-sm leading-6 text-[#37352f] placeholder:text-[#91918e] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:px-3"
               aria-label={translations.placeholder}
             />
-            {messages.length > 0 && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-xl text-[#787774] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
-                onClick={handleClearConversation}
-                disabled={loading}
-                aria-label={translations.newConversation ?? "New conversation"}
-                title={translations.newConversation ?? "New conversation"}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-            <Button
-              onClick={() => handleSubmit()}
-              disabled={loading || !input.trim()}
-              size="icon"
-              className="h-10 w-10 shrink-0 rounded-xl bg-[#2383e2] shadow-sm hover:bg-[#1d6dc3] sm:h-11 sm:w-11"
-              aria-label={translations.send}
-              title={translations.send}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-            </Button>
+
+            {/* Bottom row: Filter selectors and action buttons */}
+            <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2 px-1">
+              {/* Left: Toggles & Filters */}
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                {/* Budget selection dropdown styled as a premium button */}
+                <div className="relative inline-flex items-center">
+                  <select
+                    value={budgetFilter || ""}
+                    onChange={(e) => setBudgetFilter(e.target.value || null)}
+                    disabled={loading}
+                    className="appearance-none rounded-full border border-slate-200/80 bg-slate-50/50 hover:bg-slate-50 py-1 pl-7 pr-4 text-xs font-semibold text-[#0b5f63] focus:outline-none focus:ring-1 focus:ring-[#0b5f63]/30 cursor-pointer transition-colors disabled:opacity-50"
+                  >
+                    <option value="">{language === "vi" ? "Bất kỳ ngân sách" : "Any budget"}</option>
+                    <option value="free">{language === "vi" ? "Miễn phí" : "Free"}</option>
+                    <option value="inexpensive">{language === "vi" ? "Giá rẻ" : "Inexpensive"}</option>
+                    <option value="moderate">{language === "vi" ? "Bình dân" : "Moderate"}</option>
+                    <option value="expensive">{language === "vi" ? "Sang trọng" : "Premium"}</option>
+                  </select>
+                  <div className="pointer-events-none absolute left-2.5 text-[#0b5f63] opacity-85">
+                    <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect width="20" height="14" x="2" y="5" rx="2" />
+                      <line x1="2" x2="22" y1="10" y2="10" />
+                    </svg>
+                  </div>
+                </div>
+
+                {/* Accessibility Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setAccessibilityRequired((prev) => !prev)}
+                  disabled={loading}
+                  className={`inline-flex items-center gap-1.5 rounded-full border py-1 px-3 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                    accessibilityRequired
+                      ? "bg-[#0b5f63]/10 border-[#0b5f63]/25 text-[#0b5f63] hover:bg-[#0b5f63]/15"
+                      : "bg-slate-50/50 border-slate-200/80 text-slate-500 hover:bg-slate-50"
+                  }`}
+                  title={language === "vi" ? "Ưu tiên lối đi xe lăn" : "Prefer wheelchair access"}
+                >
+                  <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="16" cy="4" r="1" />
+                    <path d="m18 19 1-7-6 1" />
+                    <path d="m5 8 3-3 5.5 2-2.36 4.57-3.64-1.31" />
+                    <path d="M12 8v5" />
+                    <path d="M9.5 13.5h2.5" />
+                    <path d="M14 19a5 5 0 0 1-5-5H7a7 7 0 0 0 7 7Z" />
+                  </svg>
+                  <span>{language === "vi" ? "Tiếp cận xe lăn" : "Wheelchair access"}</span>
+                </button>
+              </div>
+
+              {/* Right: Reset and Send */}
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                {messages.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    onClick={handleClearConversation}
+                    disabled={loading}
+                    aria-label={translations.newConversation ?? "New conversation"}
+                    title={translations.newConversation ?? "New conversation"}
+                  >
+                    <Trash2 className="h-4.5 w-4.5" />
+                  </Button>
+                )}
+                <Button
+                  onClick={() => handleSubmit()}
+                  disabled={loading || !input.trim()}
+                  size="icon"
+                  className="h-8 w-8 rounded-lg bg-[#0b5f63] text-white shadow-sm hover:bg-[#084d50] disabled:opacity-40"
+                  aria-label={translations.send}
+                  title={translations.send}
+                >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </footer>

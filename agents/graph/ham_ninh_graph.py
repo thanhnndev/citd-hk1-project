@@ -22,6 +22,7 @@ TimeoutPolicy:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Literal
@@ -121,27 +122,54 @@ def _wrap_with_timeout(node_fn, node_name: str, timeout_seconds: int):
     Returns:
         Wrapped async function with the same signature as node_fn.
     """
-    async def wrapper(state: AgentState) -> dict[str, Any]:
-        try:
-            return await asyncio.wait_for(node_fn(state), timeout=timeout_seconds)
-        except asyncio.TimeoutError:
-            logger.error(
-                "graph.timeout",
-                node_name=node_name,
-                timeout_seconds=timeout_seconds,
-            )
-            raise NodeTimeoutError(node_name, timeout_seconds)
-        except Exception as exc:
-            # Re-raise non-timeout exceptions with context
-            logger.error(
-                "graph.node_error",
-                node_name=node_name,
-                error_type=type(exc).__name__,
-                error=str(exc),
-            )
-            raise
+    import functools
+    sig = inspect.signature(node_fn)
+    params = list(sig.parameters.values())
 
-    return wrapper
+    if len(params) >= 2:
+        @functools.wraps(node_fn)
+        async def wrapper_with_config(state: AgentState, config: Any) -> dict[str, Any]:
+            try:
+                return await asyncio.wait_for(node_fn(state, config), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "graph.timeout",
+                    node_name=node_name,
+                    timeout_seconds=timeout_seconds,
+                )
+                raise NodeTimeoutError(node_name, timeout_seconds)
+            except Exception as exc:
+                # Re-raise non-timeout exceptions with context
+                logger.error(
+                    "graph.node_error",
+                    node_name=node_name,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise
+        return wrapper_with_config
+    else:
+        @functools.wraps(node_fn)
+        async def wrapper(state: AgentState) -> dict[str, Any]:
+            try:
+                return await asyncio.wait_for(node_fn(state), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "graph.timeout",
+                    node_name=node_name,
+                    timeout_seconds=timeout_seconds,
+                )
+                raise NodeTimeoutError(node_name, timeout_seconds)
+            except Exception as exc:
+                # Re-raise non-timeout exceptions with context
+                logger.error(
+                    "graph.node_error",
+                    node_name=node_name,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise
+        return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -410,8 +438,15 @@ class HamNinhGraph:
             "accessibility_required": accessibility_required,
         }
 
-        # Config with thread_id for checkpointing
-        config = {"configurable": {"thread_id": session_id}}
+        # Config with thread_id for checkpointing and static parameters
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "user_location": user_location,
+                "budget_filter": budget_filter,
+                "accessibility_required": accessibility_required,
+            }
+        }
 
         # Add Langfuse CallbackHandler if client is present
         trace_id = None
@@ -589,8 +624,15 @@ class HamNinhGraph:
             "accessibility_required": accessibility_required,
         }
 
-        # Config with thread_id for checkpointing
-        config = {"configurable": {"thread_id": session_id}}
+        # Config with thread_id for checkpointing and static parameters
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "user_location": user_location,
+                "budget_filter": budget_filter,
+                "accessibility_required": accessibility_required,
+            }
+        }
 
         # Stream with updates + custom modes for full observability
         adapter = StreamingAdapter()

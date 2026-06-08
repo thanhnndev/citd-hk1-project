@@ -1,10 +1,8 @@
-"use client";
-
 import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { PlaceCard } from "./place-card";
 import { MessageActions } from "./message-actions";
-import { AccessibilityBadge } from "@/components/reasoning/accessibility-badge";
+import { ReasoningLog } from "@/components/reasoning/reasoning-log";
 import {
   Bot,
   CheckCircle2,
@@ -119,6 +117,9 @@ interface MessageBubbleProps {
   sessionId?: string;
   /** Turn index in conversation. */
   turnIndex?: number;
+  reasoningLog?: string | null;
+  locale?: string;
+  streamStatus?: ChatStreamStatus | null;
 }
 
 export function MessageBubble({
@@ -146,6 +147,9 @@ export function MessageBubble({
   messageId,
   sessionId,
   turnIndex,
+  reasoningLog,
+  locale,
+  streamStatus,
 }: MessageBubbleProps) {
   const isUser = role === "user";
   const isPending = !content;
@@ -368,16 +372,7 @@ export function MessageBubble({
             </div>
           )}
 
-          {/* Guardrail/fallback/trace badges */}
-          {!isUser &&
-            (guardrailStatus || fallback || langfuseTraceId || cacheHit) && (
-              <AccessibilityBadge
-                guardrailStatus={guardrailStatus}
-                fallback={fallback}
-                langfuseTraceId={langfuseTraceId}
-                cacheHit={cacheHit}
-              />
-            )}
+          {/* Technical badges removed for end-user view */}
         </div>
 
         {!isUser && status === "complete" && (hasSources || (places && places.length > 0)) && (
@@ -405,42 +400,102 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* Thinking timeline — useful while waiting, hidden after completion for end users. */}
-        {!isUser && isStreaming && hasStatusHistory && streamStatusLabels && (
-          <div
-            className={`mt-2 rounded-xl border px-2.5 py-1.5 text-[0.6rem] transition-colors sm:px-3 sm:py-2 ${
-              isStreaming
-                ? "border-[#0b5f63]/15 bg-[#0b5f63]/5 text-[#4d6868]"
-                : "border-slate-200/60 bg-white/50 text-[#6b7f7e]"
-            }`}
-            aria-label="Processing steps"
-          >
-            <div className="flex items-center gap-1.5">
-              {isStreaming && (
-                <Loader2 className="size-2.5 animate-spin shrink-0" />
-              )}
-              <span className="font-semibold uppercase tracking-wider opacity-70">
-                {isStreaming ? "Processing" : "Completed via"}
+        {/* 5-axis Responsible AI Streaming Timeline Stepper */}
+        {!isUser && isStreaming && (
+          <div className="mt-3 w-full rounded-2xl border border-slate-100 bg-slate-50/50 p-4 shadow-inner">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-500 mb-3 px-1">
+              <span className="flex items-center gap-1.5">
+                <Loader2 className="size-3.5 animate-spin text-[#0b5f63]" />
+                <span>{locale === "en" ? "AI processing across 5 responsible axes..." : "Hệ thống AI đang xử lý theo 5 trục có trách nhiệm..."}</span>
               </span>
             </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5">
-              {statusHistory.map((s, i) => (
-                <span
-                  key={`${s}-${i}`}
-                  className="inline-flex items-center gap-1"
-                >
-                  {i > 0 && <ArrowRight className="size-2 opacity-40" />}
-                  <span>
-                    {streamStatusLabels[s]?.replace(/\.\.\.$/, "") ?? s}
-                  </span>
-                </span>
-              ))}
+            <div className="relative flex items-center justify-between">
+              {/* Background progress line */}
+              <div className="absolute left-0 right-0 top-3 h-0.5 bg-slate-200" aria-hidden="true" />
+              
+              {[
+                { key: "validating", labelVi: "An toàn", labelEn: "Safety" },
+                { key: "routing", labelVi: "Định tuyến", labelEn: "Routing" },
+                { key: "dispatching", labelVi: "Công bằng", labelEn: "Fairness" },
+                { key: "processing", labelVi: "Truy xuất", labelEn: "Retrieval" },
+                { key: "verifying", labelVi: "Đối chiếu", labelEn: "Verification" },
+              ].map((step, idx) => {
+                const getStepState = (stepIndex: number, current: string | null | undefined, history: ChatStreamStatus[] | undefined) => {
+                  const statuses = ["validating", "routing", "dispatching", "processing", "verifying"];
+                  const currentNormalized = current?.startsWith("processing:") ? "processing" : current?.split(":")[0];
+                  const historyNormalized = (history || []).map(h => h.startsWith("processing:") ? "processing" : h.split(":")[0]);
+                  
+                  const targetStatus = statuses[stepIndex];
+                  
+                  if (currentNormalized === targetStatus) {
+                    return "active";
+                  }
+                  
+                  const targetIndexInHistory = historyNormalized.indexOf(targetStatus);
+                  if (targetIndexInHistory !== -1) {
+                    return "completed";
+                  }
+                  
+                  const subsequentStatuses = statuses.slice(stepIndex + 1);
+                  const hasSeenSubsequent = subsequentStatuses.some(s => historyNormalized.includes(s));
+                  if (hasSeenSubsequent) {
+                    return "completed";
+                  }
+                  
+                  return "pending";
+                };
+
+                const state = getStepState(idx, streamStatus, statusHistory);
+                
+                let dotClass = "";
+                let icon = null;
+                let labelClass = "text-[10px] sm:text-xs mt-1.5 font-medium ";
+                
+                if (state === "completed") {
+                  dotClass = "bg-emerald-500 text-white ring-4 ring-emerald-500/10";
+                  icon = (
+                    <svg className="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  );
+                  labelClass += "text-emerald-600 font-semibold";
+                } else if (state === "active") {
+                  dotClass = "bg-[#0b5f63] text-white ring-4 ring-[#0b5f63]/20 animate-pulse";
+                  icon = (
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                    </span>
+                  );
+                  labelClass += "text-[#0b5f63] font-bold";
+                } else {
+                  dotClass = "bg-white border-2 border-slate-300 text-slate-400";
+                  icon = <span className="text-[10px] font-bold">{idx + 1}</span>;
+                  labelClass += "text-slate-400";
+                }
+                
+                return (
+                  <div key={step.key} className="relative z-10 flex flex-col items-center flex-1">
+                    <div className={`flex size-6 sm:size-7 items-center justify-center rounded-full transition-all duration-300 ${dotClass}`}>
+                      {icon}
+                    </div>
+                    <span className={labelClass}>
+                      {locale === "en" ? step.labelEn : step.labelVi}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-            {postResponseSummary && (
-              <div className="mt-1.5 border-t border-current/10 pt-1.5 text-[0.55rem] opacity-70">
-                {postResponseSummary}
-              </div>
-            )}
+          </div>
+        )}
+
+        {/* Reasoning log / Explainability for completed assistant responses */}
+        {!isUser && status === "complete" && reasoningLog && (
+          <div className="w-full max-w-none">
+            <ReasoningLog
+              reasoningLog={reasoningLog}
+              locale={locale}
+            />
           </div>
         )}
 

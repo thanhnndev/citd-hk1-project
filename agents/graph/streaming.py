@@ -216,7 +216,7 @@ class StreamingAdapter:
             yield f"[INTERRUPT] {json.dumps(data, ensure_ascii=False)}"
 
     async def _emit_final_markers(self) -> AsyncGenerator[str, None]:
-        """Emit response_text (if not already streamed), [PLACES], [CITATIONS], [SUGGESTIONS] from final state."""
+        """Emit response_text (if not already streamed), [PLACES], [CITATIONS], [SUGGESTIONS], [REASONING] from final state."""
         state = self._last_state_update
         
         # Response text — safety net for nodes that didn't emit inline
@@ -257,6 +257,11 @@ class StreamingAdapter:
         suggestions = state.get("suggestions")
         if suggestions:
             yield f"[SUGGESTIONS] {json.dumps(suggestions, ensure_ascii=False)}"
+
+        # Reasoning Log
+        reasoning_log = state.get("reasoning_log")
+        if reasoning_log:
+            yield f"[REASONING] {reasoning_log}"
 
 
 # ---------------------------------------------------------------------------

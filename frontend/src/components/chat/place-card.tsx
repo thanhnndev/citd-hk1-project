@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ExternalLink, MapPin, Star, ChevronDown, ChevronUp, Navigation, Baby, Trees, Utensils } from "lucide-react";
 import type { PlaceResult } from "@/lib/chat-api";
+import { ScoreBreakdownCard } from "./score-breakdown-card";
 
 export interface PlaceCardTranslations {
   viewOnMap: string;
@@ -164,8 +165,18 @@ export function PlaceCard({ place, rank, variant = "default", translations }: Pl
             {place.explanation?.detail_highlights?.slice(0, 2).map((item) => (
               <p key={item}>{cleanReason(item, item)}</p>
             ))}
+            {place.score_breakdown && (
+              <div className="mt-3 text-slate-800">
+                <ScoreBreakdownCard
+                  breakdown={place.score_breakdown}
+                  displayName={place.display_name}
+                  rank={rank}
+                  locale={isVi ? "vi" : "en"}
+                />
+              </div>
+            )}
             <p className="text-[0.68rem] opacity-75">
-              {isVi ? "Điểm và nguồn dữ liệu được dùng để sắp xếp, nhưng đã ẩn chi tiết kỹ thuật để dễ chọn." : "Scores and provider data help ranking, but technical details are hidden to keep choices readable."}
+              {isVi ? "Nguồn dữ liệu và phân tích điểm số tự động giúp xếp hạng công bằng." : "Scores and data help rank fairly under Responsible AI guidelines."}
             </p>
           </div>
         )}

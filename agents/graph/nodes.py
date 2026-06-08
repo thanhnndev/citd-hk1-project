@@ -42,6 +42,7 @@ from typing import Any
 
 import structlog
 from langgraph.types import interrupt
+from langchain_core.runnables import RunnableConfig
 
 from agents.graph.state import (
     AgentState,
@@ -1248,7 +1249,7 @@ async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def maps_agent_node(state: AgentState) -> dict[str, Any]:
+async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> dict[str, Any]:
     """Maps agent node: call PlaceRecommendationService for place recommendations.
 
     Calls the injected PlaceRecommendationService to retrieve fairness-ranked
@@ -1268,11 +1269,18 @@ async def maps_agent_node(state: AgentState) -> dict[str, Any]:
     t0 = time.perf_counter()
     session_id = state.get("session_id", "")
     message = state.get("resolved_query") or state.get("message", "")
-    user_location = state.get("user_location")
     language = state.get("language", "vi")
     needs_location = state.get("needs_location", False)
-    budget_filter = state.get("budget_filter", None)
-    accessibility_required = state.get("accessibility_required", True)
+
+    # Best practice: Retrieve static configuration parameters from RunnableConfig if available,
+    # falling back to AgentState for backward compatibility.
+    configurable = config.get("configurable", {}) if config else {}
+    user_location = configurable.get("user_location") or state.get("user_location")
+    budget_filter = configurable.get("budget_filter") or state.get("budget_filter")
+    if "accessibility_required" in configurable:
+        accessibility_required = configurable["accessibility_required"]
+    else:
+        accessibility_required = state.get("accessibility_required", True)
 
     logger.info(
         "graph.node_enter",

@@ -120,6 +120,12 @@ export interface ChatResponse {
 }
 
 export type ChatStreamStatus =
+  | "validating"
+  | "routing"
+  | "dispatching"
+  | "processing:rag"
+  | "processing:maps"
+  | "verifying"
   | "understanding"
   | "using_history"
   | "input_flagged"
@@ -155,6 +161,7 @@ export interface StreamChatCallbacks {
   onDone: () => void;
   onOpen?: () => void;
   onError: (error: string) => void;
+  onReasoning?: (reasoning: string) => void;
 }
 
 export interface InterruptData {
@@ -314,7 +321,14 @@ export async function streamChat(
       }
 
       if (data.startsWith("[STATUS] ")) {
-        callbacks.onStatus?.(data.slice(9) as ChatStreamStatus);
+        const rawStatus = data.slice(9);
+        let statusKey = rawStatus;
+        if (rawStatus.startsWith("routing:")) {
+          statusKey = "routing";
+        } else if (rawStatus.startsWith("dispatching:")) {
+          statusKey = "dispatching";
+        }
+        callbacks.onStatus?.(statusKey as ChatStreamStatus);
         continue;
       }
 
@@ -345,6 +359,10 @@ export async function streamChat(
           callbacks.onError("Invalid suggestions payload");
           return;
         }
+        continue;
+      }
+      if (data.startsWith("[REASONING] ")) {
+        callbacks.onReasoning?.(data.slice(12));
         continue;
       }
 
