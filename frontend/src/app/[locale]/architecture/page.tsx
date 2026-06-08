@@ -403,13 +403,29 @@ export default async function ArchitecturePage({ params }: Props) {
 
   return (
     <div className="min-h-screen bg-[#f9f9ff] text-[#001b3c]">
-      <section id="architecture-hero" className="px-4 pb-[76px] pt-[86px] sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-[960px]">
-          <div className="mx-auto max-w-[640px] text-center">
-            <h1 className="text-[56px] font-black leading-[1.04] tracking-[-0.06em] text-[#001b3c] sm:text-[78px]">
+      <section
+        id="architecture-hero"
+        className="px-4 sm:px-6 lg:px-8"
+        style={{ paddingBottom: 72, paddingTop: 92 }}
+      >
+        <div className="mx-auto" style={{ maxWidth: 960 }}>
+          <div className="mx-auto text-center" style={{ maxWidth: 760 }}>
+            <h1
+              className="font-black text-[#001b3c]"
+              style={{
+                fontFamily: '"Be Vietnam Pro", Arial, sans-serif',
+                fontSize: 'clamp(42px, 4vw, 58px)',
+                fontWeight: 800,
+                letterSpacing: '-0.025em',
+                lineHeight: 1.08,
+              }}
+            >
               {copy.heroTitle}
             </h1>
-            <p className="mx-auto mt-10 max-w-[760px] text-xl font-medium leading-9 text-[#404850]">
+            <p
+              className="mx-auto mt-5 font-medium text-[#001b3c]"
+              style={{ fontSize: 16, lineHeight: '28px', maxWidth: 610 }}
+            >
               {copy.heroDescription}
             </p>
           </div>
