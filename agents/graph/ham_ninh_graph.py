@@ -54,6 +54,11 @@ from agents.graph.nodes import (
 )
 
 try:
+    from langfuse import Langfuse
+except Exception:  # pragma: no cover - optional runtime dependency
+    Langfuse = None
+
+try:
     from langgraph.graph import END, START, StateGraph
     from langgraph.checkpoint.memory import MemorySaver
 except Exception:  # pragma: no cover - optional runtime dependency
@@ -425,16 +430,19 @@ class HamNinhGraph:
 
         # Add Langfuse CallbackHandler if client is present
         langfuse_handler = None
-        if self._langfuse_client is not None:
+        trace_id = None
+        if self._langfuse_client is not None and Langfuse is not None:
             try:
                 from langfuse.langchain import CallbackHandler
+                # Create custom trace_id upfront (Langfuse SDK best practice)
+                trace_id = Langfuse.create_trace_id()
                 langfuse_handler = CallbackHandler(
-                    public_key=self._langfuse_client.public_key,
-                    secret_key=self._langfuse_client.secret_key,
-                    session_id=session_id,
+                    trace_context={"trace_id": trace_id},
                 )
                 config["callbacks"] = [langfuse_handler]
-                logger.debug("langfuse.callback_created", session_id=session_id)
+                # Pass session_id via metadata (Langfuse SDK requirement)
+                config["metadata"] = {"langfuse_session_id": session_id}
+                logger.debug("langfuse.callback_created", session_id=session_id, trace_id=trace_id)
             except Exception as exc:
                 logger.warning(
                     "langfuse.callback_failed",
@@ -442,23 +450,11 @@ class HamNinhGraph:
                     error=str(exc),
                 )
                 langfuse_handler = None
+                trace_id = None
 
         try:
             # Execute the graph
             final_state = await self.graph.ainvoke(state, config)
-
-            # Extract trace ID if Langfuse handler was created
-            trace_id = None
-            if langfuse_handler is not None:
-                try:
-                    trace_id = self._langfuse_client.get_current_trace_id()
-                    logger.debug("langfuse.trace_id_extracted", trace_id=trace_id)
-                except Exception as exc:
-                    logger.warning(
-                        "langfuse.trace_id_extraction_failed",
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                    )
 
             # Extract result fields
             return GraphResult(
@@ -470,7 +466,7 @@ class HamNinhGraph:
                 routing_tier=final_state.get("routing_tier"),
                 guardrail_flags=final_state.get("guardrail_flags", {}),
                 blocked=final_state.get("intent") in ("blocked", "off_topic"),
-                langfuse_trace_id=trace_id,
+                langfuse_trace_id=trace_id,  # Use the trace_id we created upfront
             )
 
         except NodeTimeoutError as exc:
@@ -554,16 +550,18 @@ class HamNinhGraph:
 
         # Add Langfuse CallbackHandler if client is present
         langfuse_handler = None
-        if self._langfuse_client is not None:
+        if self._langfuse_client is not None and Langfuse is not None:
             try:
                 from langfuse.langchain import CallbackHandler
+                # Create custom trace_id upfront (Langfuse SDK best practice)
+                trace_id = Langfuse.create_trace_id()
                 langfuse_handler = CallbackHandler(
-                    public_key=self._langfuse_client.public_key,
-                    secret_key=self._langfuse_client.secret_key,
-                    session_id=session_id,
+                    trace_context={"trace_id": trace_id},
                 )
                 config["callbacks"] = [langfuse_handler]
-                logger.debug("langfuse.callback_created_stream", session_id=session_id)
+                # Pass session_id via metadata (Langfuse SDK requirement)
+                config["metadata"] = {"langfuse_session_id": session_id}
+                logger.debug("langfuse.callback_created_stream", session_id=session_id, trace_id=trace_id)
             except Exception as exc:
                 logger.warning(
                     "langfuse.callback_failed_stream",

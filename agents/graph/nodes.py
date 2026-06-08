@@ -290,22 +290,22 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                     messages.append({"role": item["role"], "content": item["content"]})
             messages.append({"role": "user", "content": message})
 
-            completion = await client.chat.completions.create(
+            completion = await client.chat.completions.parse(
                 model=services.model,
                 messages=messages,
                 response_format=RouterOutput,
                 max_completion_tokens=128,
             )
-            raw_content = completion.choices[0].message.content or "{}"
-
-            import json as _json
-
-            parsed = _json.loads(raw_content)
-            intent_label = parsed.get("intent", "unknown")
-            confidence = float(parsed.get("confidence", 0.5))
-            is_followup = bool(parsed.get("is_followup", False))
-            needs_location = bool(parsed.get("needs_location", False))
-            routing_tier = _routing_tier_from_confidence(confidence)
+            message = completion.choices[0].message
+            if message.parsed:
+                intent_label = message.parsed.intent
+                confidence = float(message.parsed.confidence)
+                is_followup = bool(message.parsed.is_followup)
+                needs_location = bool(message.parsed.needs_location)
+                routing_tier = _routing_tier_from_confidence(confidence)
+            else:
+                # Fallback to heuristic if model refused or parsing failed
+                raise ValueError(f"LLM refused or failed to parse: {message.refusal}")
 
             elapsed = round((time.perf_counter() - t0) * 1000, 3)
             logger.info(
@@ -958,7 +958,7 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
                 f"User question: {message}"
             )
 
-            completion = await client.chat.completions.create(
+            completion = await client.chat.completions.parse(
                 model=services.model,
                 messages=[
                     {"role": "system", "content": _GRADE_DOCUMENTS_SYSTEM_PROMPT},
@@ -968,11 +968,20 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
                 max_completion_tokens=32,
             )
 
-            raw_content = completion.choices[0].message.content or "{}"
-            parsed = _json.loads(raw_content)
-            binary_score = parsed.get("binary_score", "yes")
-            score_value = 1.0 if binary_score == "yes" else 0.0
-            scores.append(score_value)
+            message = completion.choices[0].message
+            if message.parsed:
+                binary_score = message.parsed.binary_score
+                score_value = 1.0 if binary_score == "yes" else 0.0
+                scores.append(score_value)
+            else:
+                # Assume relevant on refusal/failure (optimistic)
+                logger.warning(
+                    "grade_documents.chunk_refused",
+                    chunk_index=i,
+                    refusal=message.refusal,
+                    session_id=session_id,
+                )
+                scores.append(1.0)
 
         except Exception as exc:
             logger.warning(
@@ -1077,7 +1086,7 @@ async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
     import json as _json
 
     try:
-        completion = await client.chat.completions.create(
+        completion = await client.chat.completions.parse(
             model=services.model,
             messages=[
                 {"role": "system", "content": _REWRITE_QUERY_SYSTEM_PROMPT},
@@ -1087,10 +1096,13 @@ async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
             max_completion_tokens=128,
         )
 
-        raw_content = completion.choices[0].message.content or "{}"
-        parsed = _json.loads(raw_content)
-        rewritten_query = parsed.get("rewritten_query", message)
-        reasoning = parsed.get("reasoning", "")
+        message_obj = completion.choices[0].message
+        if message_obj.parsed:
+            rewritten_query = message_obj.parsed.rewritten_query
+            reasoning = message_obj.parsed.reasoning
+        else:
+            # Fallback to original message if parsing failed
+            raise ValueError(f"LLM refused or failed to parse: {message_obj.refusal}")
 
         elapsed = round((time.perf_counter() - t0) * 1000, 3)
         logger.info(
