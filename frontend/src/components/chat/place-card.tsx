@@ -92,6 +92,7 @@ export function PlaceCard({ place, rank, variant = "default", translations }: Pl
     place.open_now === true ? (isVi ? "Đang mở" : "Open now") : null,
     place.rating != null && place.rating >= 4.5 ? (isVi ? "Đánh giá cao" : "Highly rated") : null,
     place.accessibility_score != null && place.accessibility_score >= 0.7 ? (isVi ? "Dễ tiếp cận" : "Accessible") : null,
+    place.price_level != null ? '₫'.repeat(place.price_level) : null,
   ].filter(Boolean) as string[];
 
   return (

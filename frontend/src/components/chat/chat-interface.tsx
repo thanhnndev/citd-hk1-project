@@ -107,6 +107,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [placesOpen, setPlacesOpen] = useState(false);
+  const [budgetFilter, setBudgetFilter] = useState<string | null>(null);
+  const [accessibilityRequired, setAccessibilityRequired] = useState<boolean>(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -217,7 +219,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       const renderPostFallback = async () => {
         updateLastAssistant((message) => ({ ...message, status: "submitted" }));
-        const response: ChatResponse = await sendChat(messageText, sessionId, language);
+        const response: ChatResponse = await sendChat(messageText, sessionId, language, budgetFilter, accessibilityRequired);
         const displayText = response.message?.trim() ? response.message : translations.noEvidence;
 
         updateLastAssistant((message) => ({
@@ -266,7 +268,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             streamFailed = true;
             streamErrorMessage = err;
           },
-        });
+        }, budgetFilter, accessibilityRequired);
 
         if (streamFailed) {
           try {
@@ -284,7 +286,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         setLoading(false);
       }
     },
-    [input, loading, sessionId, language, translations, updateLastAssistant],
+    [input, loading, sessionId, language, translations, updateLastAssistant, budgetFilter, accessibilityRequired],
   );
 
   const handleRetry = useCallback(() => {
@@ -666,6 +668,33 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       {/* Sticky bottom composer — mobile-first with safe-area padding */}
       <footer className="relative z-10 shrink-0 border-t border-[#e9e9e7] bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:px-8">
         <div className="mx-auto max-w-4xl">
+          {/* Filter chips */}
+          <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+            <button
+              type="button"
+              onClick={() => setBudgetFilter((prev) => (prev === "moderate" ? null : "moderate"))}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                budgetFilter === "moderate"
+                  ? "bg-[#0b5f63] text-white"
+                  : "bg-[#0b5f63]/10 text-[#0b5f63]"
+              }`}
+              aria-pressed={budgetFilter === "moderate"}
+            >
+              {language === "vi" ? "Vừa túi tiền" : "Budget-friendly"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccessibilityRequired((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                accessibilityRequired
+                  ? "bg-[#0b5f63] text-white"
+                  : "bg-[#0b5f63]/10 text-[#0b5f63]"
+              }`}
+              aria-pressed={accessibilityRequired}
+            >
+              {language === "vi" ? "Dễ tiếp cận" : "Accessible"}
+            </button>
+          </div>
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
               <button
