@@ -80,6 +80,98 @@
     }
   },
   "Landing": {
+    "homepage": {
+      "hero": {
+        "eyebrow": "AI Travel Assistant",
+        "titleStart": "Khám phá Hàm Ninh",
+        "titleHighlight": "thông minh hơn",
+        "titleEnd": "với AI",
+        "description": "Lên kế hoạch khám phá cá nhân hóa, tìm hiểu văn hóa địa phương và nhận gợi ý đáng tin cậy từ trợ lý AI am hiểu làng chài Hàm Ninh.",
+        "exampleLabel": "Đang trực tuyến",
+        "exampleQuestion": "Hỏi ví dụ: Hải sản Hàm Ninh có gì đặc biệt?",
+        "suggestions": [
+          "Thưởng thức ghẹ Hàm Ninh",
+          "Ngắm bình minh cầu cảng",
+          "Khám phá làng chài"
+        ],
+        "primaryCta": "Bắt đầu trò chuyện",
+        "secondaryCta": "Xem kiến trúc AI",
+        "freeNote": "Miễn phí · Có nguồn tham khảo · Hỗ trợ hai ngôn ngữ",
+        "realtimeLabel": "Cập nhật",
+        "realtimeValue": "Theo ngữ cảnh",
+        "placesValue": "20+",
+        "placesLabel": "Điểm khám phá",
+        "trustLabel": "Nguồn rõ ràng"
+      },
+      "stats": [
+        {
+          "label": "Ẩm thực",
+          "value": "20+ địa điểm"
+        },
+        {
+          "label": "Trải nghiệm",
+          "value": "15+ gợi ý"
+        },
+        {
+          "label": "Tri thức",
+          "value": "RAG có trích dẫn"
+        },
+        {
+          "label": "Trạng thái",
+          "value": "Hỗ trợ 24/7"
+        }
+      ],
+      "benefits": {
+        "heading": "Tại sao chọn Hàm Ninh Guide AI?",
+        "items": [
+          {
+            "title": "Tư vấn thông minh",
+            "description": "Trợ lý hiểu câu hỏi tự nhiên và kết hợp dữ liệu văn hóa, địa điểm để đưa ra gợi ý phù hợp."
+          },
+          {
+            "title": "Tri thức địa phương",
+            "description": "Khám phá ẩm thực, lịch sử và đời sống làng chài qua thông tin có nguồn tham khảo rõ ràng."
+          },
+          {
+            "title": "Phản hồi tức thì",
+            "description": "Nhận câu trả lời nhanh bằng tiếng Việt hoặc tiếng Anh, với trải nghiệm thuận tiện trên mọi thiết bị."
+          }
+        ]
+      },
+      "steps": {
+        "heading": "Chỉ 3 bước đơn giản",
+        "items": [
+          {
+            "title": "Nhập câu hỏi",
+            "description": "Hãy kể cho AI điều bạn muốn tìm hiểu hoặc khám phá tại Hàm Ninh."
+          },
+          {
+            "title": "AI phân tích",
+            "description": "Hệ thống truy xuất tri thức và dữ liệu địa điểm phù hợp với nhu cầu của bạn."
+          },
+          {
+            "title": "Tiếp tục khám phá",
+            "description": "Xem nguồn, mở bản đồ và đặt thêm câu hỏi để hoàn thiện hành trình của bạn."
+          }
+        ]
+      },
+      "cta": {
+        "heading": "Sẵn sàng khám phá Hàm Ninh?",
+        "description": "Hãy để trợ lý AI đồng hành cùng bạn trong hành trình tìm hiểu vẻ đẹp, văn hóa và cuộc sống của làng chài Hàm Ninh.",
+        "button": "Bắt đầu ngay"
+      },
+      "footer": {
+        "brand": "HN | Hàm Ninh",
+        "description": "Nền tảng khám phá làng chài Hàm Ninh ứng dụng AI có trách nhiệm và tri thức địa phương.",
+        "quickLinks": "Liên kết",
+        "support": "Hỗ trợ",
+        "privacy": "Chính sách bảo mật",
+        "terms": "Điều khoản sử dụng",
+        "contact": "Liên hệ hỗ trợ",
+        "copyright": "© 2026 Hàm Ninh AI Guide. Bảo tồn di sản, hỗ trợ du lịch bền vững.",
+        "disclaimer": "AI có thể mắc lỗi. Vui lòng kiểm tra lại thông tin quan trọng."
+      }
+    },
     "hero": {
       "eyebrow": "Du lịch bền vững cho làng chài Hàm Ninh",
       "title": "Hàm Ninh AI Guide — Bảo tồn Di sản. Hỗ trợ Du lịch. Công bằng cho Ngư dân.",
