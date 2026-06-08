@@ -1159,6 +1159,8 @@ async def maps_agent_node(state: AgentState) -> dict[str, Any]:
     user_location = state.get("user_location")
     language = state.get("language", "vi")
     needs_location = state.get("needs_location", False)
+    budget_filter = state.get("budget_filter", None)
+    accessibility_required = state.get("accessibility_required", True)
 
     logger.info(
         "graph.node_enter",
@@ -1221,6 +1223,8 @@ async def maps_agent_node(state: AgentState) -> dict[str, Any]:
             user_location=user_location,
             language=language,
             session_id=session_id,
+            budget=budget_filter,
+            accessibility=accessibility_required,
         )
 
         # Convert PlaceResult Pydantic models to dicts for AgentState

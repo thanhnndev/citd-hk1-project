@@ -356,6 +356,8 @@ class HamNinhGraph:
         language: str = "vi",
         history: list[dict[str, str]] | None = None,
         user_location: dict[str, float] | None = None,
+        budget_filter: str | None = None,
+        accessibility_required: bool = True,
     ) -> GraphResult:
         """Execute the graph and return a structured result.
 
@@ -409,6 +411,8 @@ class HamNinhGraph:
             "sort_by_nearest": False,
             "user_location": user_location,
             "blocked": False,
+            "budget_filter": budget_filter,
+            "accessibility_required": accessibility_required,
         }
 
         # Config with thread_id for checkpointing
@@ -448,6 +452,8 @@ class HamNinhGraph:
         language: str = "vi",
         history: list[dict[str, str]] | None = None,
         user_location: dict[str, float] | None = None,
+        budget_filter: str | None = None,
+        accessibility_required: bool = True,
     ) -> AsyncGenerator[str, None]:
         """Execute the graph with streaming and yield SSE markers.
 
@@ -500,6 +506,8 @@ class HamNinhGraph:
             "sort_by_nearest": False,
             "user_location": user_location,
             "blocked": False,
+            "budget_filter": budget_filter,
+            "accessibility_required": accessibility_required,
         }
 
         # Config with thread_id for checkpointing

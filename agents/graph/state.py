@@ -94,6 +94,9 @@ class AgentState(TypedDict, total=False):
     user_location: dict[str, float] | None
     # Graph flow control
     blocked: bool
+    # User preference filters (v4.3.0)
+    budget_filter: str | None
+    accessibility_required: bool
 
 
 TOOLS = [
