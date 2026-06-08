@@ -265,7 +265,7 @@ class AgentService:
         # Get or create graph instance
         graph_instance = getattr(self, "_ham_ninh_graph", None)
         if graph_instance is None:
-            graph_instance = HamNinhGraph()
+            graph_instance = HamNinhGraph(langfuse_client=self._langfuse_client)
             self._ham_ninh_graph = graph_instance
         
         # Build initial state

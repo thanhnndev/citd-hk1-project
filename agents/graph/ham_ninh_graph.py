@@ -430,6 +430,8 @@ class HamNinhGraph:
                 from langfuse.langchain import CallbackHandler
                 langfuse_handler = CallbackHandler(
                     public_key=self._langfuse_client.public_key,
+                    secret_key=self._langfuse_client.secret_key,
+                    session_id=session_id,
                 )
                 config["callbacks"] = [langfuse_handler]
                 logger.debug("langfuse.callback_created", session_id=session_id)
@@ -557,6 +559,8 @@ class HamNinhGraph:
                 from langfuse.langchain import CallbackHandler
                 langfuse_handler = CallbackHandler(
                     public_key=self._langfuse_client.public_key,
+                    secret_key=self._langfuse_client.secret_key,
+                    session_id=session_id,
                 )
                 config["callbacks"] = [langfuse_handler]
                 logger.debug("langfuse.callback_created_stream", session_id=session_id)
