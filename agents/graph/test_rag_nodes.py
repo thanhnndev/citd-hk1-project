@@ -82,9 +82,12 @@ def _make_retrieval_result(chunks: list[RAGChunk]) -> RetrievalResult:
 
 def _make_mock_completion(binary_score: str = "yes") -> MagicMock:
     """Create a mock OpenAI completion with a JSON response."""
+    from agents.graph.state import GradeDocuments
     content = json.dumps({"binary_score": binary_score})
     mock_choice = MagicMock()
     mock_choice.message.content = content
+    mock_choice.message.parsed = GradeDocuments(binary_score=binary_score)
+    mock_choice.message.refusal = None
     mock_completion = MagicMock()
     mock_completion.choices = [mock_choice]
     return mock_completion
@@ -138,9 +141,18 @@ def mock_llm_answer_service():
 
 @pytest.fixture
 def mock_llm_client():
-    """A mock OpenAI AsyncOpenAI client."""
+    """A mock OpenAI AsyncOpenAI client.
+
+    Structured-output nodes call ``chat.completions.parse(...)`` while some
+    legacy paths still call ``create(...)``. Keep both methods wired to the
+    same payload contract so tests exercise the real parsed-output shape.
+    """
     client = MagicMock()
-    client.chat.completions.create = AsyncMock()
+    completion = MagicMock()
+    completion.choices = []
+    completion_call = AsyncMock(return_value=completion)
+    client.chat.completions.create = completion_call
+    client.chat.completions.parse = completion_call
     return client
 
 
@@ -948,9 +960,12 @@ def _make_rewrite_completion(
     reasoning: str = "Added location context for better retrieval",
 ) -> MagicMock:
     """Create a mock OpenAI completion with a RewriteQuery JSON response."""
+    from agents.graph.state import RewriteQuery
     content = json.dumps({"rewritten_query": rewritten_query, "reasoning": reasoning})
     mock_choice = MagicMock()
     mock_choice.message.content = content
+    mock_choice.message.parsed = RewriteQuery(rewritten_query=rewritten_query, reasoning=reasoning)
+    mock_choice.message.refusal = None
     mock_completion = MagicMock()
     mock_completion.choices = [mock_choice]
     return mock_completion

@@ -103,15 +103,15 @@ async def test_adapter_maps_intent_router(adapter):
 
 @pytest.mark.asyncio
 async def test_adapter_maps_supervisor(adapter):
-    """Supervisor node yields [STATUS] dispatching:{routing_decision}."""
+    """Supervisor node yields [STATUS] dispatching:{next_node}."""
     async def fake_stream():
         yield {
             "type": "updates",
             "data": {
-                "supervisor": {"routing_decision": "rag_agent"}
+                "supervisor": {"next_node": "rag_agent"}
             }
         }
-    
+
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
     assert "[STATUS] dispatching:rag_agent" in events
 

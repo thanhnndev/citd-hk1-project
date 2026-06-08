@@ -245,10 +245,20 @@ def _checkpoint_history(state: AgentState) -> list[dict[str, str]]:
     raw_messages = state.get("messages") or []
     history: list[dict[str, str]] = []
     for item in raw_messages:
-        if not isinstance(item, dict):
-            continue
-        role = item.get("role")
-        content = item.get("content")
+        role = None
+        content = None
+        if isinstance(item, dict):
+            role = item.get("role")
+            content = item.get("content")
+        elif hasattr(item, "type") and hasattr(item, "content"):
+            content = item.content
+            if item.type == "human":
+                role = "user"
+            elif item.type == "ai":
+                role = "assistant"
+            else:
+                role = item.type
+        
         if role not in {"user", "assistant"} or not content:
             continue
         if role == "user" and content == current_message:

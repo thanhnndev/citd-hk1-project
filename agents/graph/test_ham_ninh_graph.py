@@ -135,23 +135,28 @@ class TestStreamingAdapter:
 
         async def mock_stream():
             yield {
-                ("updates",): {
-                    "__metadata__": {"node": "intent_router"},
-                    "intent": "conversational",
+                "type": "updates",
+                "data": {
+                    "intent_router": {
+                        "intent": "conversational",
+                        "intent_confidence": 0.95,
+                    }
                 }
             }
             yield {
-                ("updates",): {
-                    "__metadata__": {"node": "conversational"},
-                    "response_text": "Xin chào!",
+                "type": "updates",
+                "data": {
+                    "conversational": {
+                        "response_text": "Xin chào!",
+                    }
                 }
             }
 
         events = []
         async for event in adapter.adapt_stream(mock_stream()):
             events.append(event)
-        # Should have produced at least some output
-        assert isinstance(events, list)
+        assert "[STATUS] routing:conversational:0.95" in events
+        assert "Xin chào!" in events
 
 
 # ===========================================================================
