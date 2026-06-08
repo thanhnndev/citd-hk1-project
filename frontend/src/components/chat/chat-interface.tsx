@@ -127,6 +127,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [budgetFilter, setBudgetFilter] = useState<string | null>(null);
   const [accessibilityRequired, setAccessibilityRequired] = useState<boolean>(true);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [pendingLocationResolve, setPendingLocationResolve] = useState<((loc: any) => void) | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -346,7 +347,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 const position = await new Promise<GeolocationPosition>((resolve, reject) => {
                   navigator.geolocation.getCurrentPosition(resolve, reject, {
                     enableHighAccuracy: true,
-                    timeout: 10000,
+                    timeout: 5000,
                     maximumAge: 0
                   });
                 });
@@ -359,8 +360,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 console.log('Geolocation obtained:', location);
                 return location;
               } catch (error) {
-                console.warn('Geolocation request failed:', error);
-                return { denied: true };
+                console.warn('Geolocation request failed, falling back to manual selection:', error);
+                return new Promise((resolve) => {
+                  setPendingLocationResolve(() => resolve);
+                });
               }
             }
             
@@ -475,8 +478,21 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     sourcesHeading: translations.citations ?? "Sources",
   };
   const sourceCount = lastAssistant?.citations?.length ?? 0;
-  const activeStatus = lastAssistant?.streamStatus
-    ? STATUS_LABELS[language][lastAssistant.streamStatus]
+  
+  // Normalize dynamic streamStatus keys (e.g., routing:conversational -> routing)
+  const rawStatus = lastAssistant?.streamStatus;
+  const statusKey = rawStatus
+    ? rawStatus.startsWith("processing:")
+      ? rawStatus
+      : rawStatus.startsWith("routing:")
+        ? "routing"
+        : rawStatus.startsWith("dispatching:")
+          ? "dispatching"
+          : rawStatus
+    : null;
+
+  const activeStatus = statusKey
+    ? STATUS_LABELS[language][statusKey] ?? statusKey
     : loading
       ? labels.searching
       : sourceCount > 0
@@ -756,6 +772,68 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                   <RotateCcw className="h-3.5 w-3.5 mr-1" />
                   {translations.retry}
                 </Button>
+              </div>
+            </div>
+          )}
+
+          {pendingLocationResolve && (
+            <div className="my-4 rounded-xl border border-amber-200/50 bg-amber-50/50 p-4 backdrop-blur-md dark:border-amber-900/30 dark:bg-amber-950/20">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-full bg-amber-100 p-1.5 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                  <MapPinned className="size-4" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                    {language === "vi" ? "Không thể truy cập vị trí" : "Location Access Failed"}
+                  </h4>
+                  <p className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
+                    {language === "vi"
+                      ? "Chúng tôi không thể lấy vị trí hiện tại của bạn. Bạn muốn xem gợi ý theo khu vực nào ở Phú Quốc?"
+                      : "We could not access your current location. Which area would you like to explore?"}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ lat: 10.1812, lng: 104.0492 });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-white dark:bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-slate-50 transition-colors border border-slate-200"
+                    >
+                      {language === "vi" ? "Làng chài Hàm Ninh" : "Ham Ninh Village"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ lat: 10.2155, lng: 103.9607 });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-white dark:bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-slate-50 transition-colors border border-slate-200"
+                    >
+                      {language === "vi" ? "Thị trấn Dương Đông" : "Duong Dong Town"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ lat: 10.0094, lng: 104.0119 });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-white dark:bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-slate-50 transition-colors border border-slate-200"
+                    >
+                      {language === "vi" ? "Phường An Thới" : "An Thoi Ward"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ denied: true });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 px-3.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 transition-colors"
+                    >
+                      {language === "vi" ? "Bỏ qua" : "Skip"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}

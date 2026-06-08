@@ -62,6 +62,9 @@ from agents.graph.routing import (
     _get_default_suggestions,
     _messages_for_llm,
 )
+import json
+from app.models.rag import RAGChunk
+from app.models.response import Citation
 from agents.tools.retriever import citation_from_chunk
 
 logger = structlog.get_logger(__name__)
@@ -87,6 +90,8 @@ class NodeServices:
     places_service: Any = None  # PlaceRecommendationService or None
     cohere_reranker: Any = None  # CohereReranker or None (graceful degradation)
     llm_answer_service: Any = None  # LLMAnswerService or None
+    semantic_cache: Any = None  # SemanticCache or None
+    embedding_service: Any = None  # EmbeddingService or None
 
 
 _default_services = NodeServices()
@@ -489,7 +494,8 @@ async def supervisor_node(state: AgentState) -> dict[str, Any]:
             decision="end_guardrail_blocked",
             duration_ms=elapsed,
         )
-        return {"routing_tier": routing_tier, "next_node": "output_guardrails"}
+        blocked_intent = "blocked" if injection.get("verdict") == "blocked" else "off_topic"
+        return {"routing_tier": routing_tier, "next_node": "output_guardrails", "intent": blocked_intent}
 
     # --- Conversational intent → direct to conversational node ---
     if intent == "conversational":
@@ -790,6 +796,60 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
     cohere_reranker = services.cohere_reranker
     llm_answer_service = services.llm_answer_service
 
+    # Check semantic cache first
+    query_embedding = None
+    if services.semantic_cache is not None and services.embedding_service is not None:
+        try:
+            embeddings = await services.embedding_service.embed_texts([message])
+            query_embedding = embeddings[0] if embeddings else None
+            if query_embedding is not None:
+                cached = await services.semantic_cache.lookup(message, query_embedding)
+                if cached is not None:
+                    try:
+                        cache_data = json.loads(cached)
+                        cached_response = cache_data.get("response_text", "")
+                        cached_chunks_data = cache_data.get("knowledge_chunks", [])
+                        cached_citations_data = cache_data.get("citations", [])
+                        
+                        cached_chunks = [RAGChunk.model_validate(c) for c in cached_chunks_data]
+                        cached_citations = [Citation.model_validate(c) for c in cached_citations_data]
+                    except Exception:
+                        # Fallback for old simple cache entries
+                        cached_response = cached
+                        cached_chunks = [RAGChunk(
+                            chunk_id="cache_hit", source_id="semantic_cache", title="Semantic Cache Hit",
+                            url="", domain="cache", source_type="cache", reliability="low", language=language,
+                            location="", text=cached, chunk_index=0, total_chunks=1,
+                        )]
+                        cached_citations = [Citation(
+                            source="Semantic Cache Hit",
+                            url="",
+                            snippet=cached[:200]
+                        )]
+                    
+                    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+                    logger.info(
+                        "graph.node_exit",
+                        node="rag_agent",
+                        session_id=session_id,
+                        mode="semantic_cache_hit",
+                        chunk_count=len(cached_chunks),
+                        citation_count=len(cached_citations),
+                        duration_ms=elapsed,
+                    )
+                    return {
+                        "knowledge_chunks": cached_chunks,
+                        "citations": cached_citations,
+                        "response_text": cached_response,
+                        "knowledge_response_ready": True,
+                    }
+        except Exception as exc:
+            logger.warning(
+                "rag_agent.semantic_cache_failed",
+                error=str(exc),
+                session_id=session_id,
+            )
+
     # ------------------------------------------------------------------
     # Step 1: Retrieve top-10 chunks
     # ------------------------------------------------------------------
@@ -919,6 +979,35 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
                     "or places!"
                 )
             mode = "no_chunks"
+
+    # Store in semantic cache if enabled and response was successfully generated
+    if (
+        services.semantic_cache is not None
+        and services.embedding_service is not None
+        and response_text
+        and mode in ("llm", "llm_stream", "deterministic")
+    ):
+        try:
+            if query_embedding is None:
+                embeddings = await services.embedding_service.embed_texts([message])
+                query_embedding = embeddings[0] if embeddings else None
+            if query_embedding is not None:
+                cache_data = {
+                    "response_text": response_text,
+                    "knowledge_chunks": [c.model_dump() for c in chunks],
+                    "citations": [cit.model_dump() for cit in citations],
+                }
+                await services.semantic_cache.store(
+                    query=message,
+                    query_embedding=query_embedding,
+                    response=json.dumps(cache_data),
+                )
+        except Exception as exc:
+            logger.warning(
+                "rag_agent.semantic_cache_store_failed",
+                error=str(exc),
+                session_id=session_id,
+            )
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(

@@ -24,14 +24,21 @@ export interface ChatRequest {
 /* ── Response shapes (backend: ChatResponse, Citation, PlaceResult) ── */
 
 export interface ScoreBreakdown {
-  tree1_locality: number;
-  tree2_proximity: number;
-  tree3_quality: number;
-  s_bag: number;
-  delta1_fairness: number;
-  delta2_access: number;
+  relevance: number;
+  proximity: number;
+  quality: number;
+  geo_locality: number;
+  popularity_damping: number;
+  weights?: Record<string, number>;
+  gate_passed?: boolean;
   final_score: number;
   rank: number;
+  tree1_locality?: number;
+  tree2_proximity?: number;
+  tree3_quality?: number;
+  s_bag?: number;
+  delta1_fairness?: number;
+  delta2_access?: number;
 }
 
 /**

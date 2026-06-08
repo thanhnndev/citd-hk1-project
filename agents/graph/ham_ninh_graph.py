@@ -287,20 +287,12 @@ class HamNinhGraph:
             wrapped = _wrap_with_timeout(node_fn, node_name, timeout)
             builder.add_node(node_name, wrapped)
 
-        # Entry edge: START → input_guardrails
+        # Entry edges: START → input_guardrails & intent_router (Parallel Fan-out)
         builder.add_edge(START, "input_guardrails")
+        builder.add_edge(START, "intent_router")
 
-        # Conditional edge: input_guardrails → (blocked → END, else → intent_router)
-        builder.add_conditional_edges(
-            "input_guardrails",
-            self._route_after_guardrails,
-            {
-                "intent_router": "intent_router",
-                END: END,
-            },
-        )
-
-        # Fixed edge: intent_router → supervisor
+        # Merge edges: both go to supervisor (Fan-in)
+        builder.add_edge("input_guardrails", "supervisor")
         builder.add_edge("intent_router", "supervisor")
 
         # Conditional edge: supervisor → (conversational | rag_agent | maps_agent | output_guardrails)

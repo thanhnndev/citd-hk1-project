@@ -166,6 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.bm25_vectorizer = None
     app.state.qdrant_service = None
     app.state.embedding_service = None
+    app.state.semantic_cache = None
     app.state.llm_service = None
     app.state.places_service = None
     app.state.place_recommendation_service = None
@@ -199,10 +200,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("places.recommendation_init_failed", error_type=type(exc).__name__)
         app.state.place_cache = None
 
+    # Initialize Embedding Service and Semantic Cache
+    try:
+        from agents.tools.semantic_cache import SemanticCache
+        app.state.embedding_service = EmbeddingService()
+        app.state.semantic_cache = SemanticCache(redis_url=settings.redis_url)
+        logger.info(
+            "semantic_cache.configured",
+            redis_url=settings.redis_url,
+            embedding_service_ready=True,
+        )
+    except Exception as exc:
+        logger.warning("semantic_cache.init_failed", error=str(exc))
+
     if chunks:
         try:
             qdrant_service = QdrantService()
-            embedding_service = EmbeddingService()
+            embedding_service = app.state.embedding_service or EmbeddingService()
 
             bm25 = BM25Vectorizer()
             bm25.fit([c.text for c in chunks])
@@ -235,6 +249,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         checkpointer=checkpoint,
         checkpoint_mode=checkpoint_mode,
         place_recommendation_service=app.state.place_recommendation_service,
+        semantic_cache=app.state.semantic_cache,
+        embedding_service=app.state.embedding_service,
         langfuse_client=_langfuse_client,
     )
 
@@ -272,6 +288,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             places_service=app.state.place_recommendation_service,
             cohere_reranker=cohere_reranker,
             llm_answer_service=app.state.llm_service or LLMAnswerService(),
+            semantic_cache=app.state.semantic_cache,
+            embedding_service=app.state.embedding_service,
         )
 
         # Create HamNinhGraph with AsyncPostgresSaver if DATABASE_URL is available
