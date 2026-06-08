@@ -72,6 +72,37 @@ async def _create_place_cache(dsn: str | None) -> PlaceCache | None:
         return None
 
 
+# ── OpenAI client factory ───────────────────────────────────────────────
+
+def create_openai_client(langfuse_client: Any | None, api_key: str):
+    """Create OpenAI client, optionally patched with Langfuse for automatic tracing.
+
+    When Langfuse is enabled (langfuse_client is not None), uses langfuse.openai
+    to wrap the OpenAI client for automatic LLM call tracing. Otherwise uses
+    standard openai.AsyncOpenAI.
+
+    Args:
+        langfuse_client: Langfuse client instance, or None if disabled.
+        api_key: OpenAI API key.
+
+    Returns:
+        AsyncOpenAI client (patched or standard).
+    """
+    if langfuse_client is not None:
+        from langfuse.openai import openai as langfuse_openai
+        client = langfuse_openai.AsyncOpenAI(api_key=api_key)
+        logger.info(
+            "openai_client.configured",
+            api_key_present=bool(api_key),
+            langfuse_patched=True,
+        )
+        return client
+    else:
+        client = openai.AsyncOpenAI(api_key=api_key)
+        logger.info("openai_client.configured", api_key_present=bool(api_key))
+        return client
+
+
 # ── Lifespan manager ────────────────────────────────────────────────────
 
 _langfuse_cleanup: Callable[[], None] | None = None
@@ -214,8 +245,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ham_ninh_graph_checkpointer = None
     try:
         # Build OpenAI client for LLM-dependent graph nodes
-        openai_client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        logger.info("openai_client.configured", api_key_present=bool(settings.OPENAI_API_KEY))
+        # Patch with langfuse.openai when Langfuse is enabled for automatic LLM call tracing
+        if _langfuse_client is not None:
+            from langfuse.openai import openai as langfuse_openai
+            openai_client = langfuse_openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            logger.info(
+                "openai_client.configured",
+                api_key_present=bool(settings.OPENAI_API_KEY),
+                langfuse_patched=True,
+            )
+        else:
+            openai_client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            logger.info("openai_client.configured", api_key_present=bool(settings.OPENAI_API_KEY))
 
         # Build CohereReranker if key present (graceful degradation: None skips reranking)
         cohere_reranker = None
@@ -246,6 +287,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.ham_ninh_graph = HamNinhGraph(
                     checkpointer=ham_ninh_graph_checkpointer,
                     services=node_services,
+                    langfuse_client=_langfuse_client,
                 )
                 ham_ninh_checkpoint_mode = "postgres"
                 logger.info("ham_ninh_graph.initialized", checkpoint_mode="postgres")
@@ -254,6 +296,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.ham_ninh_graph = await create_ham_ninh_graph(
                     checkpoint_mode="memory",
                     services=node_services,
+                    langfuse_client=_langfuse_client,
                 )
             except Exception as exc:
                 logger.warning(
@@ -264,11 +307,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.state.ham_ninh_graph = await create_ham_ninh_graph(
                     checkpoint_mode="memory",
                     services=node_services,
+                    langfuse_client=_langfuse_client,
                 )
         else:
             app.state.ham_ninh_graph = await create_ham_ninh_graph(
                 checkpoint_mode="memory",
                 services=node_services,
+                langfuse_client=_langfuse_client,
             )
             logger.info("ham_ninh_graph.initialized", checkpoint_mode="memory")
     except Exception as exc:
