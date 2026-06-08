@@ -1,0 +1,849 @@
+"""Node functions for the HamNinhGraph LangGraph StateGraph (v4.2.0).
+
+Provides 9 node functions (5 real + 3 stubs + 1 supervisor) that form the
+graph topology.  Each node is an ``async def`` that accepts an ``AgentState``
+dict and returns a partial state-update dict — the standard LangGraph node
+contract.
+
+Real nodes:
+    - input_guardrails_node  — prompt injection + topic gate
+    - intent_router_node     — LLM structured-output intent classification
+    - supervisor_node        — confidence-ladder routing decision
+    - conversational_node    — direct / clarification / LLM conversational
+    - output_guardrails_node — grounding verification
+
+Stub nodes (passthrough, wired for T02+ expansion):
+    - rag_agent_stub_node
+    - grade_documents_stub_node
+    - rewrite_query_stub_node
+    - maps_agent_stub_node
+
+Dependency injection
+--------------------
+LLM-dependent nodes (intent_router, conversational) read from a module-level
+``NodeServices`` singleton via ``get_services()``.  The graph assembler (T02)
+calls ``configure_services(services)`` before compiling the graph.  When no
+services are configured, nodes degrade gracefully to heuristic paths.
+
+Emits structured log events:
+    - ``graph.node_enter`` — node execution started
+    - ``graph.node_exit``  — node execution completed (with duration_ms)
+    - ``graph.node_error`` — node raised an unexpected exception
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import structlog
+
+from agents.graph.state import (
+    AgentState,
+    RouterOutput,
+    NODE_TIMEOUT_GUARDRAILS,
+    NODE_TIMEOUT_INTENT_ROUTER,
+)
+from agents.guardrails.input_guardrails import block_injection, reject_off_topic
+from agents.guardrails.output_guardrails import verify_grounding
+from agents.graph.routing import (
+    _clarify_message,
+    _direct_answer,
+    _extract_suggestions,
+    _fallback_action,
+    _get_default_suggestions,
+    _messages_for_llm,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# NodeServices — dependency injection container
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NodeServices:
+    """Container for injected dependencies used by LLM-dependent nodes.
+
+    The graph assembler (T02) constructs a ``NodeServices`` instance with
+    the real OpenAI client, retriever, and places service, then calls
+    ``configure_services(services)`` before compiling the graph.
+    """
+
+    llm_client: Any = None  # openai.AsyncOpenAI or None
+    model: str = "gpt-4o-mini"
+    retriever: Any = None  # Retriever or HybridRetriever or None
+    places_service: Any = None  # PlaceRecommendationService or None
+
+
+_default_services = NodeServices()
+
+
+def configure_services(services: NodeServices) -> None:
+    """Set the module-level NodeServices singleton.
+
+    Called by the graph assembler (T02) before compiling the StateGraph.
+    """
+    global _default_services
+    _default_services = services
+
+
+def get_services() -> NodeServices:
+    """Return the current module-level NodeServices singleton."""
+    return _default_services
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _hash_query(message: str) -> str:
+    """Return a short SHA-256 hex digest (no raw text in logs)."""
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+
+
+def _routing_tier_from_confidence(confidence: float) -> str:
+    """Map a confidence float to a routing tier label.
+
+    ≥ 0.75  → strict  (direct to RAG or Maps agent)
+    0.45–0.75 → soft  (supervisor with tool-calling)
+    < 0.45  → fallback (semantic-router embedding similarity)
+    """
+    if confidence >= 0.75:
+        return "strict"
+    if confidence >= 0.45:
+        return "soft"
+    return "fallback"
+
+
+# ---------------------------------------------------------------------------
+# 1. input_guardrails_node (REAL)
+# ---------------------------------------------------------------------------
+
+
+async def input_guardrails_node(state: AgentState) -> dict[str, Any]:
+    """Run input guardrails: prompt injection blocking + topic rejection.
+
+    Reads:
+        - ``state["message"]``
+    Writes:
+        - ``guardrail_flags`` — dict with ``injection`` and ``off_topic`` verdicts
+        - ``response_text`` — friendly rejection message when blocked
+    """
+    t0 = time.perf_counter()
+    message = state.get("message", "")
+    query_hash = _hash_query(message)
+    session_id = state.get("session_id", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="input_guardrails",
+        session_id=session_id,
+        query_hash=query_hash,
+    )
+
+    flags: dict[str, Any] = dict(state.get("guardrail_flags") or {})
+
+    # --- Injection check ---
+    injection_result = block_injection(message)
+    flags["injection"] = {
+        "verdict": injection_result.verdict,
+        "reason": injection_result.reason,
+        "severity": injection_result.severity,
+    }
+
+    if injection_result.verdict == "blocked":
+        language = state.get("language", "vi")
+        blocked_msg = (
+            "Xin lỗi, mình không thể xử lý yêu cầu này."
+            if language == "vi"
+            else "Sorry, I cannot process this request."
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="input_guardrails",
+            session_id=session_id,
+            verdict="blocked",
+            reason="injection_detected",
+            duration_ms=elapsed,
+        )
+        return {
+            "guardrail_flags": flags,
+            "response_text": blocked_msg,
+            "intent": "blocked",
+        }
+
+    # --- Off-topic check ---
+    topic_result = reject_off_topic(message)
+    flags["off_topic"] = {
+        "verdict": topic_result.verdict,
+        "reason": topic_result.reason,
+        "severity": topic_result.severity,
+    }
+
+    if topic_result.verdict == "blocked":
+        language = state.get("language", "vi")
+        off_topic_msg = (
+            "Mình chỉ hỗ trợ thông tin du lịch Hàm Ninh. "
+            "Bạn hỏi về địa điểm, đường đi, văn hóa/lịch sử hoặc gợi ý lịch trình nhé!"
+            if language == "vi"
+            else "I only assist with Ham Ninh tourism. "
+            "Ask about places, directions, culture/history, or trip planning!"
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="input_guardrails",
+            session_id=session_id,
+            verdict="blocked",
+            reason="off_topic",
+            duration_ms=elapsed,
+        )
+        return {
+            "guardrail_flags": flags,
+            "response_text": off_topic_msg,
+            "intent": "off_topic",
+        }
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="input_guardrails",
+        session_id=session_id,
+        verdict="pass",
+        duration_ms=elapsed,
+    )
+    return {"guardrail_flags": flags}
+
+
+# ---------------------------------------------------------------------------
+# 2. intent_router_node (REAL)
+# ---------------------------------------------------------------------------
+
+_INTENT_ROUTER_SYSTEM_PROMPT = """\
+You are an intent classifier for the Ham Ninh tourism assistant.
+Classify the user's message into one of these intents:
+- cultural_query: questions about culture, history, fishing life, local food background
+- food_culture: specifically about food traditions, recipes, local specialties
+- restaurant_search: finding restaurants, cafes, hotels, places, directions, maps
+- navigation: asking for directions, routes, maps
+- conversational: greetings, thanks, capability questions, simple acknowledgments
+- unknown: anything that does not fit the above
+
+Also determine:
+- confidence: your confidence in the classification (0.0 to 1.0)
+- is_followup: whether the message references prior conversation context
+- needs_location: whether the query requires user GPS (nearby, directions)
+"""
+
+
+async def intent_router_node(state: AgentState) -> dict[str, Any]:
+    """Classify user intent via LLM structured output or heuristic fallback.
+
+    When the LLM client is available, calls OpenAI with
+    ``response_format=RouterOutput`` for structured classification.
+    Falls back to deterministic heuristic routing when unavailable.
+
+    Reads:
+        - ``state["message"]``, ``state["history"]``, ``state["language"]``
+    Writes:
+        - ``intent``, ``intent_confidence``, ``routing_tier``, ``needs_location``
+    """
+    t0 = time.perf_counter()
+    message = state.get("message", "")
+    history = state.get("history", [])
+    language = state.get("language", "vi")
+    session_id = state.get("session_id", "")
+    query_hash = _hash_query(message)
+
+    logger.info(
+        "graph.node_enter",
+        node="intent_router",
+        session_id=session_id,
+        query_hash=query_hash,
+    )
+
+    services = get_services()
+    client = services.llm_client
+
+    # --- LLM path ---
+    if client is not None and RouterOutput is not None:
+        try:
+            messages = [
+                {"role": "system", "content": _INTENT_ROUTER_SYSTEM_PROMPT},
+            ]
+            # Include recent history for follow-up detection
+            for item in (history or [])[-4:]:
+                if item.get("role") in {"user", "assistant"} and item.get("content"):
+                    messages.append({"role": item["role"], "content": item["content"]})
+            messages.append({"role": "user", "content": message})
+
+            completion = await client.chat.completions.create(
+                model=services.model,
+                messages=messages,
+                response_format=RouterOutput,
+                max_completion_tokens=128,
+            )
+            raw_content = completion.choices[0].message.content or "{}"
+
+            import json as _json
+
+            parsed = _json.loads(raw_content)
+            intent_label = parsed.get("intent", "unknown")
+            confidence = float(parsed.get("confidence", 0.5))
+            is_followup = bool(parsed.get("is_followup", False))
+            needs_location = bool(parsed.get("needs_location", False))
+            routing_tier = _routing_tier_from_confidence(confidence)
+
+            elapsed = round((time.perf_counter() - t0) * 1000, 3)
+            logger.info(
+                "graph.node_exit",
+                node="intent_router",
+                session_id=session_id,
+                intent=intent_label,
+                confidence=confidence,
+                routing_tier=routing_tier,
+                mode="llm",
+                duration_ms=elapsed,
+            )
+            return {
+                "intent": intent_label,
+                "intent_confidence": confidence,
+                "routing_tier": routing_tier,
+                "needs_location": needs_location,
+            }
+
+        except Exception as exc:
+            logger.warning(
+                "graph.node_error",
+                node="intent_router",
+                session_id=session_id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                mode="llm_failed_falling_back",
+            )
+
+    # --- Heuristic fallback ---
+    action = _fallback_action(message, history)
+    if action == "direct":
+        intent_label = "conversational"
+        confidence = 0.95
+    elif action == "clarify":
+        intent_label = "conversational"
+        confidence = 0.6
+    else:
+        # Simple keyword-based heuristic
+        text_lower = (message or "").lower()
+        if any(term in text_lower for term in (
+            "văn hóa", "văn hoá", "lịch sử", "culture", "history",
+            "làng chài", "fishing", "nghề biển",
+        )):
+            intent_label = "cultural_query"
+            confidence = 0.7
+        elif any(term in text_lower for term in (
+            "quán", "nhà hàng", "restaurant", "hotel", "homestay",
+            "cà phê", "cafe", "tìm", "find", "search", "gần", "nearby",
+        )):
+            intent_label = "restaurant_search"
+            confidence = 0.7
+        elif any(term in text_lower for term in (
+            "đường", "direction", "route", "map", "bản đồ", "chỉ đường",
+        )):
+            intent_label = "navigation"
+            confidence = 0.65
+        elif any(term in text_lower for term in (
+            "món ăn", "đặc sản", "ẩm thực", "food", "specialty",
+        )):
+            intent_label = "food_culture"
+            confidence = 0.65
+        else:
+            intent_label = "unknown"
+            confidence = 0.4
+
+    routing_tier = _routing_tier_from_confidence(confidence)
+    needs_location = any(
+        term in (message or "").lower()
+        for term in ("gần đây", "nearby", "gần nhất", "nearest", "directions", "chỉ đường")
+    )
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="intent_router",
+        session_id=session_id,
+        intent=intent_label,
+        confidence=confidence,
+        routing_tier=routing_tier,
+        mode="heuristic",
+        duration_ms=elapsed,
+    )
+    return {
+        "intent": intent_label,
+        "intent_confidence": confidence,
+        "routing_tier": routing_tier,
+        "needs_location": needs_location,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. supervisor_node (REAL)
+# ---------------------------------------------------------------------------
+
+
+async def supervisor_node(state: AgentState) -> dict[str, Any]:
+    """Decide the next graph step based on routing tier and intent.
+
+    Acts as the confidence-ladder dispatcher:
+    - If guardrails blocked → signal END (response_text already set)
+    - strict tier + cultural_query/food_culture → route to rag_agent
+    - strict tier + restaurant_search/navigation → route to maps_agent
+    - soft tier → route to LLM tool-calling loop (rag_agent with supervisor)
+    - fallback tier → route to conversational for safe handling
+    - conversational intent → route to conversational node
+
+    Reads:
+        - ``intent``, ``routing_tier``, ``guardrail_flags``, ``needs_location``
+    Writes:
+        - ``routing_tier`` (confirmed/adjusted), ``next_node`` hint for the
+          conditional edge function in the graph assembler (T02)
+    """
+    t0 = time.perf_counter()
+    session_id = state.get("session_id", "")
+    intent = state.get("intent")
+    routing_tier = state.get("routing_tier", "soft")
+    flags = state.get("guardrail_flags", {})
+
+    logger.info(
+        "graph.node_enter",
+        node="supervisor",
+        session_id=session_id,
+        intent=intent,
+        routing_tier=routing_tier,
+    )
+
+    # --- Guardrail-blocked short-circuit ---
+    injection = flags.get("injection", {})
+    off_topic = flags.get("off_topic", {})
+    if injection.get("verdict") == "blocked" or off_topic.get("verdict") == "blocked":
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="supervisor",
+            session_id=session_id,
+            decision="end_guardrail_blocked",
+            duration_ms=elapsed,
+        )
+        return {"routing_tier": routing_tier, "next_node": "output_guardrails"}
+
+    # --- Conversational intent → direct to conversational node ---
+    if intent == "conversational":
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="supervisor",
+            session_id=session_id,
+            decision="conversational",
+            duration_ms=elapsed,
+        )
+        return {"routing_tier": routing_tier, "next_node": "conversational"}
+
+    # --- Confidence-ladder routing ---
+    if routing_tier == "strict":
+        if intent in ("cultural_query", "food_culture"):
+            next_node = "rag_agent"
+        elif intent in ("restaurant_search", "navigation"):
+            next_node = "maps_agent"
+        else:
+            next_node = "rag_agent"
+    elif routing_tier == "soft":
+        # Soft tier uses LLM tool-calling via rag_agent (supervisor pattern)
+        next_node = "rag_agent"
+    else:
+        # Fallback tier — route to conversational for safe handling
+        next_node = "conversational"
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="supervisor",
+        session_id=session_id,
+        decision=next_node,
+        routing_tier=routing_tier,
+        duration_ms=elapsed,
+    )
+    return {"routing_tier": routing_tier, "next_node": next_node}
+
+
+# ---------------------------------------------------------------------------
+# 4. conversational_node (REAL)
+# ---------------------------------------------------------------------------
+
+
+async def conversational_node(state: AgentState) -> dict[str, Any]:
+    """Handle conversational intents: greetings, capability questions, clarifications.
+
+    Uses deterministic helpers from ``routing.py`` for direct answers.
+    When the LLM client is available and the action is ``llm``, calls the
+    LLM for a natural conversational response.
+
+    Reads:
+        - ``state["message"]``, ``state["history"]``, ``state["language"]``
+    Writes:
+        - ``response_text``, ``suggestions``, ``intent``
+    """
+    t0 = time.perf_counter()
+    message = state.get("message", "")
+    history = state.get("history", [])
+    language = state.get("language", "vi")
+    session_id = state.get("session_id", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="conversational",
+        session_id=session_id,
+    )
+
+    action = _fallback_action(message, history)
+
+    # --- Direct answer (greetings, capability questions) ---
+    if action == "direct":
+        response_text = _direct_answer(message, history, language)
+        suggestions = _get_default_suggestions(
+            intent="conversational",
+            language=language,
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="conversational",
+            session_id=session_id,
+            action="direct",
+            duration_ms=elapsed,
+        )
+        return {
+            "response_text": response_text,
+            "suggestions": suggestions,
+            "intent": "conversational",
+        }
+
+    # --- Clarification ---
+    if action == "clarify":
+        response_text = _clarify_message(language)
+        suggestions = _get_default_suggestions(
+            intent="clarification",
+            language=language,
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="conversational",
+            session_id=session_id,
+            action="clarify",
+            duration_ms=elapsed,
+        )
+        return {
+            "response_text": response_text,
+            "suggestions": suggestions,
+            "intent": "clarification",
+        }
+
+    # --- LLM path for general conversational ---
+    services = get_services()
+    client = services.llm_client
+    if client is not None:
+        try:
+            messages = _messages_for_llm(
+                message=message,
+                history=history,
+                language=language,
+            )
+            completion = await client.chat.completions.create(
+                model=services.model,
+                messages=messages,
+                max_completion_tokens=512,
+            )
+            content = completion.choices[0].message.content or ""
+            msg_text, suggestions = _extract_suggestions(content)
+            if not msg_text:
+                msg_text = _clarify_message(language)
+            if not suggestions:
+                suggestions = _get_default_suggestions(
+                    intent="conversational",
+                    language=language,
+                )
+            elapsed = round((time.perf_counter() - t0) * 1000, 3)
+            logger.info(
+                "graph.node_exit",
+                node="conversational",
+                session_id=session_id,
+                action="llm",
+                duration_ms=elapsed,
+            )
+            return {
+                "response_text": msg_text,
+                "suggestions": suggestions,
+                "intent": state.get("intent") or "conversational",
+            }
+        except Exception as exc:
+            logger.warning(
+                "graph.node_error",
+                node="conversational",
+                session_id=session_id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                mode="llm_failed_falling_back",
+            )
+
+    # --- Fallback: deterministic response ---
+    response_text = _direct_answer(message, history, language)
+    if not response_text:
+        response_text = _clarify_message(language)
+    suggestions = _get_default_suggestions(
+        intent="conversational",
+        language=language,
+        fallback=True,
+    )
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="conversational",
+        session_id=session_id,
+        action="fallback",
+        duration_ms=elapsed,
+    )
+    return {
+        "response_text": response_text,
+        "suggestions": suggestions,
+        "intent": state.get("intent") or "conversational",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5. output_guardrails_node (REAL)
+# ---------------------------------------------------------------------------
+
+
+async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
+    """Verify that the response text is grounded in source material.
+
+    Reads:
+        - ``state["response_text"]``, ``state["citations"]``
+    Writes:
+        - ``guardrail_flags`` — updated with ``output_grounding`` verdict
+    """
+    t0 = time.perf_counter()
+    session_id = state.get("session_id", "")
+    response_text = state.get("response_text", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="output_guardrails",
+        session_id=session_id,
+    )
+
+    flags: dict[str, Any] = dict(state.get("guardrail_flags") or {})
+
+    # Skip grounding check for blocked/off-topic/conversational responses
+    intent = state.get("intent")
+    if intent in ("blocked", "off_topic", "conversational", "clarification"):
+        flags["output_grounding"] = {
+            "verdict": "skipped",
+            "reason": f"intent_{intent}",
+        }
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="output_guardrails",
+            session_id=session_id,
+            verdict="skipped",
+            reason=f"intent_{intent}",
+            duration_ms=elapsed,
+        )
+        return {"guardrail_flags": flags}
+
+    citations = state.get("citations", [])
+    grounding_result = verify_grounding(response_text, citations or None)
+
+    flags["output_grounding"] = {
+        "verdict": grounding_result.verdict,
+        "reason": grounding_result.reason,
+        "severity": grounding_result.severity,
+        "details": grounding_result.details or "",
+    }
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="output_guardrails",
+        session_id=session_id,
+        verdict=grounding_result.verdict,
+        reason=grounding_result.reason,
+        duration_ms=elapsed,
+    )
+    return {"guardrail_flags": flags}
+
+
+# ---------------------------------------------------------------------------
+# 6. rag_agent_stub_node (STUB — passthrough for T02+ expansion)
+# ---------------------------------------------------------------------------
+
+
+async def rag_agent_stub_node(state: AgentState) -> dict[str, Any]:
+    """Stub: RAG agent node for knowledge retrieval and answer composition.
+
+    This is a passthrough stub that sets ``knowledge_response_ready = False``
+    and returns without performing retrieval.  The graph assembler (T02) will
+    replace this with a real implementation that calls the retriever and
+    LLM answer service.
+
+    Reads:
+        - ``state["message"]``
+    Writes:
+        - ``knowledge_response_ready``, ``knowledge_chunks``
+    """
+    t0 = time.perf_counter()
+    session_id = state.get("session_id", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="rag_agent_stub",
+        session_id=session_id,
+    )
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="rag_agent_stub",
+        session_id=session_id,
+        mode="stub_passthrough",
+        duration_ms=elapsed,
+    )
+    return {
+        "knowledge_response_ready": False,
+        "knowledge_chunks": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. grade_documents_stub_node (STUB — passthrough for T02+ expansion)
+# ---------------------------------------------------------------------------
+
+
+async def grade_documents_stub_node(state: AgentState) -> dict[str, Any]:
+    """Stub: Document relevance grading for self-corrective RAG.
+
+    This is a passthrough stub that sets default grading fields.
+    The graph assembler (T02) will replace this with a real implementation
+    that calls the LLM with ``response_format=GradeDocuments``.
+
+    Reads:
+        - ``state["knowledge_chunks"]``
+    Writes:
+        - ``grade_score``, ``grade_label``
+    """
+    t0 = time.perf_counter()
+    session_id = state.get("session_id", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="grade_documents_stub",
+        session_id=session_id,
+    )
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="grade_documents_stub",
+        session_id=session_id,
+        mode="stub_passthrough",
+        duration_ms=elapsed,
+    )
+    return {
+        "grade_score": None,
+        "grade_label": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 8. rewrite_query_stub_node (STUB — passthrough for T02+ expansion)
+# ---------------------------------------------------------------------------
+
+
+async def rewrite_query_stub_node(state: AgentState) -> dict[str, Any]:
+    """Stub: Query rewrite for self-corrective RAG.
+
+    This is a passthrough stub that preserves the original query.
+    The graph assembler (T02) will replace this with a real implementation
+    that calls the LLM with ``response_format=RewriteQuery``.
+
+    Reads:
+        - ``state["message"]``, ``state["rewrite_count"]``
+    Writes:
+        - ``rewritten_query``, ``rewrite_count``
+    """
+    t0 = time.perf_counter()
+    session_id = state.get("session_id", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="rewrite_query_stub",
+        session_id=session_id,
+    )
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="rewrite_query_stub",
+        session_id=session_id,
+        mode="stub_passthrough",
+        duration_ms=elapsed,
+    )
+    return {
+        "rewritten_query": None,
+        "rewrite_count": state.get("rewrite_count", 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 9. maps_agent_stub_node (STUB — passthrough for T02+ expansion)
+# ---------------------------------------------------------------------------
+
+
+async def maps_agent_stub_node(state: AgentState) -> dict[str, Any]:
+    """Stub: Maps/place recommendation agent node.
+
+    This is a passthrough stub that returns empty places.
+    The graph assembler (T02) will replace this with a real implementation
+    that calls the PlaceRecommendationService.
+
+    Reads:
+        - ``state["message"]``, ``state["needs_location"]``, ``state["user_location"]``
+    Writes:
+        - ``places``
+    """
+    t0 = time.perf_counter()
+    session_id = state.get("session_id", "")
+
+    logger.info(
+        "graph.node_enter",
+        node="maps_agent_stub",
+        session_id=session_id,
+    )
+
+    elapsed = round((time.perf_counter() - t0) * 1000, 3)
+    logger.info(
+        "graph.node_exit",
+        node="maps_agent_stub",
+        session_id=session_id,
+        mode="stub_passthrough",
+        duration_ms=elapsed,
+    )
+    return {
+        "places": [],
+    }

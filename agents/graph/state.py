@@ -78,6 +78,7 @@ class AgentState(TypedDict, total=False):
     intent_confidence: float | None
     routing_tier: Literal["strict", "soft", "fallback"] | None
     needs_location: bool
+    next_node: str | None  # Routing hint from supervisor to conditional edge (T02)
     # Guardrails
     guardrail_flags: dict[str, Any]
     # Self-corrective RAG
