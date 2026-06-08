@@ -336,18 +336,35 @@ class TestGraphTopology:
             # draw_mermaid may not be available in all versions
             pass
 
-    def test_route_after_grade_returns_output_guardrails(self):
-        """_route_after_grade always routes to output_guardrails (S03 stub)."""
-        # Test with minimal state
-        result = HamNinhGraph._route_after_grade({})
-        assert result == "output_guardrails"
-
-        # Test with grade fields populated
+    def test_route_after_grade_irrelevant_count_0(self):
+        """grade_label='irrelevant', rewrite_count=0 routes to rewrite_query."""
         result = HamNinhGraph._route_after_grade({
-            "grade_score": 0.3,
+            "grade_score": 0.2,
             "grade_label": "irrelevant",
             "rewrite_count": 0,
         })
+        assert result == "rewrite_query"
+
+    def test_route_after_grade_irrelevant_count_1(self):
+        """grade_label='irrelevant', rewrite_count=1 routes to output_guardrails (max reached)."""
+        result = HamNinhGraph._route_after_grade({
+            "grade_score": 0.1,
+            "grade_label": "irrelevant",
+            "rewrite_count": 1,
+        })
+        assert result == "output_guardrails"
+
+    def test_route_after_grade_relevant(self):
+        """grade_label='relevant' always routes to output_guardrails."""
+        result = HamNinhGraph._route_after_grade({
+            "grade_score": 0.8,
+            "grade_label": "relevant",
+            "rewrite_count": 0,
+        })
+        assert result == "output_guardrails"
+
+        # Also test with empty/minimal state — defaults to output_guardrails
+        result = HamNinhGraph._route_after_grade({})
         assert result == "output_guardrails"
 
     def test_graph_has_grade_documents_node(self):
@@ -379,4 +396,65 @@ class TestGraphTopology:
         )
         assert "grade_documents" in outgoing_targets, (
             f"rag_agent should route to grade_documents, got: {outgoing_targets}"
+        )
+
+    def test_graph_topology_includes_rewrite_loop(self):
+        """Back-edge rewrite_query → rag_agent exists in compiled graph."""
+        from langgraph.checkpoint.memory import MemorySaver
+        graph = HamNinhGraph(checkpointer=MemorySaver())
+        compiled = graph.graph
+        g = compiled.get_graph()
+
+        # Verify rewrite_query node exists
+        assert "rewrite_query" in g.nodes, "rewrite_query node not found in graph"
+
+        # Verify back-edge: rewrite_query → rag_agent
+        rewrite_targets = [e.target for e in g.edges if e.source == "rewrite_query"]
+        assert "rag_agent" in rewrite_targets, (
+            f"rewrite_query should route back to rag_agent (self-corrective loop), "
+            f"got: {rewrite_targets}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_full_rewrite_loop(self):
+        """Verify the rewrite loop structure and routing logic."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        graph = HamNinhGraph(checkpointer=MemorySaver())
+        compiled = graph.graph
+
+        # Verify the graph structure supports the rewrite loop
+        g = compiled.get_graph()
+
+        # Check that grade_documents has conditional edges to both rewrite_query and output_guardrails
+        grade_outgoing = [e.target for e in g.edges if e.source == "grade_documents"]
+        assert "rewrite_query" in grade_outgoing, (
+            "grade_documents must have edge to rewrite_query for self-corrective loop"
+        )
+        assert "output_guardrails" in grade_outgoing, (
+            "grade_documents must have edge to output_guardrails"
+        )
+
+        # Check that rewrite_query has edge back to rag_agent
+        rewrite_outgoing = [e.target for e in g.edges if e.source == "rewrite_query"]
+        assert "rag_agent" in rewrite_outgoing, (
+            "rewrite_query must route back to rag_agent to complete the loop"
+        )
+
+        # Verify routing logic: irrelevant + count=0 routes to rewrite_query
+        route_result = HamNinhGraph._route_after_grade({
+            "grade_label": "irrelevant",
+            "rewrite_count": 0,
+        })
+        assert route_result == "rewrite_query", (
+            "Routing logic must send irrelevant grades to rewrite_query"
+        )
+
+        # Verify routing logic: irrelevant + count=1 routes to output_guardrails (loop terminates)
+        route_result = HamNinhGraph._route_after_grade({
+            "grade_label": "irrelevant",
+            "rewrite_count": 1,
+        })
+        assert route_result == "output_guardrails", (
+            "Routing logic must terminate loop after one rewrite attempt"
         )

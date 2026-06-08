@@ -36,6 +36,7 @@ from agents.graph.state import (
     NODE_TIMEOUT_LLM,
     NODE_TIMEOUT_TOOL,
     NODE_TIMEOUT_RETRIEVE,
+    NODE_TIMEOUT_REWRITE,
     NODE_TIMEOUT_SEMANTIC_FALLBACK,
 )
 from agents.graph.nodes import (
@@ -48,7 +49,7 @@ from agents.graph.nodes import (
     output_guardrails_node,
     rag_agent_node,
     grade_documents_node,
-    rewrite_query_stub_node,
+    rewrite_query_node,
     maps_agent_stub_node,
 )
 
@@ -85,7 +86,7 @@ class TimeoutPolicy:
         "output_guardrails": NODE_TIMEOUT_GUARDRAILS,
         "rag_agent": NODE_TIMEOUT_RETRIEVE,
         "grade_documents": NODE_TIMEOUT_GRADE,
-        "rewrite_query": NODE_TIMEOUT_SEMANTIC_FALLBACK,
+        "rewrite_query": NODE_TIMEOUT_REWRITE,
         "maps_agent": NODE_TIMEOUT_TOOL,
     })
 
@@ -231,7 +232,7 @@ class HamNinhGraph:
             ("output_guardrails", output_guardrails_node),
             ("rag_agent", rag_agent_node),
             ("grade_documents", grade_documents_node),
-            ("rewrite_query", rewrite_query_stub_node),
+            ("rewrite_query", rewrite_query_node),
             ("maps_agent", maps_agent_stub_node),
         ]
 
@@ -273,15 +274,18 @@ class HamNinhGraph:
         builder.add_edge("rag_agent", "grade_documents")
         builder.add_edge("maps_agent", "output_guardrails")
 
-        # Conditional edge: grade_documents → output_guardrails
-        # (S03 will add rewrite_query routing for irrelevant grades)
+        # Conditional edge: grade_documents → (rewrite_query | output_guardrails)
         builder.add_conditional_edges(
             "grade_documents",
             self._route_after_grade,
             {
+                "rewrite_query": "rewrite_query",
                 "output_guardrails": "output_guardrails",
             },
         )
+
+        # Back-edge: rewrite_query → rag_agent (self-corrective loop)
+        builder.add_edge("rewrite_query", "rag_agent")
 
         # Final edge: output_guardrails → END
         builder.add_edge("output_guardrails", END)
@@ -311,16 +315,21 @@ class HamNinhGraph:
     def _route_after_grade(state: AgentState) -> str:
         """Routing function: after grade_documents node.
 
-        Currently always routes to output_guardrails. S03 will expand
-        this to route to rewrite_query when grade_label == 'irrelevant'
-        and rewrite_count < max_rewrites.
+        Routes to rewrite_query when grade_label == 'irrelevant' and
+        rewrite_count < 1 (max one rewrite attempt). Otherwise routes
+        to output_guardrails.
 
         Args:
             state: Current AgentState after grade_documents execution.
 
         Returns:
-            Next node name: "output_guardrails" (S03: or "rewrite_query").
+            Next node name: "rewrite_query" or "output_guardrails".
         """
+        grade_label = state.get("grade_label")
+        rewrite_count = state.get("rewrite_count", 0)
+
+        if grade_label == "irrelevant" and rewrite_count < 1:
+            return "rewrite_query"
         return "output_guardrails"
 
     @staticmethod
