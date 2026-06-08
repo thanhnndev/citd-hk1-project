@@ -369,19 +369,32 @@ async def get_traces(
     request: Request,
     current_user=Depends(get_current_user),
 ) -> TracesStatusResponse:
-    """Return Langfuse tracing status for observability diagnostics.
+    """Return Langfuse tracing status and recent trace data.
 
     Checks whether the Langfuse client was successfully initialized
-    during app startup. Returns host and enabled flag.
+    during app startup. When active, fetches the 10 most recent traces
+    from the Langfuse API and returns summary metadata (trace_id,
+    session_id, name, timestamp, latency_ms, total_cost).
+
+    Gracefully degrades: if the Langfuse API call fails (network
+    error, auth error, timeout), the endpoint still returns 200 with
+    recent_traces=None and a warning message.
     """
     settings = get_settings()
     langfuse_client = getattr(request.app.state, "langfuse_client", None)
 
     if langfuse_client is not None:
+        recent_traces = _fetch_recent_traces(langfuse_client)
+        message = "Langfuse tracing is active."
+        if recent_traces is None:
+            message = (
+                "Langfuse tracing is active, but recent trace fetch failed."
+            )
         return TracesStatusResponse(
             langfuse_enabled=True,
             host=settings.LANGFUSE_HOST,
-            message="Langfuse tracing is active.",
+            message=message,
+            recent_traces=recent_traces,
         )
 
     return TracesStatusResponse(
@@ -389,6 +402,52 @@ async def get_traces(
         host=None,
         message="Langfuse not configured — set LANGFUSE_* env vars",
     )
+
+
+def _fetch_recent_traces(
+    langfuse_client: object,
+    limit: int = 10,
+) -> list[dict] | None:
+    """Fetch recent traces from the Langfuse API.
+
+    Args:
+        langfuse_client: Initialized Langfuse client instance.
+        limit: Maximum number of traces to return.
+
+    Returns:
+        List of trace summary dicts, or None if the API call fails.
+    """
+    try:
+        result = langfuse_client.api.trace.list(
+            limit=limit,
+            order_by="timestamp",
+        )
+
+        traces: list[dict] = []
+        for trace in result.data:
+            trace_summary = {
+                "trace_id": trace.id,
+                "session_id": trace.session_id,
+                "name": trace.name,
+                "timestamp": trace.timestamp.isoformat() if trace.timestamp else None,
+                "latency_ms": round(trace.latency * 1000, 2) if trace.latency is not None else None,
+                "total_cost": trace.total_cost,
+            }
+            traces.append(trace_summary)
+
+        logger.info(
+            "traces.fetched",
+            count=len(traces),
+            limit=limit,
+        )
+        return traces
+
+    except Exception:
+        logger.warning(
+            "traces.fetch_failed",
+            exc_info=True,
+        )
+        return None
 
 
 @router.get("/fairness", response_model=FairnessSummaryResponse)

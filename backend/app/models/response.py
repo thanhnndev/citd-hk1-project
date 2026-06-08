@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.places import FairnessAudit, PlaceDecisionTrace
@@ -311,6 +313,13 @@ class TracesStatusResponse(BaseModel):
     )
     message: str = Field(
         description="Human-readable status message.",
+    )
+    recent_traces: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Recent trace summaries from Langfuse (trace_id, session_id, name, "
+            "timestamp, latency_ms, total_cost). None when disabled or unavailable."
+        ),
     )
 
 
