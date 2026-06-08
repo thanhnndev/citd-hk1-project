@@ -7,6 +7,12 @@ from typing import Any, Literal, TypedDict
 from app.models.response import ChatResponse, Citation
 
 try:
+    from pydantic import BaseModel, Field
+except Exception:  # pragma: no cover - optional runtime dependency
+    BaseModel = None  # type: ignore[assignment,misc]
+    Field = None  # type: ignore[assignment]
+
+try:
     from langgraph.graph import END, START, StateGraph
     from langgraph.checkpoint.memory import MemorySaver
 except Exception:  # pragma: no cover - optional runtime dependency
@@ -19,6 +25,13 @@ NODE_TIMEOUT_LLM = 20
 NODE_TIMEOUT_TOOL = 15
 NODE_TIMEOUT_RETRIEVE = 10
 NODE_TIMEOUT_ANSWER = 15
+
+# Per-node timeouts for new v4.2.0 graph nodes (Section 14.2)
+NODE_TIMEOUT_GUARDRAILS = 3
+NODE_TIMEOUT_INTENT_ROUTER = 5
+NODE_TIMEOUT_GRADE = 5
+NODE_TIMEOUT_REWRITE = 8
+NODE_TIMEOUT_SEMANTIC_FALLBACK = 3
 
 
 class NodeTimeoutError(Exception):
@@ -60,6 +73,24 @@ class AgentState(TypedDict, total=False):
     tool_call_signatures: list[str]
     knowledge_chunks: list[Any]
     knowledge_response_ready: bool
+    # --- v4.2.0 agent intelligence fields ---
+    # Routing
+    intent_confidence: float | None
+    routing_tier: Literal["strict", "soft", "fallback"] | None
+    needs_location: bool
+    # Guardrails
+    guardrail_flags: dict[str, Any]
+    # Self-corrective RAG
+    grade_score: float | None
+    grade_label: str | None
+    rewrite_count: int
+    rewritten_query: str | None
+    # Session memory boundaries
+    history_included: bool
+    # User location opt-in (v4.2.0)
+    location_consent: bool
+    sort_by_nearest: bool
+    user_location: dict[str, float] | None
 
 
 TOOLS = [
@@ -139,3 +170,77 @@ Grounding and response rules:
 - Reply in the user's language.
 - At the end of your final response (when you are not calling any tools), write exactly three short and context-specific suggestion chips for the user's next turn in this format: [SUGGESTIONS] Suggestion 1 | Suggestion 2 | Suggestion 3. Do not include this tag or suggestions if you are proposing tool calls.
 """
+
+
+# ---------------------------------------------------------------------------
+# Structured output schemas for v4.2.0 agent intelligence (Section 14.3)
+# ---------------------------------------------------------------------------
+
+IntentLabel = Literal[
+    "cultural_query",
+    "food_culture",
+    "restaurant_search",
+    "navigation",
+    "conversational",
+    "unknown",
+]
+
+if BaseModel is not None:
+
+    class RouterOutput(BaseModel):
+        """Structured intent classifier output for confidence-ladder routing.
+
+        Produced by OpenAI structured output (``response_format=RouterOutput``).
+        The confidence float drives the routing tier:
+          ≥ 0.75  → strict (direct to RAG or Maps agent)
+          0.45–0.75 → soft (supervisor with tool-calling)
+          < 0.45  → fallback (semantic-router embedding similarity)
+        """
+
+        intent: IntentLabel = Field(
+            description="Classified intent category"
+        )
+        confidence: float = Field(
+            ge=0.0,
+            le=1.0,
+            description="Classifier confidence in [0, 1]",
+        )
+        is_followup: bool = Field(
+            description="True when the message references prior conversation context"
+        )
+        needs_location: bool = Field(
+            description="True when the query requires user GPS (e.g. nearby, directions)"
+        )
+
+    class GradeDocuments(BaseModel):
+        """Document relevance grading output for self-corrective RAG.
+
+        Produced by OpenAI structured output for the grade_documents node.
+        binary_score is 'yes' when the retrieved chunk is relevant to the
+        user question, 'no' otherwise.
+        """
+
+        binary_score: Literal["yes", "no"] = Field(
+            description="Relevance score: 'yes' if relevant, 'no' if not relevant"
+        )
+
+    class RewriteQuery(BaseModel):
+        """Query rewrite output for self-corrective RAG.
+
+        Produced by OpenAI structured output for the rewrite_query node.
+        The rewritten_query preserves the original intent but improves
+        specificity and retrieval likelihood.
+        """
+
+        rewritten_query: str = Field(
+            description="Improved query preserving original intent and language"
+        )
+        reasoning: str = Field(
+            default="",
+            description="Brief reasoning for the rewrite (for observability)",
+        )
+
+else:  # pragma: no cover - pydantic unavailable
+    RouterOutput = None  # type: ignore[assignment,misc]
+    GradeDocuments = None  # type: ignore[assignment,misc]
+    RewriteQuery = None  # type: ignore[assignment,misc]

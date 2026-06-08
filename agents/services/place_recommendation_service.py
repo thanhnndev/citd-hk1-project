@@ -27,8 +27,8 @@ from app.models.places import (
 )
 from app.models.request import LatLng
 from app.models.response import ChatResponse, PlaceExplanation, PlaceResult, ScoreBreakdown
-from agents.ml.ensemble_reranker import EnsembleReranker
-from agents.ml.feature_extractor import FeatureExtractor
+from agents.ranking.fairness_reranker import FairnessReranker
+from agents.ranking.feature_extractor import FeatureExtractor
 from agents.tools.places_service import GooglePlacesService
 from agents.tools.routes_service import GoongRoutesService
 
@@ -381,7 +381,7 @@ class PlaceRecommendationService:
                 "preference_accessibility_applied": preference_accessibility_applied,
                 "user_location_applied": user_location_applied,
                 "top5_local_ratio": fairness_audit.top5_local_ratio,
-                "missing_local_factor_count": fairness_audit.missing_local_factor_count,
+                "missing_geo_locality_count": fairness_audit.missing_geo_locality_count,
                 "warnings": fairness_audit.warnings,
             },
         )
@@ -491,7 +491,7 @@ class PlaceRecommendationService:
         if fairness_audit is not None:
             reasoning_log += (
                 f" top5_local_ratio={fairness_audit.top5_local_ratio}"
-                f" missing_local_factor={fairness_audit.missing_local_factor_count}"
+                f" missing_geo_locality={fairness_audit.missing_geo_locality_count}"
             )
             if fairness_audit.warnings:
                 reasoning_log += f" warnings={','.join(fairness_audit.warnings)}"
@@ -522,14 +522,14 @@ def _reranked_results(
     request: PlaceSearchRequest | None = None,
     language: str = "vi",
 ) -> list[PlaceResult]:
-    """Run candidates through FeatureExtractor → EnsembleReranker pipeline."""
+    """Run candidates through FeatureExtractor → FairnessReranker pipeline."""
     extractor = FeatureExtractor()
     feature_dicts = [
         extractor.extract(candidate, query, user_location=None)
         for candidate in candidates
     ]
 
-    sorted_candidates, score_breakdowns = EnsembleReranker().rerank(
+    sorted_candidates, score_breakdowns = FairnessReranker().rerank(
         candidates, feature_dicts
     )
 
@@ -582,7 +582,7 @@ def _reranked_results(
                 reviews=candidate.reviews,
                 photos=candidate.photos,
                 service_options=_service_options(candidate),
-                local_factor=candidate.local_factor,
+                geo_locality=candidate.geo_locality,
                 final_score=breakdown.final_score,
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
@@ -673,7 +673,7 @@ def _grounded_results(
                 reviews=candidate.reviews,
                 photos=candidate.photos,
                 service_options=_service_options(candidate),
-                local_factor=candidate.local_factor,
+                geo_locality=candidate.geo_locality,
                 final_score=0.5,
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
@@ -1107,18 +1107,18 @@ def _build_place_explanation(
         matched.append("accessibility_preference_matched")
         evidence.append("accessibility_options")
 
-    local_factor = candidate.local_factor
-    if local_factor is None:
+    geo_locality = candidate.geo_locality
+    if geo_locality is None:
         local_context = "local signal unknown"
-        fairness_note = "local_factor missing; fairness treatment is conservative"
-    elif local_factor >= FAIRNESS_LOCAL_THRESHOLD:
+        fairness_note = "geo_locality missing; fairness treatment is conservative"
+    elif geo_locality >= FAIRNESS_LOCAL_THRESHOLD:
         local_context = "strong local signal from normalized provider metadata"
         fairness_note = "supports local representation balancing"
-        evidence.append("local_factor")
+        evidence.append("geo_locality")
     else:
         local_context = "limited local signal from normalized provider metadata"
         fairness_note = "included without overstating local ownership"
-        evidence.append("local_factor")
+        evidence.append("geo_locality")
 
     if accessibility_score is None and not candidate.accessibility_warning and not candidate.accessibility_options:
         accessibility_note = "accessibility metadata unknown"
@@ -1157,7 +1157,7 @@ def _build_place_explanation(
     score_factors: dict[str, float | int | str | None] = {
         "rank": breakdown.rank,
         "final_score": round(breakdown.final_score, 4),
-        "local_factor": round(local_factor, 4) if local_factor is not None else None,
+        "geo_locality": round(geo_locality, 4) if geo_locality is not None else None,
         "rating": candidate.rating,
         "price_level": candidate.price_level,
         "recommendation_role": suitability.role if suitability else None,
@@ -1207,7 +1207,7 @@ def _apply_preference_filters(
     - Budget: exclude candidates whose price_level falls outside the requested
       budget_filter numeric range.
     - Accessibility: boost candidates with wheelchair_accessible options by
-      increasing their local_factor (so fairness balancing and reranking will tend
+      increasing their geo_locality (so fairness balancing and reranking will tend
       to promote them) — no hard filter because accessibility metadata is often
       missing.  Candidates with unknown accessibility metadata are retained without
       hiding their unknown status.
@@ -1243,22 +1243,22 @@ def _apply_preference_filters(
 
     # Accessibility boosting: when wheelchair_accessible_preference is True,
     # promote candidates that have positive accessibility options by slightly
-    # increasing their local_factor.  This is a soft boost — accessible
+    # increasing their geo_locality.  This is a soft boost — accessible
     # candidates stay ahead in fairness/re-ranking but we do NOT filter out
     # candidates whose accessibility metadata is unknown.
     if request.wheelchair_accessible_preference is True:
         boosted = 0
         for c in result:
             if c.accessibility_options and any(c.accessibility_options.values()):
-                # Boost local_factor by 0.1, capped at 1.0
-                c.local_factor = min(1.0, (c.local_factor or 0.5) + 0.1)
+                # Boost geo_locality by 0.1, capped at 1.0
+                c.geo_locality = min(1.0, (c.geo_locality or 0.5) + 0.1)
                 boosted += 1
             # Candidates with no accessibility_options dict or all-False values
             # are left unchanged — unknown metadata is preserved, not hidden.
         if boosted > 0:
-            # Sort by updated local_factor descending so accessibility-aware
+            # Sort by updated geo_locality descending so accessibility-aware
             # candidates surface higher before fairness/reranking.
-            result.sort(key=lambda c: c.local_factor or 0.0, reverse=True)
+            result.sort(key=lambda c: c.geo_locality or 0.0, reverse=True)
 
     return result, excluded_by_budget
 
@@ -1370,14 +1370,14 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-FAIRNESS_LOCAL_THRESHOLD = 0.6  # local_factor >= this counts as "local"
+FAIRNESS_LOCAL_THRESHOLD = 0.6  # geo_locality >= this counts as "local"
 FAIRNESS_TOP_K = 5  # top-K window for local representation target
 FAIRNESS_TOP5_TARGET_RATIO = 0.4  # target local fraction in top-K
 
 
 def _is_local(result: PlaceResult) -> bool:
-    """Return True when result carries a local_factor meeting the documented threshold."""
-    return (result.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+    """Return True when result carries a geo_locality meeting the documented threshold."""
+    return (result.geo_locality or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
 
 
 def _balance_fairness(
@@ -1437,8 +1437,8 @@ def _balance_fairness(
 
 
 def _is_candidate_local(candidate: PlaceCandidate) -> bool:
-    """Return True when candidate carries a local_factor meeting the threshold."""
-    return (candidate.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+    """Return True when candidate carries a geo_locality meeting the threshold."""
+    return (candidate.geo_locality or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
 
 
 def _compute_fairness_audit(
@@ -1456,16 +1456,16 @@ def _compute_fairness_audit(
     candidate_count = len(candidates)
     result_count = len(results)
 
-    # Count candidates missing local_factor metadata
-    missing_local_factor_count = sum(
-        1 for c in candidates if c.local_factor is None
+    # Count candidates missing geo_locality metadata
+    missing_geo_locality_count = sum(
+        1 for c in candidates if c.geo_locality is None
     )
 
     # Compute top-5 local ratio
     top_k = results[:FAIRNESS_TOP_K]
     if top_k:
         local_in_top5 = sum(
-            1 for r in top_k if (r.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+            1 for r in top_k if (r.geo_locality or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
         )
         top5_local_ratio = local_in_top5 / len(top_k)
     else:
@@ -1479,12 +1479,12 @@ def _compute_fairness_audit(
         warnings.append(FairnessWarningType.ROUTE_ENRICHMENT_FALLBACK.value)
     if not ensemble_ok:
         warnings.append(FairnessWarningType.ENSEMBLE_FALLBACK.value)
-    if missing_local_factor_count > 0:
+    if missing_geo_locality_count > 0:
         warnings.append(FairnessWarningType.MISSING_LOCAL_FACTOR_METADATA.value)
 
     # Check if supply limits fair representation
     local_candidates = sum(
-        1 for c in candidates if (c.local_factor or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
+        1 for c in candidates if (c.geo_locality or 0.0) >= FAIRNESS_LOCAL_THRESHOLD
     )
     top5_target = max(1, int(FAIRNESS_TOP_K * 0.4))  # 40% of top-5 ≈ 2
     if local_candidates < top5_target and candidate_count >= FAIRNESS_TOP_K:
@@ -1494,7 +1494,7 @@ def _compute_fairness_audit(
         candidate_count=candidate_count,
         result_count=result_count,
         top5_local_ratio=round(top5_local_ratio, 4),
-        missing_local_factor_count=missing_local_factor_count,
+        missing_geo_locality_count=missing_geo_locality_count,
         provider_status=provider_status.value,
         warnings=warnings,
     )

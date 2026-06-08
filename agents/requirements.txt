@@ -9,7 +9,6 @@ langchain-openai
 # Vector Database Client
 qdrant-client==1.18.0
 # ML — Ensemble Re-ranking
-scikit-learn==1.8.0
 # RAG Evaluation
 ragas==0.4.3
 # Observability & Tracing
