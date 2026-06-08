@@ -522,6 +522,67 @@ class TestRagAgentNode:
         assert result["citations"][1].source == "Title B"
         assert result["citations"][1].url == "https://b.com"
 
+    @pytest.mark.asyncio
+    async def test_rag_agent_uses_rewritten_query(
+        self,
+        mock_retriever,
+    ):
+        """When state has rewritten_query, rag_agent uses it instead of message."""
+        chunks = _make_chunks(3)
+        mock_retriever.search.return_value = _make_retrieval_result(chunks)
+
+        services = NodeServices(
+            retriever=mock_retriever,
+            cohere_reranker=None,
+            llm_answer_service=None,
+        )
+        configure_services(services)
+
+        state = {
+            "message": "original vague query",
+            "rewritten_query": "văn hóa làng chài Hàm Ninh Phú Quốc truyền thống",
+            "language": "vi",
+            "session_id": "test-rewrite-usage-001",
+        }
+
+        result = await rag_agent_node(state)
+
+        # Retriever should be called with rewritten_query, NOT message
+        mock_retriever.search.assert_called_once_with(
+            "văn hóa làng chài Hàm Ninh Phú Quốc truyền thống", top_k=10
+        )
+        assert result["knowledge_response_ready"] is True
+
+    @pytest.mark.asyncio
+    async def test_rag_agent_falls_back_to_message(
+        self,
+        mock_retriever,
+    ):
+        """When state has no rewritten_query, rag_agent falls back to message."""
+        chunks = _make_chunks(3)
+        mock_retriever.search.return_value = _make_retrieval_result(chunks)
+
+        services = NodeServices(
+            retriever=mock_retriever,
+            cohere_reranker=None,
+            llm_answer_service=None,
+        )
+        configure_services(services)
+
+        state = {
+            "message": "Làng chài Hàm Ninh có gì đặc biệt?",
+            "language": "vi",
+            "session_id": "test-rewrite-usage-002",
+        }
+
+        result = await rag_agent_node(state)
+
+        # Retriever should be called with message (no rewritten_query in state)
+        mock_retriever.search.assert_called_once_with(
+            "Làng chài Hàm Ninh có gì đặc biệt?", top_k=10
+        )
+        assert result["knowledge_response_ready"] is True
+
 
 # ===========================================================================
 # Section 2: grade_documents_node tests

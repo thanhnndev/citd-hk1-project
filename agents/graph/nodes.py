@@ -711,13 +711,14 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
         5. Fall back to deterministic text on any LLM or retrieval failure.
 
     Reads:
-        - ``state["message"]``, ``state["language"]``, ``state["session_id"]``
+        - ``state["message"]``, ``state["rewritten_query"]``,
+          ``state["language"]``, ``state["session_id"]``
     Writes:
         - ``knowledge_chunks``, ``citations``, ``response_text``,
           ``knowledge_response_ready``
     """
     t0 = time.perf_counter()
-    message = state.get("message", "")
+    message = state.get("rewritten_query") or state.get("message", "")
     language = state.get("language", "vi")
     session_id = state.get("session_id", "")
 
