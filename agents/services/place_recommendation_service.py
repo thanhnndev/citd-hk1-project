@@ -525,7 +525,7 @@ def _reranked_results(
     """Run candidates through FeatureExtractor → FairnessReranker pipeline."""
     extractor = FeatureExtractor()
     feature_dicts = [
-        extractor.extract(candidate, query, user_location=None)
+        extractor.extract(candidate, query, user_location=request.user_location if request else None)
         for candidate in candidates
     ]
 
