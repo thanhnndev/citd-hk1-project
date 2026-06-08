@@ -550,6 +550,141 @@ class TestMapsAgent:
         assert result["places"][0]["score_breakdown"]["rank"] == 1
         assert result["places"][1]["score_breakdown"]["rank"] == 2
 
+    @pytest.mark.asyncio
+    async def test_maps_agent_with_budget_filter(self):
+        """Verify budget_filter propagates from state to places_service.recommend(budget=...)."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange
+        mock_service = AsyncMock()
+        mock_response = self._make_chat_response(
+            [self._make_place_result(place_id="ChIJ-budget")],
+            message="Budget-friendly place",
+        )
+        mock_service.recommend = AsyncMock(return_value=mock_response)
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: state includes budget_filter='moderate'
+        state: AgentState = {
+            "session_id": "test-budget-001",
+            "message": "affordable restaurants",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": False,
+            "budget_filter": "moderate",
+            "accessibility_required": True,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: recommend() called with budget='moderate'
+        mock_service.recommend.assert_called_once()
+        call_kwargs = mock_service.recommend.call_args.kwargs
+        assert call_kwargs["budget"] == "moderate"
+        assert call_kwargs["accessibility"] is True
+
+        # Assert: result still contains places
+        assert len(result["places"]) == 1
+        assert result["response_text"] == "Budget-friendly place"
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_with_accessibility_filter(self):
+        """Verify accessibility_required propagates from state to places_service.recommend(accessibility=...)."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange
+        mock_service = AsyncMock()
+        mock_response = self._make_chat_response(
+            [self._make_place_result(place_id="ChIJ-access")],
+            message="Accessible place",
+        )
+        mock_service.recommend = AsyncMock(return_value=mock_response)
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: state includes accessibility_required=True
+        state: AgentState = {
+            "session_id": "test-access-001",
+            "message": "wheelchair accessible restaurants",
+            "language": "en",
+            "user_location": None,
+            "needs_location": False,
+            "budget_filter": None,
+            "accessibility_required": True,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: recommend() called with accessibility=True
+        mock_service.recommend.assert_called_once()
+        call_kwargs = mock_service.recommend.call_args.kwargs
+        assert call_kwargs["accessibility"] is True
+        assert call_kwargs["budget"] is None
+
+        # Assert: result has places
+        assert len(result["places"]) == 1
+        assert result["response_text"] == "Accessible place"
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_without_filters(self):
+        """Verify recommend() is called with budget=None when budget_filter is not set."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange
+        mock_service = AsyncMock()
+        mock_response = self._make_chat_response(
+            [self._make_place_result(place_id="ChIJ-nofilter")],
+            message="All places",
+        )
+        mock_service.recommend = AsyncMock(return_value=mock_response)
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: no budget_filter in state (defaults to None), accessibility defaults to True
+        state: AgentState = {
+            "session_id": "test-nofilter-001",
+            "message": "show me restaurants",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": False,
+            "budget_filter": None,
+            "accessibility_required": True,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: recommend() called with budget=None
+        mock_service.recommend.assert_called_once()
+        call_kwargs = mock_service.recommend.call_args.kwargs
+        assert call_kwargs["budget"] is None
+        # accessibility defaults to True in maps_agent_node when not set
+        assert call_kwargs["accessibility"] is True
+
+        # Assert: result has places
+        assert len(result["places"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_ham_ninh_graph_accepts_filter_params(self):
+        """Verify HamNinhGraph.answer() accepts budget_filter and accessibility_required without error."""
+        import inspect
+
+        sig = inspect.signature(HamNinhGraph.answer)
+        param_names = list(sig.parameters.keys())
+
+        assert "budget_filter" in param_names, (
+            f"HamNinhGraph.answer() missing budget_filter param. "
+            f"Current params: {param_names}"
+        )
+        assert "accessibility_required" in param_names, (
+            f"HamNinhGraph.answer() missing accessibility_required param. "
+            f"Current params: {param_names}"
+        )
+
+        # Verify defaults match safe convention from T02
+        budget_param = sig.parameters["budget_filter"]
+        assert budget_param.default is None, (
+            f"budget_filter default should be None, got {budget_param.default}"
+        )
+        accessibility_param = sig.parameters["accessibility_required"]
+        assert accessibility_param.default is True, (
+            f"accessibility_required default should be True (safe default), got {accessibility_param.default}"
+        )
+
 
 # ===========================================================================
 # Section 4: Existing test compatibility (always runnable)
