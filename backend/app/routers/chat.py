@@ -34,11 +34,23 @@ try:
         reject_off_topic,
     )
     from agents.guardrails.output_guardrails import verify_grounding
+    from agents.graph.nodes import get_services as get_graph_node_services
     _GUARDRAILS_AVAILABLE = True
 except Exception:
     _GUARDRAILS_AVAILABLE = False
 
 logger = structlog.get_logger(__name__)
+
+
+def _guardrail_llm_config() -> tuple[object | None, str]:
+    """Return the graph LLM client/model used by structured guardrails."""
+    if not _GUARDRAILS_AVAILABLE:
+        return None, "gpt-4o-mini"
+    try:
+        services = get_graph_node_services()
+        return getattr(services, "llm_client", None), getattr(services, "model", "gpt-4o-mini")
+    except Exception:
+        return None, "gpt-4o-mini"
 
 router = APIRouter(prefix="/chat")
 limiter = get_limiter()
@@ -242,7 +254,8 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                     },
                 )
 
-            topic_result = reject_off_topic(body.message)
+            llm_client, guardrail_model = _guardrail_llm_config()
+            topic_result = await reject_off_topic(body.message, llm_client, guardrail_model)
             if topic_result.verdict == "blocked":
                 logger.warning(
                     "guardrail.topic_rejected_endpoint",
@@ -312,16 +325,24 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                 message=graph_result.response_text or "I'm sorry, I couldn't generate a response.",
                 intent=graph_result.intent or "unknown",
                 citations=citations,
+                places=graph_result.places or [],
                 suggestions=graph_result.suggestions or [],
                 fallback=graph_result.blocked,
                 latency_ms=round((time.perf_counter() - t0) * 1000, 3),
                 langfuse_trace_id=graph_result.langfuse_trace_id,
             )
 
-            # Output guardrails
-            if _GUARDRAILS_AVAILABLE:
+            # Output guardrails: document-grounding applies only to RAG answers.
+            # Place/map responses are grounded by provider place data, not citation snippets.
+            if _GUARDRAILS_AVAILABLE and response.intent not in {"restaurant_search", "navigation"}:
                 try:
-                    grounding_result = verify_grounding(response.message, response.citations)
+                    llm_client, guardrail_model = _guardrail_llm_config()
+                    grounding_result = await verify_grounding(
+                        response.message,
+                        response.citations,
+                        llm_client,
+                        guardrail_model,
+                    )
                     if grounding_result.verdict == "flagged":
                         response.guardrail_status = "output_flagged"
                         response.guardrail_reason = grounding_result.reason
@@ -340,6 +361,21 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                         error=str(exc),
                         reason="grounding_check_crash",
                     )
+            elif response.intent in {"restaurant_search", "navigation"}:
+                response.guardrail_status = "pass"
+
+            input_flags = graph_result.guardrail_flags or {}
+            flagged_input = next(
+                (
+                    item
+                    for item in (input_flags.get("injection"), input_flags.get("off_topic"))
+                    if isinstance(item, dict) and item.get("verdict") == "flagged"
+                ),
+                None,
+            )
+            if flagged_input is not None and response.guardrail_status != "output_flagged":
+                response.guardrail_status = "input_flagged"
+                response.guardrail_reason = str(flagged_input.get("reason") or "low_confidence_scope")
 
             elapsed = (time.perf_counter() - t0) * 1000
             logger.info(
@@ -377,7 +413,13 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     # --- Output grounding check ---
     if _GUARDRAILS_AVAILABLE:
         try:
-            grounding_result = verify_grounding(response.message, response.citations)
+            llm_client, guardrail_model = _guardrail_llm_config()
+            grounding_result = await verify_grounding(
+                response.message,
+                response.citations,
+                llm_client,
+                guardrail_model,
+            )
             if grounding_result.verdict == "flagged":
                 response.guardrail_status = "output_flagged"
                 response.guardrail_reason = grounding_result.reason
@@ -434,6 +476,8 @@ async def chat_stream(
     if not query or not sid:
         return _error_stream("invalid_request")
 
+    stream_input_flagged = False
+
     # --- Input guardrails (before stream starts) ---
     if _GUARDRAILS_AVAILABLE:
         try:
@@ -446,7 +490,8 @@ async def chat_stream(
                 )
                 return _error_stream(f"input_blocked: {injection_result.reason}")
 
-            topic_result = reject_off_topic(query)
+            llm_client, guardrail_model = _guardrail_llm_config()
+            topic_result = await reject_off_topic(query, llm_client, guardrail_model)
             if topic_result.verdict == "blocked":
                 logger.warning(
                     "guardrail.topic_rejected_stream",
@@ -456,6 +501,8 @@ async def chat_stream(
                 return _error_stream(
                     "off_topic: This query is outside the scope of the tourism assistant."
                 )
+            if topic_result.verdict == "flagged":
+                stream_input_flagged = True
         except Exception as exc:
             logger.warning(
                 "guardrail.degraded",
@@ -499,6 +546,9 @@ async def chat_stream(
         return _error_stream("service_unavailable")
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        if stream_input_flagged:
+            yield _sse_payload("[STATUS] input_flagged")
+
         # --- Route through HamNinhGraph if available (S01 StateGraph pipeline) ---
         if use_ham_ninh_graph:
             logger.info(

@@ -26,14 +26,14 @@ except Exception:  # pragma: no cover - optional runtime dependency
         return [*(left or []), *(right or [])]
 
 NODE_TIMEOUT_LLM = 20
-NODE_TIMEOUT_TOOL = 15
+NODE_TIMEOUT_TOOL = 30
 NODE_TIMEOUT_RETRIEVE = 10
-NODE_TIMEOUT_ANSWER = 15
+NODE_TIMEOUT_ANSWER = 25
 
 # Per-node timeouts for new v4.2.0 graph nodes (Section 14.2)
 NODE_TIMEOUT_GUARDRAILS = 3
 NODE_TIMEOUT_INTENT_ROUTER = 5
-NODE_TIMEOUT_GRADE = 5
+NODE_TIMEOUT_GRADE = 12
 NODE_TIMEOUT_REWRITE = 8
 NODE_TIMEOUT_SEMANTIC_FALLBACK = 3
 

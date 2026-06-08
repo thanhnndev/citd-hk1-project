@@ -55,20 +55,23 @@ from agents.graph.nodes import (
 )
 
 try:
-    from langfuse import Langfuse
+    from langfuse import Langfuse, propagate_attributes
 except Exception:  # pragma: no cover - optional runtime dependency
     Langfuse = None
+    propagate_attributes = None
 
 try:
     from langgraph.graph import END, START, StateGraph
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.errors import GraphInterrupt
+    from langgraph.types import Command
 except Exception:  # pragma: no cover - optional runtime dependency
     END = "__end__"
     START = "__start__"
     StateGraph = None
     MemorySaver = None
     GraphInterrupt = None
+    Command = None
 
 logger = structlog.get_logger(__name__)
 
@@ -92,7 +95,7 @@ class TimeoutPolicy:
         "supervisor": NODE_TIMEOUT_INTENT_ROUTER,  # Same tier as router
         "conversational": NODE_TIMEOUT_LLM,
         "output_guardrails": NODE_TIMEOUT_GUARDRAILS,
-        "rag_agent": NODE_TIMEOUT_RETRIEVE,
+        "rag_agent": NODE_TIMEOUT_LLM,
         "grade_documents": NODE_TIMEOUT_GRADE,
         "rewrite_query": NODE_TIMEOUT_REWRITE,
         "maps_agent": NODE_TIMEOUT_TOOL,
@@ -162,6 +165,8 @@ class GraphResult:
     guardrail_flags: dict[str, Any] = field(default_factory=dict)
     blocked: bool = False
     langfuse_trace_id: str | None = None
+    interrupted: bool = False
+    interrupt: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -409,32 +414,60 @@ class HamNinhGraph:
         config = {"configurable": {"thread_id": session_id}}
 
         # Add Langfuse CallbackHandler if client is present
-        langfuse_handler = None
         trace_id = None
-        if self._langfuse_client is not None and Langfuse is not None:
-            try:
-                from langfuse.langchain import CallbackHandler
-                # Create custom trace_id upfront (Langfuse SDK best practice)
-                trace_id = Langfuse.create_trace_id()
-                langfuse_handler = CallbackHandler(
-                    trace_context={"trace_id": trace_id},
-                )
-                config["callbacks"] = [langfuse_handler]
-                # Pass session_id via metadata (Langfuse SDK requirement)
-                config["metadata"] = {"langfuse_session_id": session_id}
-                logger.debug("langfuse.callback_created", session_id=session_id, trace_id=trace_id)
-            except Exception as exc:
-                logger.warning(
-                    "langfuse.callback_failed",
-                    error_type=type(exc).__name__,
-                    error=str(exc),
-                )
-                langfuse_handler = None
-                trace_id = None
+        langfuse_enabled = self._langfuse_client is not None and Langfuse is not None
 
         try:
-            # Execute the graph
-            final_state = await self.graph.ainvoke(state, config)
+            # Execute the graph. Langfuse docs recommend propagating trace
+            # attributes around the runnable so child LangChain observations
+            # stay attached to one trace.
+            if langfuse_enabled and propagate_attributes is not None:
+                with propagate_attributes(
+                    trace_name="ham-ninh-graph",
+                    session_id=session_id,
+                    metadata={"langfuse_session_id": session_id},
+                    tags=["ham-ninh-graph", "chat"],
+                ):
+                    try:
+                        from langfuse.langchain import CallbackHandler
+                        config["callbacks"] = [CallbackHandler()]
+                        config["tags"] = ["ham-ninh-graph", "chat"]
+                        config["metadata"] = {"langfuse_session_id": session_id}
+                        logger.debug("langfuse.callback_created", session_id=session_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "langfuse.callback_failed",
+                            error_type=type(exc).__name__,
+                            error=str(exc),
+                        )
+                        config.pop("callbacks", None)
+                    final_state = await self.graph.ainvoke(state, config)
+                    if "callbacks" in config:
+                        try:
+                            trace_id = self._langfuse_client.get_current_trace_id()
+                        except Exception:
+                            trace_id = None
+                    else:
+                        trace_id = None
+            else:
+                final_state = await self.graph.ainvoke(state, config)
+
+            interrupt_value = self._pending_interrupt(config)
+            if interrupt_value is not None:
+                response_text = str(interrupt_value.get("message") or "")
+                return GraphResult(
+                    response_text=response_text,
+                    suggestions=[],
+                    citations=[],
+                    places=[],
+                    intent=final_state.get("intent"),
+                    routing_tier=final_state.get("routing_tier"),
+                    guardrail_flags=final_state.get("guardrail_flags", {}),
+                    blocked=False,
+                    langfuse_trace_id=trace_id,
+                    interrupted=True,
+                    interrupt=interrupt_value,
+                )
 
             # Extract result fields
             return GraphResult(
@@ -446,7 +479,7 @@ class HamNinhGraph:
                 routing_tier=final_state.get("routing_tier"),
                 guardrail_flags=final_state.get("guardrail_flags", {}),
                 blocked=final_state.get("intent") in ("blocked", "off_topic"),
-                langfuse_trace_id=trace_id,  # Use the trace_id we created upfront
+                langfuse_trace_id=trace_id,
             )
 
         except NodeTimeoutError as exc:
@@ -458,6 +491,60 @@ class HamNinhGraph:
                 timeout_seconds=exc.timeout_seconds,
             )
             raise
+
+    def _pending_interrupt(self, config: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the first pending LangGraph interrupt payload for this thread.
+
+        Per LangGraph docs, ``interrupt()`` pauses execution and stores the
+        pending task in the checkpoint. Callers must inspect graph state and
+        resume with ``Command(resume=...)`` instead of treating empty output as
+        a failed answer.
+        """
+        try:
+            graph_state = self.graph.get_state(config)
+        except Exception:
+            return None
+
+        for task in getattr(graph_state, "tasks", ()) or ():
+            for interrupt_obj in getattr(task, "interrupts", ()) or ():
+                value = getattr(interrupt_obj, "value", None)
+                if isinstance(value, dict):
+                    return value
+        return None
+
+    async def resume(self, *, session_id: str, resume_value: dict[str, Any]) -> GraphResult:
+        """Resume a paused graph with ``Command(resume=...)``.
+
+        This is the documented LangGraph interrupt lifecycle: a node calls
+        ``interrupt(payload)``, the UI collects user input, then the graph is
+        resumed with that value on the same ``thread_id``.
+        """
+        if Command is None:
+            raise RuntimeError("langgraph Command is not available")
+
+        config = {"configurable": {"thread_id": session_id}}
+        final_state = await self.graph.ainvoke(Command(resume=resume_value), config)
+        interrupt_value = self._pending_interrupt(config)
+        if interrupt_value is not None:
+            return GraphResult(
+                response_text=str(interrupt_value.get("message") or ""),
+                intent=final_state.get("intent"),
+                routing_tier=final_state.get("routing_tier"),
+                guardrail_flags=final_state.get("guardrail_flags", {}),
+                interrupted=True,
+                interrupt=interrupt_value,
+            )
+
+        return GraphResult(
+            response_text=final_state.get("response_text", ""),
+            suggestions=final_state.get("suggestions", []),
+            citations=final_state.get("citations", []),
+            places=final_state.get("places", []),
+            intent=final_state.get("intent"),
+            routing_tier=final_state.get("routing_tier"),
+            guardrail_flags=final_state.get("guardrail_flags", {}),
+            blocked=final_state.get("intent") in ("blocked", "off_topic"),
+        )
 
     async def stream_sse(
         self,
@@ -505,42 +592,49 @@ class HamNinhGraph:
         # Config with thread_id for checkpointing
         config = {"configurable": {"thread_id": session_id}}
 
-        # Add Langfuse CallbackHandler if client is present
-        langfuse_handler = None
-        if self._langfuse_client is not None and Langfuse is not None:
-            try:
-                from langfuse.langchain import CallbackHandler
-                # Create custom trace_id upfront (Langfuse SDK best practice)
-                trace_id = Langfuse.create_trace_id()
-                langfuse_handler = CallbackHandler(
-                    trace_context={"trace_id": trace_id},
-                )
-                config["callbacks"] = [langfuse_handler]
-                # Pass session_id via metadata (Langfuse SDK requirement)
-                config["metadata"] = {"langfuse_session_id": session_id}
-                logger.debug("langfuse.callback_created_stream", session_id=session_id, trace_id=trace_id)
-            except Exception as exc:
-                logger.warning(
-                    "langfuse.callback_failed_stream",
-                    error_type=type(exc).__name__,
-                    error=str(exc),
-                )
-                langfuse_handler = None
-
         # Stream with updates + custom modes for full observability
         adapter = StreamingAdapter()
         stream_interrupted = False
 
         try:
-            graph_stream = self.graph.astream(
-                state,
-                config,
-                stream_mode=["updates", "custom"],
-                version="v2",
-            )
-
-            async for sse_marker in adapter.adapt_stream(graph_stream):
-                yield sse_marker
+            langfuse_enabled = self._langfuse_client is not None and Langfuse is not None
+            if langfuse_enabled and propagate_attributes is not None:
+                with propagate_attributes(
+                    trace_name="ham-ninh-graph-stream",
+                    session_id=session_id,
+                    metadata={"langfuse_session_id": session_id},
+                    tags=["ham-ninh-graph", "chat", "stream"],
+                ):
+                    try:
+                        from langfuse.langchain import CallbackHandler
+                        config["callbacks"] = [CallbackHandler()]
+                        config["tags"] = ["ham-ninh-graph", "chat", "stream"]
+                        config["metadata"] = {"langfuse_session_id": session_id}
+                        logger.debug("langfuse.callback_created_stream", session_id=session_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "langfuse.callback_failed_stream",
+                            error_type=type(exc).__name__,
+                            error=str(exc),
+                        )
+                        config.pop("callbacks", None)
+                    graph_stream = self.graph.astream(
+                        state,
+                        config,
+                        stream_mode=["updates", "custom"],
+                        version="v2",
+                    )
+                    async for sse_marker in adapter.adapt_stream(graph_stream):
+                        yield sse_marker
+            else:
+                graph_stream = self.graph.astream(
+                    state,
+                    config,
+                    stream_mode=["updates", "custom"],
+                    version="v2",
+                )
+                async for sse_marker in adapter.adapt_stream(graph_stream):
+                    yield sse_marker
 
             # After stream completes, check if graph was interrupted
             # LangGraph's astream() doesn't raise GraphInterrupt - it stops normally

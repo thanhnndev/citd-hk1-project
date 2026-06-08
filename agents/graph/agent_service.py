@@ -513,6 +513,8 @@ class AgentService:
                 state["response_text"] = answer.message
                 state["fallback"] = answer.fallback
                 state["knowledge_response_ready"] = True
+            except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+                logger.warning("agent.knowledge_llm_timeout", session_id=state["session_id"], reason=type(exc).__name__)
             except Exception as exc:
                 logger.warning("agent.knowledge_llm_error", session_id=state["session_id"], reason=type(exc).__name__)
         if not state.get("response_text"):

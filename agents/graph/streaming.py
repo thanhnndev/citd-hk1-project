@@ -150,6 +150,7 @@ class StreamingAdapter:
             # Token-by-token streaming from LLM
             content = data.get("content", "")
             if content:
+                self._response_text_emitted = True
                 yield content
         elif event_type == "status":
             # Custom status updates from nodes

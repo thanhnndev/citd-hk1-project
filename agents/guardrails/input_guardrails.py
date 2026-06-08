@@ -1,7 +1,7 @@
 """Input guardrails — prompt injection blocking and topic rejection.
 
-Pure-Python module with no FastAPI dependency.  Wraps every user message
-before it reaches the agent orchestration layer.
+Uses LLM-based classification for scope validation (not hardcoded keywords).
+Pure-Python module with no FastAPI dependency.
 
 Emits structured log events:
 - ``guardrail.input_blocked`` — prompt injection detected
@@ -14,9 +14,10 @@ import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
+from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)
 
@@ -93,61 +94,76 @@ _INJECTION_RE: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Topic allowlist / blocklist
+# LLM-based scope classification (replaces hardcoded keyword matching)
 # ---------------------------------------------------------------------------
 
-# Out-of-scope locations (not Ham Ninh / Phu Quoc)
-_OUT_OF_SCOPE_LOCATIONS: list[tuple[str, str]] = [
-    ("hanoi", r"\b(hà nội|hanoi|ha noi)\b"),
-    ("saigon", r"\b(sài gòn|saigon|sai gon|hồ chí minh|ho chi minh|hcm)\b"),
-    ("danang", r"\b(đà nẵng|danang|da nang)\b"),
-    ("hue", r"\b(huế|hue)\b"),
-    ("nhatrang", r"\b(nha trang|nhatrang)\b"),
-    ("dalat", r"\b(đà lạt|dalat|da lat)\b"),
-    ("hoian", r"\b(hội an|hoian|hoi an)\b"),
-    ("hanoi_airport", r"\b(nội bài|noi bai)\b"),
-    ("saigon_airport", r"\b(tân sơn nhất|tan son nhat)\b"),
-]
 
-_OUT_OF_SCOPE_LOCATIONS_RE: list[tuple[str, re.Pattern[str]]] = [
-    (label, re.compile(pattern, re.IGNORECASE))
-    for label, pattern in _OUT_OF_SCOPE_LOCATIONS
-]
+class ScopeClassification(BaseModel):
+    """LLM classification for scope validation.
 
-_OFF_TOPIC_ALLOWLIST_VI: set[str] = {
-    # Greetings
-    "xin chào", "chào", "hello", "hi", "hey",
-    # Tourism-adjacent (only valid if in scope)
-    "khách sạn", "hotel", "resort",
-    "vận chuyển", "transport", "xe", "taxi", "bus",
-    "biển", "beach", "ăn uống", "food", "restaurant",
-    "du lịch", "travel", "tourism", "tham quan",
-    "địa điểm", "điểm đến", "attraction",
-    "mua sắm", "shopping", "giá cả", "price",
-}
+    Guardrail best practice is to make the model return a calibrated routing
+    decision, then only hard-block high-confidence out-of-scope requests.
+    """
 
-_OFF_TOPIC_ALLOWLIST_EN: set[str] = {
-    "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
-    "how are you", "greetings",
-    "hotel", "resort", "transport", "taxi", "bus",
-    "beach", "food", "restaurant", "travel", "tourism",
-    "attraction", "shopping", "price", "cost", "ticket",
-    "direction", "map", "guide", "itinerary",
-}
+    decision: Literal["in_scope", "out_of_scope", "uncertain"] = Field(
+        description="Scope decision for the user query"
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Classifier confidence in the decision",
+    )
+    category: Literal[
+        "ham_ninh_tourism",
+        "phu_quoc_tourism",
+        "local_food_or_places",
+        "directions_or_location",
+        "weather_local",
+        "weather_other_location",
+        "other_location_tourism",
+        "unrelated",
+        "ambiguous",
+    ] = Field(description="Semantic category used for auditability")
+    reason: str = Field(
+        description="Brief explanation of why the query is in/out of scope"
+    )
 
-_OFF_TOPIC_BLOCKLIST: list[tuple[str, str]] = [
-    ("code_write", r"(write\s+code|python\s+script|javascript|function|algorithm|program|coding)"),
-    ("code_help", r"(debug|fix\s+(this\s+)?code|implement\s+(a\s+)?(class|function|method))"),
-    ("math_homework", r"(solve\s+(this\s+)?(equation|math|calculus|integral|derivative)|prove\s+that)"),
-    ("explicit_content", r"(porn|sex|nude|nsfw|xxx|18\+)"),
-    ("politics_vote", r"(vote|election|president|political\s+party|campaign|đảng\s+phái|bầu\s+cử)"),
-    ("medical_advice", r"(diagnose|prescribe|treatment\s+plan|medical\s+advice|triage)"),
-]
 
-_OFF_TOPIC_BLOCKLIST_RE: list[tuple[str, re.Pattern[str]]] = [
-    (label, re.compile(pattern, re.IGNORECASE))
-    for label, pattern in _OFF_TOPIC_BLOCKLIST
-]
+_SCOPE_PROMPT = """You are a scope validator for the Ham Ninh Tourism Assistant.
+
+Follow guardrail best practice: block only clearly unrelated requests. If the
+query is ambiguous but plausibly asks for travel, food, places, directions, or
+local recommendations, classify it as in_scope or uncertain so the graph can ask
+clarifying questions, request location, or route to tools.
+
+SCOPE:
+- Ham Ninh fishing village (làng chài Hàm Ninh)
+- Phu Quoc island (đảo Phú Quốc)
+- Local attractions, restaurants, seafood places, hotels, culture, history, trip planning
+- Directions, maps, distance, or "near me / nearby / gần đây" local recommendations
+- Weather in Ham Ninh or Phu Quoc
+
+OUT OF SCOPE:
+- Explicit questions about OTHER cities/provinces/countries without relation to Ham Ninh/Phu Quoc
+- Weather in OTHER named locations
+- General knowledge unrelated to tourism
+- Programming, technical questions, politics, etc.
+
+Decision rules:
+- Return in_scope for local/deictic tourism requests such as "near me", "nearby", "gần đây", "gần tôi", even if Ham Ninh/Phu Quoc is not named.
+- Return uncertain when the query is too short or missing context but could be travel/food/place related.
+- Return out_of_scope only when the request is clearly outside the assistant domain.
+
+Examples:
+- "Tìm quán hải sản gần đây" → in_scope, local_food_or_places, high confidence
+- "Có quán ăn nào gần tôi không?" → in_scope, local_food_or_places, high confidence
+- "Thời tiết Hà Nội" → out_of_scope, weather_other_location, high confidence
+- "Thời tiết Hàm Ninh" → in_scope, weather_local, high confidence
+- "Quán ăn ngon ở Sài Gòn" → out_of_scope, other_location_tourism, high confidence
+- "Quán ăn ngon" → uncertain, ambiguous, medium confidence
+- "Làng chài Hàm Ninh có gì đặc biệt?" → in_scope, ham_ninh_tourism, high confidence
+
+Validate the user's query and return the structured decision."""
 
 
 # ---------------------------------------------------------------------------
@@ -191,66 +207,84 @@ def block_injection(message: str) -> GuardrailResult:
     return GuardrailResult(verdict="pass")
 
 
-def reject_off_topic(message: str) -> GuardrailResult:
-    """Reject clearly off-topic queries that fall outside Ham Ninh tourism scope.
+async def reject_off_topic(
+    message: str,
+    llm_client: Any | None = None,
+    model: str = "gpt-4o-mini",
+) -> GuardrailResult:
+    """Reject off-topic queries using LLM structured-output scope classification.
 
-    Uses scope-based approach:
-    1. Check location scope — reject if mentions out-of-scope locations (Hanoi, Saigon, etc.)
-    2. Check blocklist — reject programming, explicit content, politics, etc.
-    3. Check allowlist — accept tourism-adjacent keywords if in scope
-    4. Conservative pass-through for borderline cases
-
-    Returns:
-        GuardrailResult with verdict="blocked" for out-of-scope or blocklisted topics,
-        verdict="pass" otherwise.
+    This follows the LangGraph documented pattern for LLM routing/grading:
+    define a Pydantic schema, call the model with ``response_format``, then
+    route/block from the structured decision. No location or topic keyword
+    allowlist is used for scope decisions.
     """
     if not message or not message.strip():
         return GuardrailResult(verdict="pass")
 
-    cleaned = _strip_zero_width(message)
-    normalized = _normalize(cleaned)
     query_hash = _hash_query(message)
 
-    # Check location scope first — reject queries about other locations
-    for label, pattern in _OUT_OF_SCOPE_LOCATIONS_RE:
-        if pattern.search(normalized):
+    if llm_client is None:
+        logger.warning(
+            "guardrail.degraded",
+            reason="scope_llm_unavailable",
+            query_hash=query_hash,
+        )
+        return GuardrailResult(verdict="flagged", reason="scope_llm_unavailable")
+
+    try:
+        completion = await llm_client.chat.completions.parse(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SCOPE_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            response_format=ScopeClassification,
+            max_completion_tokens=160,
+        )
+        parsed = completion.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("scope classifier returned no parsed output")
+
+        if parsed.decision == "out_of_scope" and parsed.confidence >= 0.75:
             logger.warning(
                 "guardrail.topic_rejected",
                 verdict="blocked",
-                reason="out_of_scope_location",
-                location=label,
+                reason="out_of_scope",
+                llm_reason=parsed.reason,
+                confidence=parsed.confidence,
+                category=parsed.category,
                 query_hash=query_hash,
                 severity="medium",
             )
             return GuardrailResult(
                 verdict="blocked",
                 reason="off_topic",
-                details=f"out_of_scope:{label}",
+                details=f"out_of_scope:{parsed.category}:{parsed.reason}",
                 severity="medium",
             )
 
-    # Check blocklist — these are hard rejects
-    for label, pattern in _OFF_TOPIC_BLOCKLIST_RE:
-        if pattern.search(normalized):
-            logger.warning(
-                "guardrail.topic_rejected",
-                verdict="blocked",
-                reason="off_topic",
-                pattern_matched=label,
+        if parsed.decision == "out_of_scope":
+            logger.info(
+                "guardrail.topic_uncertain_passed",
+                reason="low_confidence_out_of_scope",
+                llm_reason=parsed.reason,
+                confidence=parsed.confidence,
+                category=parsed.category,
                 query_hash=query_hash,
-                severity="medium",
             )
-            return GuardrailResult(
-                verdict="blocked",
-                reason="off_topic",
-                details=label,
-                severity="medium",
-            )
+            return GuardrailResult(verdict="flagged", reason=parsed.reason, details=parsed.category)
 
-    # Check if message hits the allowlist — if so, it's on-topic enough
-    for keyword in _OFF_TOPIC_ALLOWLIST_VI | _OFF_TOPIC_ALLOWLIST_EN:
-        if keyword.lower() in normalized:
-            return GuardrailResult(verdict="pass")
+        if parsed.decision == "uncertain":
+            return GuardrailResult(verdict="flagged", reason=parsed.reason, details=parsed.category)
 
-    # No keywords matched either list — conservative pass-through
-    return GuardrailResult(verdict="pass")
+        return GuardrailResult(verdict="pass", reason=parsed.reason, details=parsed.category)
+
+    except Exception as exc:
+        logger.warning(
+            "guardrail.llm_classification_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            query_hash=query_hash,
+        )
+        return GuardrailResult(verdict="flagged", reason="scope_llm_failed", severity="medium")

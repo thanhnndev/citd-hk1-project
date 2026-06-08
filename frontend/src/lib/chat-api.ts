@@ -122,6 +122,7 @@ export interface ChatResponse {
 export type ChatStreamStatus =
   | "understanding"
   | "using_history"
+  | "input_flagged"
   | "searching_knowledge"
   | "checking_places"
   | "composing";
@@ -150,7 +151,7 @@ export interface StreamChatCallbacks {
   onPlaces?: (places: PlaceResult[]) => void;
   onStatus?: (status: ChatStreamStatus) => void;
   onSuggestions?: (suggestions: string[]) => void;
-  onInterrupt?: (interruptData: InterruptData) => Promise<LatLng | null>;
+  onInterrupt?: (interruptData: InterruptData) => Promise<unknown | null>;
   onDone: () => void;
   onOpen?: () => void;
   onError: (error: string) => void;
@@ -166,7 +167,13 @@ export interface InterruptData {
 /* ── Error shape returned by the route handler on 502 ──────────────── */
 
 export interface ChatError {
-  error: string;
+  error?: string;
+  message?: string;
+  detail?: {
+    error?: string;
+    message?: string;
+    session_id?: string;
+  } | string;
 }
 
 /* ── Public API ────────────────────────────────────────────────────── */
@@ -206,7 +213,29 @@ export async function sendChat(
 
   if (!res.ok) {
     const data = (await res.json().catch(() => null)) as ChatError | null;
-    throw new Error(data?.error ?? `Chat request failed (${res.status})`);
+    const detail = typeof data?.detail === "object" ? data.detail : null;
+    throw new Error(
+      detail?.message ?? data?.message ?? data?.error ?? `Chat request failed (${res.status})`,
+    );
+  }
+
+  return (await res.json()) as ChatResponse;
+}
+
+export async function resumeChat(
+  sessionId: string,
+  resumeValue: unknown,
+): Promise<ChatResponse> {
+  const res = await fetch("/api/chat/resume", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, resume_value: resumeValue }),
+  });
+
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as ChatError | null;
+    const detail = typeof data?.detail === "object" ? data.detail : null;
+    throw new Error(detail?.message ?? data?.message ?? data?.error ?? `Resume failed (${res.status})`);
   }
 
   return (await res.json()) as ChatResponse;
@@ -328,13 +357,26 @@ export async function streamChat(
         try {
           const interruptData = JSON.parse(data.slice(12)) as InterruptData;
           if (callbacks.onInterrupt) {
-            const location = await callbacks.onInterrupt(interruptData);
-            if (location && interruptData.requires_geolocation) {
-              // Resume the stream with location data
-              // The backend will receive this via Command(resume=location)
-              console.log('Resuming graph with location:', location);
+            const resumeValue = await callbacks.onInterrupt(interruptData);
+            if (resumeValue) {
+              const resumed = await resumeChat(sessionId, resumeValue);
+              callbacks.onCitations(resumed.citations ?? []);
+              callbacks.onPlaces?.(resumed.places ?? []);
+              if (resumed.suggestions?.length) {
+                callbacks.onSuggestions?.(resumed.suggestions);
+              }
+              if (resumed.message) {
+                callbacks.onToken(resumed.message);
+              }
+              callbacks.onDone();
+              return;
             }
           }
+          if (interruptData.message) {
+            callbacks.onToken(interruptData.message);
+          }
+          callbacks.onDone();
+          return;
         } catch {
           callbacks.onError("Invalid interrupt payload");
           return;

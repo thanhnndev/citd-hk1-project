@@ -188,7 +188,8 @@ async def input_guardrails_node(state: AgentState) -> dict[str, Any]:
         }
 
     # --- Off-topic check ---
-    topic_result = reject_off_topic(message)
+    services = get_services()
+    topic_result = await reject_off_topic(message, services.llm_client, services.model)
     flags["off_topic"] = {
         "verdict": topic_result.verdict,
         "reason": topic_result.reason,
@@ -270,10 +271,15 @@ Also determine:
 - confidence: your confidence in the classification (0.0 to 1.0)
 - is_followup: whether the message references prior conversation context
 - needs_location: whether the query requires the user's current GPS.
-  Set true only for queries like "near me", "nearby", "nearest", "from my current location",
+  Set true for local/deictic requests such as "near me", "nearby", "nearest",
+  "around here", "gần đây", "gần tôi", "quanh đây", "từ vị trí của tôi",
   or "give me directions from where I am".
   Set false for route questions that already include an explicit origin, e.g.
   "Từ Dương Đông đi Hàm Ninh thế nào?" because no user GPS is needed.
+Examples:
+- "Tìm quán hải sản gần đây" -> restaurant_search, high confidence, needs_location=true
+- "Có quán ăn nào gần tôi không?" -> restaurant_search, high confidence, needs_location=true
+- "Tìm nhà hàng hải sản ở Hàm Ninh" -> restaurant_search, high confidence, needs_location=false
 """
 
 
@@ -682,9 +688,10 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
 
     flags: dict[str, Any] = dict(state.get("guardrail_flags") or {})
 
-    # Skip grounding check for blocked/off-topic/conversational responses
+    # Skip document-grounding for responses that are not RAG document answers.
+    # Place/map answers are grounded by provider place data, not citations.
     intent = state.get("intent")
-    if intent in ("blocked", "off_topic", "conversational", "clarification"):
+    if intent in ("blocked", "off_topic", "conversational", "clarification", "restaurant_search", "navigation"):
         flags["output_grounding"] = {
             "verdict": "skipped",
             "reason": f"intent_{intent}",
@@ -704,7 +711,13 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
         return update
 
     citations = state.get("citations", [])
-    grounding_result = verify_grounding(response_text, citations or None)
+    services = get_services()
+    grounding_result = await verify_grounding(
+        response_text,
+        citations or None,
+        services.llm_client,
+        services.model,
+    )
 
     flags["output_grounding"] = {
         "verdict": grounding_result.verdict,
@@ -817,15 +830,37 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
 
     if llm_answer_service is not None and chunks:
         try:
-            response = await llm_answer_service.answer(
-                chunks=chunks,
-                citations=citations,
-                query=message,
-                language=language,
-                session_id=session_id,
-            )
-            response_text = response.message
-            mode = "llm"
+            writer = None
+            try:
+                from langgraph.config import get_stream_writer
+                writer = get_stream_writer()
+            except Exception:
+                writer = None
+
+            stream_answer = getattr(llm_answer_service, "answer_stream", None)
+            if writer is not None and callable(stream_answer):
+                parts: list[str] = []
+                async for token in stream_answer(
+                    chunks=chunks,
+                    citations=citations,
+                    query=message,
+                    language=language,
+                    session_id=session_id,
+                ):
+                    parts.append(token)
+                    writer({"type": "token", "content": token})
+                response_text = "".join(parts)
+                mode = "llm_stream"
+            else:
+                response = await llm_answer_service.answer(
+                    chunks=chunks,
+                    citations=citations,
+                    query=message,
+                    language=language,
+                    session_id=session_id,
+                )
+                response_text = response.message
+                mode = "llm"
         except Exception as exc:
             logger.warning(
                 "rag_agent.llm_failed",
@@ -929,6 +964,22 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
     session_id = state.get("session_id", "")
     message = state.get("message", "")
     chunks = state.get("knowledge_chunks") or []
+
+    if state.get("response_text"):
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="grade_documents",
+            session_id=session_id,
+            mode="skipped_answer_already_generated",
+            grade_score=1.0,
+            grade_label="relevant",
+            duration_ms=elapsed,
+        )
+        return {
+            "grade_score": 1.0,
+            "grade_label": "relevant",
+        }
 
     logger.info(
         "graph.node_enter",
@@ -1237,13 +1288,36 @@ async def maps_agent_node(state: AgentState) -> dict[str, Any]:
             ),
             "requires_geolocation": True,
         })
-        # After resume, user_location will be populated
+        # After resume, user_location will be populated with the resume payload.
         logger.info(
             "graph.node_resume",
             node="maps_agent",
             session_id=session_id,
             location_received=user_location is not None,
         )
+
+    if needs_location and (
+        not isinstance(user_location, dict)
+        or not isinstance(user_location.get("lat"), (int, float))
+        or not isinstance(user_location.get("lng"), (int, float))
+    ):
+        response_text = (
+            "Mình chưa có vị trí hiện tại nên chưa thể xếp hạng các quán gần bạn. "
+            "Bạn có thể bật quyền vị trí, hoặc hỏi cụ thể theo khu vực như 'quán hải sản ở Hàm Ninh'."
+            if language == "vi"
+            else "I do not have your current location, so I cannot rank nearby places yet. "
+            "You can enable location access or ask for a specific area such as seafood restaurants in Ham Ninh."
+        )
+        return {
+            "places": [],
+            "response_text": response_text,
+            "suggestions": (
+                ["Quán hải sản ở Hàm Ninh", "Tìm gần chợ Hàm Ninh", "Bật vị trí rồi thử lại"]
+                if language == "vi"
+                else ["Seafood in Ham Ninh", "Find near Ham Ninh market", "Enable location and retry"]
+            ),
+            "intent": state.get("intent") or "restaurant_search",
+        }
 
     # Get PlaceRecommendationService from dependency injection
     services = get_services()

@@ -20,18 +20,22 @@ import type { ChatStreamStatus, Citation, PlaceResult } from "@/lib/chat-api";
 import { submitFeedback } from "@/lib/chat-api";
 
 const markdownComponents: Components = {
-  p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
   strong: ({ children }) => (
     <strong className="font-semibold text-current">{children}</strong>
   ),
   em: ({ children }) => <em className="italic">{children}</em>,
   ul: ({ children }) => (
-    <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>
+    <ul className="my-3 space-y-2 pl-0">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>
+    <ol className="my-3 space-y-2 pl-0">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-1">{children}</li>,
+  li: ({ children }) => (
+    <li className="list-none rounded-xl border border-[#e9e9e7] bg-[#fbfaf7] px-3 py-2 shadow-sm">
+      {children}
+    </li>
+  ),
   h1: ({ children }) => (
     <h3 className="mb-2 mt-4 text-lg font-semibold">{children}</h3>
   ),
@@ -272,7 +276,7 @@ export function MessageBubble({
           }`}
         >
           <div
-            className="whitespace-pre-wrap text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7"
+            className={`text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7 ${isUser ? "whitespace-pre-wrap" : ""}`}
           >
             {content ? (
               isUser ? (
@@ -497,10 +501,20 @@ function RichMessageContent({
   citations?: Citation[];
 }) {
   return (
-    <ReactMarkdown components={markdownComponents}>
-      {transformCitationMarkers(content, citations)}
-    </ReactMarkdown>
+    <div className="max-w-none text-[#37352f] [&_p:empty]:hidden">
+      <ReactMarkdown components={markdownComponents}>
+        {transformCitationMarkers(normalizeAssistantMarkdown(content), citations)}
+      </ReactMarkdown>
+    </div>
   );
+}
+
+function normalizeAssistantMarkdown(content: string) {
+  return content
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\s*[-*]\s*$/gm, "")
+    .trim();
 }
 
 function transformCitationMarkers(content: string, citations?: Citation[]) {

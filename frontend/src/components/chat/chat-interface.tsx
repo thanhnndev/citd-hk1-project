@@ -82,6 +82,7 @@ const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
   vi: {
     understanding: "Đang hiểu câu hỏi...",
     using_history: "Đang dùng ngữ cảnh cuộc trò chuyện...",
+    input_flagged: "Câu hỏi hơi mơ hồ, mình sẽ xử lý thận trọng...",
     searching_knowledge: "Đang tìm nguồn phù hợp...",
     checking_places: "Đang kiểm tra địa điểm/đường đi...",
     composing: "Đang tổng hợp câu trả lời...",
@@ -89,6 +90,7 @@ const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
   en: {
     understanding: "Understanding your question...",
     using_history: "Using conversation context...",
+    input_flagged: "The question is ambiguous, handling carefully...",
     searching_knowledge: "Searching relevant sources...",
     checking_places: "Checking places/routes...",
     composing: "Composing the answer...",
@@ -280,6 +282,25 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         }));
       };
 
+      const renderGuardrailResponse = (reason: string) => {
+        const friendly = language === "vi"
+          ? "Mình chỉ hỗ trợ thông tin về Hàm Ninh / Phú Quốc. Bạn có thể hỏi về địa điểm, ăn uống, đường đi, văn hóa hoặc lịch trình ở Hàm Ninh nhé."
+          : "I only help with Ham Ninh / Phu Quoc tourism. You can ask about places, food, directions, culture, or itineraries in Ham Ninh.";
+
+        updateLastAssistant((message) => ({
+          ...message,
+          content: friendly,
+          citations: [],
+          places: [],
+          suggestions: getQuickReplyLabels("generic"),
+          guardrailStatus: reason,
+          fallback: true,
+          status: "complete",
+          streamStatus: null,
+          statusHistory: ["understanding", "composing"],
+        }));
+      };
+
       try {
         let streamFailed = false;
         let streamErrorMessage = translations.error;
@@ -324,7 +345,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 return location;
               } catch (error) {
                 console.warn('Geolocation request failed:', error);
-                return null;
+                return { denied: true };
               }
             }
             
@@ -342,7 +363,11 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
         if (streamFailed) {
           try {
-            await renderPostFallback();
+            if (/\boff_topic\b|\binput_blocked\b/i.test(streamErrorMessage)) {
+              renderGuardrailResponse(streamErrorMessage);
+            } else {
+              await renderPostFallback();
+            }
           } catch (err) {
             removeEmptyAssistantPlaceholder();
             setError(err instanceof Error ? err.message : streamErrorMessage);
@@ -351,8 +376,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           }
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : translations.error;
+        if (/\boff_topic\b|\binput_blocked\b/i.test(message)) {
+          renderGuardrailResponse(message);
+          setLoading(false);
+          return;
+        }
         removeEmptyAssistantPlaceholder();
-        setError(err instanceof Error ? err.message : translations.error);
+        setError(message);
         setLoading(false);
       }
     },
