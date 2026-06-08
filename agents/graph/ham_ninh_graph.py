@@ -1,7 +1,7 @@
 """HamNinhGraph — LangGraph StateGraph assembler with per-node timeout policy.
 
 This module assembles the full agent pipeline as a LangGraph StateGraph with:
-- 9 nodes (7 real + 2 stubs) from agents.graph.nodes
+- 9 nodes (8 real + 1 stub) from agents.graph.nodes
 - Per-node TimeoutPolicy via asyncio.wait_for
 - Conditional routing based on supervisor decisions
 - AsyncPostgresSaver or MemorySaver checkpointing
@@ -50,7 +50,7 @@ from agents.graph.nodes import (
     rag_agent_node,
     grade_documents_node,
     rewrite_query_node,
-    maps_agent_stub_node,
+    maps_agent_node,
 )
 
 try:
@@ -233,7 +233,7 @@ class HamNinhGraph:
             ("rag_agent", rag_agent_node),
             ("grade_documents", grade_documents_node),
             ("rewrite_query", rewrite_query_node),
-            ("maps_agent", maps_agent_stub_node),
+            ("maps_agent", maps_agent_node),
         ]
 
         for node_name, node_fn in nodes:

@@ -1,6 +1,6 @@
 """Node functions for the HamNinhGraph LangGraph StateGraph (v4.2.0).
 
-Provides 9 node functions (7 real + 2 stubs) that form the
+Provides 9 node functions (8 real + 1 stub) that form the
 graph topology.  Each node is an ``async def`` that accepts an ``AgentState``
 dict and returns a partial state-update dict — the standard LangGraph node
 contract.
@@ -13,10 +13,10 @@ Real nodes:
     - output_guardrails_node — grounding verification
     - rag_agent_node         — hybrid retrieval + Cohere rerank + LLM answer
     - grade_documents_node   — LLM structured-output relevance grading
+    - maps_agent_node        — PlaceRecommendationService with fairness ranking
 
-Stub nodes (passthrough, wired for T02+ expansion):
+Stub nodes (passthrough, wired for expansion):
     - rewrite_query_stub_node
-    - maps_agent_stub_node
 
 Dependency injection
 --------------------
@@ -1132,39 +1132,134 @@ async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 9. maps_agent_stub_node (STUB — passthrough for T02+ expansion)
+# 9. maps_agent_node (REAL — PlaceRecommendationService integration)
 # ---------------------------------------------------------------------------
 
 
-async def maps_agent_stub_node(state: AgentState) -> dict[str, Any]:
-    """Stub: Maps/place recommendation agent node.
+async def maps_agent_node(state: AgentState) -> dict[str, Any]:
+    """Maps agent node: call PlaceRecommendationService for place recommendations.
 
-    This is a passthrough stub that returns empty places.
-    The graph assembler (T02) will replace this with a real implementation
-    that calls the PlaceRecommendationService.
+    Calls the injected PlaceRecommendationService to retrieve fairness-ranked
+    places with score_breakdown. Handles location consent and service failures
+    gracefully.
 
     Reads:
-        - ``state["message"]``, ``state["needs_location"]``, ``state["user_location"]``
+        - ``state["message"]`` — user query text
+        - ``state["user_location"]`` — optional dict with lat/lng
+        - ``state["language"]`` — language code (default "vi")
+        - ``state["session_id"]`` — session identifier
+        - ``state["needs_location"]`` — whether location is required
     Writes:
-        - ``places``
+        - ``places`` — list of place dicts with score_breakdown
+        - ``response_text`` — natural language response message
     """
     t0 = time.perf_counter()
     session_id = state.get("session_id", "")
+    message = state.get("message", "")
+    user_location = state.get("user_location")
+    language = state.get("language", "vi")
+    needs_location = state.get("needs_location", False)
 
     logger.info(
         "graph.node_enter",
-        node="maps_agent_stub",
+        node="maps_agent",
         session_id=session_id,
+        mode="place_recommendation",
     )
 
-    elapsed = round((time.perf_counter() - t0) * 1000, 3)
-    logger.info(
-        "graph.node_exit",
-        node="maps_agent_stub",
-        session_id=session_id,
-        mode="stub_passthrough",
-        duration_ms=elapsed,
-    )
-    return {
-        "places": [],
-    }
+    # Location consent check: if location is needed but not provided, prompt user
+    if needs_location and user_location is None:
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="maps_agent",
+            session_id=session_id,
+            mode="location_consent_needed",
+            duration_ms=elapsed,
+        )
+        consent_message = (
+            "Để gợi ý địa điểm phù hợp gần bạn, mình cần biết vị trí hiện tại. "
+            "Bạn có thể chia sẻ vị trí không?"
+            if language == "vi"
+            else "To recommend places near you, I need your current location. "
+            "Can you share your location?"
+        )
+        return {
+            "places": [],
+            "response_text": consent_message,
+        }
+
+    # Get PlaceRecommendationService from dependency injection
+    services = get_services()
+    places_service = services.places_service
+
+    if places_service is None:
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.warning(
+            "graph.node_exit",
+            node="maps_agent",
+            session_id=session_id,
+            mode="no_places_service",
+            duration_ms=elapsed,
+        )
+        error_message = (
+            "Xin lỗi, dịch vụ gợi ý địa điểm hiện không khả dụng. "
+            "Vui lòng thử lại sau."
+            if language == "vi"
+            else "Sorry, the place recommendation service is currently unavailable. "
+            "Please try again later."
+        )
+        return {
+            "places": [],
+            "response_text": error_message,
+        }
+
+    # Call PlaceRecommendationService
+    try:
+        chat_response = await places_service.recommend(
+            query=message,
+            user_location=user_location,
+            language=language,
+            session_id=session_id,
+        )
+
+        # Convert PlaceResult Pydantic models to dicts for AgentState
+        places_dicts = [place.model_dump() for place in chat_response.places]
+
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="maps_agent",
+            session_id=session_id,
+            mode="place_recommendation",
+            place_count=len(places_dicts),
+            duration_ms=elapsed,
+        )
+
+        return {
+            "places": places_dicts,
+            "response_text": chat_response.message,
+        }
+
+    except Exception as exc:
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.error(
+            "graph.node_exit",
+            node="maps_agent",
+            session_id=session_id,
+            mode="service_error",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            duration_ms=elapsed,
+        )
+        error_message = (
+            "Xin lỗi, đã xảy ra lỗi khi tìm kiếm địa điểm. "
+            "Vui lòng thử lại sau."
+            if language == "vi"
+            else "Sorry, an error occurred while searching for places. "
+            "Please try again later."
+        )
+        return {
+            "places": [],
+            "response_text": error_message,
+        }

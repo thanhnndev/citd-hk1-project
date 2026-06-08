@@ -174,7 +174,7 @@ class TestGraphCompilation:
         graph = HamNinhGraph(checkpointer=MemorySaver())
         # Expected nodes from T01 plan:
         # input_guardrails, intent_router, supervisor, conversational,
-        # output_guardrails (+ stubs: rag_agent_stub, maps_agent_stub)
+        # output_guardrails, rag_agent, grade_documents, rewrite_query, maps_agent
         compiled = graph.graph
         assert compiled is not None
 
