@@ -1,6 +1,6 @@
 """Node functions for the HamNinhGraph LangGraph StateGraph (v4.2.0).
 
-Provides 9 node functions (6 real + 3 stubs) that form the
+Provides 9 node functions (7 real + 2 stubs) that form the
 graph topology.  Each node is an ``async def`` that accepts an ``AgentState``
 dict and returns a partial state-update dict — the standard LangGraph node
 contract.
@@ -12,9 +12,9 @@ Real nodes:
     - conversational_node    — direct / clarification / LLM conversational
     - output_guardrails_node — grounding verification
     - rag_agent_node         — hybrid retrieval + Cohere rerank + LLM answer
+    - grade_documents_node   — LLM structured-output relevance grading
 
 Stub nodes (passthrough, wired for T02+ expansion):
-    - grade_documents_stub_node
     - rewrite_query_stub_node
     - maps_agent_stub_node
 
@@ -43,6 +43,7 @@ import structlog
 
 from agents.graph.state import (
     AgentState,
+    GradeDocuments,
     RouterOutput,
     NODE_TIMEOUT_GUARDRAILS,
     NODE_TIMEOUT_INTENT_ROUTER,
@@ -857,42 +858,149 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 7. grade_documents_stub_node (STUB — passthrough for T02+ expansion)
+# 7. grade_documents_node (REAL — LLM structured-output relevance grading)
 # ---------------------------------------------------------------------------
 
+_GRADE_DOCUMENTS_SYSTEM_PROMPT = """\
+You are a document relevance grader for the Ham Ninh tourism assistant.
+Given a retrieved document chunk and the user's question, determine whether \
+the chunk contains information relevant to answering the question.
 
-async def grade_documents_stub_node(state: AgentState) -> dict[str, Any]:
-    """Stub: Document relevance grading for self-corrective RAG.
+Respond with 'yes' if the chunk is relevant, 'no' if it is not.
+Be lenient: if the chunk is even partially related to the question, mark it relevant.
+"""
 
-    This is a passthrough stub that sets default grading fields.
-    The graph assembler (T02) will replace this with a real implementation
-    that calls the LLM with ``response_format=GradeDocuments``.
+
+async def grade_documents_node(state: AgentState) -> dict[str, Any]:
+    """Grade chunk relevance via LLM structured output for self-corrective RAG.
+
+    For each retrieved chunk (limited to top-5 for latency), calls the LLM
+    with ``response_format=GradeDocuments`` to produce a binary relevance
+    score.  Aggregates individual scores into ``grade_score`` (mean) and
+    ``grade_label`` ('relevant' if score >= 0.5, else 'irrelevant').
+
+    Degrades gracefully:
+    - No chunks → grade_score=0.0, grade_label='irrelevant'
+    - No LLM client → grade_score=1.0, grade_label='relevant' (pass-through)
+    - Per-chunk LLM failure → assume relevant (score 1.0), log warning
 
     Reads:
-        - ``state["knowledge_chunks"]``
+        - ``state["knowledge_chunks"]``, ``state["message"]``,
+          ``state["session_id"]``
     Writes:
         - ``grade_score``, ``grade_label``
     """
     t0 = time.perf_counter()
     session_id = state.get("session_id", "")
+    message = state.get("message", "")
+    chunks = state.get("knowledge_chunks") or []
 
     logger.info(
         "graph.node_enter",
-        node="grade_documents_stub",
+        node="grade_documents",
         session_id=session_id,
+        chunk_count=len(chunks),
     )
+
+    # --- No chunks: irrelevant by default ---
+    if not chunks:
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="grade_documents",
+            session_id=session_id,
+            mode="no_chunks",
+            grade_score=0.0,
+            grade_label="irrelevant",
+            duration_ms=elapsed,
+        )
+        return {
+            "grade_score": 0.0,
+            "grade_label": "irrelevant",
+        }
+
+    services = get_services()
+    client = services.llm_client
+
+    # --- No LLM client: pass-through as relevant ---
+    if client is None or GradeDocuments is None:
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="grade_documents",
+            session_id=session_id,
+            mode="no_llm_passthrough",
+            grade_score=1.0,
+            grade_label="relevant",
+            duration_ms=elapsed,
+        )
+        return {
+            "grade_score": 1.0,
+            "grade_label": "relevant",
+        }
+
+    # --- Grade each chunk (limit to top-5 for latency) ---
+    import json as _json
+
+    gradeable_chunks = chunks[:5]
+    scores: list[float] = []
+
+    for i, chunk in enumerate(gradeable_chunks):
+        chunk_text = getattr(chunk, "text", "") or str(chunk)
+        chunk_title = getattr(chunk, "title", "") or ""
+
+        try:
+            user_content = (
+                f"Document title: {chunk_title}\n"
+                f"Document content: {chunk_text}\n\n"
+                f"User question: {message}"
+            )
+
+            completion = await client.chat.completions.create(
+                model=services.model,
+                messages=[
+                    {"role": "system", "content": _GRADE_DOCUMENTS_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format=GradeDocuments,
+                max_completion_tokens=32,
+            )
+
+            raw_content = completion.choices[0].message.content or "{}"
+            parsed = _json.loads(raw_content)
+            binary_score = parsed.get("binary_score", "yes")
+            score_value = 1.0 if binary_score == "yes" else 0.0
+            scores.append(score_value)
+
+        except Exception as exc:
+            logger.warning(
+                "grade_documents.chunk_failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+                chunk_index=i,
+                session_id=session_id,
+            )
+            # Assume relevant on failure (optimistic: avoid unnecessary rewrite)
+            scores.append(1.0)
+
+    # --- Aggregate scores ---
+    grade_score = sum(scores) / len(scores) if scores else 0.0
+    grade_label = "relevant" if grade_score >= 0.5 else "irrelevant"
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(
         "graph.node_exit",
-        node="grade_documents_stub",
+        node="grade_documents",
         session_id=session_id,
-        mode="stub_passthrough",
+        mode="llm",
+        grade_score=round(grade_score, 3),
+        grade_label=grade_label,
+        chunks_graded=len(scores),
         duration_ms=elapsed,
     )
     return {
-        "grade_score": None,
-        "grade_label": None,
+        "grade_score": grade_score,
+        "grade_label": grade_label,
     }
 
 

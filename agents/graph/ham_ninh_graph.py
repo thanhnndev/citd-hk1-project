@@ -30,6 +30,7 @@ import structlog
 from agents.graph.state import (
     AgentState,
     NodeTimeoutError,
+    NODE_TIMEOUT_GRADE,
     NODE_TIMEOUT_GUARDRAILS,
     NODE_TIMEOUT_INTENT_ROUTER,
     NODE_TIMEOUT_LLM,
@@ -46,7 +47,7 @@ from agents.graph.nodes import (
     conversational_node,
     output_guardrails_node,
     rag_agent_node,
-    grade_documents_stub_node,
+    grade_documents_node,
     rewrite_query_stub_node,
     maps_agent_stub_node,
 )
@@ -83,7 +84,7 @@ class TimeoutPolicy:
         "conversational": NODE_TIMEOUT_LLM,
         "output_guardrails": NODE_TIMEOUT_GUARDRAILS,
         "rag_agent": NODE_TIMEOUT_RETRIEVE,
-        "grade_documents": NODE_TIMEOUT_SEMANTIC_FALLBACK,
+        "grade_documents": NODE_TIMEOUT_GRADE,
         "rewrite_query": NODE_TIMEOUT_SEMANTIC_FALLBACK,
         "maps_agent": NODE_TIMEOUT_TOOL,
     })
@@ -229,7 +230,7 @@ class HamNinhGraph:
             ("conversational", conversational_node),
             ("output_guardrails", output_guardrails_node),
             ("rag_agent", rag_agent_node),
-            ("grade_documents", grade_documents_stub_node),
+            ("grade_documents", grade_documents_node),
             ("rewrite_query", rewrite_query_stub_node),
             ("maps_agent", maps_agent_stub_node),
         ]
