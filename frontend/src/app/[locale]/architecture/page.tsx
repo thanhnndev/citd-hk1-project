@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from 'react';
-import { getTranslations, setRequestLocale } from 'next-intl/server';
+import { setRequestLocale } from 'next-intl/server';
 import { notFound } from 'next/navigation';
 import {
   Activity,
@@ -9,7 +9,6 @@ import {
   Database,
   GitBranch,
   History,
-  Languages,
   MapPin,
   MessageSquare,
   Monitor,
@@ -25,19 +24,22 @@ import {
   UserRound,
 } from 'lucide-react';
 
+import { Card, CardContent } from '@/components/ui/card';
 import { routing } from '@/i18n/routing';
 
 type Props = Readonly<{ params: Promise<{ locale: string }> }>;
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
-type CardEntry = Readonly<{ title: string; description: string }>;
+type CardEntry = Readonly<{
+  title: string;
+  description: string;
+}>;
 
 type SectionData = Readonly<{
   id: string;
   eyebrow: string;
   heading: string;
-  body: string;
   cards: ReadonlyArray<CardEntry>;
   icons: ReadonlyArray<IconComponent>;
 }>;
@@ -48,89 +50,85 @@ type FlowNode = Readonly<{
   icon: IconComponent;
 }>;
 
-const borderGray = '#E5E7EB';
+type PageCopy = Readonly<{
+  heroTitle: string;
+  heroDescription: string;
+  flowEyebrow: string;
+  flowHeading: string;
+  flowNodes: ReadonlyArray<FlowNode>;
+  sections: ReadonlyArray<SectionData>;
+  copyright: string;
+}>;
 
-function isCardEntryArray(value: unknown): CardEntry[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is CardEntry =>
-      typeof item === 'object' &&
-      item !== null &&
-      typeof (item as CardEntry).title === 'string' &&
-      typeof (item as CardEntry).description === 'string',
-  );
-}
+const borderGray = '#E5E7EB';
 
 function FlowDiagram({ nodes }: { nodes: ReadonlyArray<FlowNode> }) {
   return (
-    <div className="mx-auto mt-8 max-w-[920px] overflow-x-auto px-1 pb-2">
-      <div className="grid min-w-[860px] grid-cols-6 items-stretch gap-4">
-        {nodes.map((node, index) => {
-          const Icon = node.icon;
-          const isLast = index === nodes.length - 1;
+    <div className="mt-7 rounded-[10px] border border-[#bfc7d1] bg-[#f0f3ff] px-4 py-7 sm:px-5">
+      <div className="overflow-x-auto px-1 pb-1">
+        <div className="grid min-w-[900px] grid-cols-6 items-stretch gap-12">
+          {nodes.map((node, index) => {
+            const Icon = node.icon;
+            const isLast = index === nodes.length - 1;
 
-          return (
-            <div key={node.title} className="relative">
-              <div className="h-full rounded-xl border bg-white px-4 py-5 text-center shadow-[0_10px_28px_rgba(0,93,144,0.06)]" style={{ borderColor: borderGray }}>
-                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-lg bg-[#005d90]/10 text-[#005d90]">
-                  <Icon className="h-4 w-4" />
+            return (
+              <div key={node.title} className="relative">
+                <div className="flex h-full min-h-[136px] flex-col items-center justify-center rounded-[6px] border border-[#E5E7EB] bg-white px-4 py-4 text-center shadow-[0_4px_14px_rgba(0,93,144,0.025)]">
+                  <div className="grid size-9 place-items-center rounded-full bg-[#e7eeff] text-[#005d90]">
+                    <Icon aria-hidden="true" className="size-[18px]" strokeWidth={2.35} />
+                  </div>
+                  <h3 className="mt-4 text-[18px] font-black leading-6 text-[#001b3c]">{node.title}</h3>
+                  <p className="mt-2 text-base font-bold leading-6 text-[#001b3c]">{node.description}</p>
                 </div>
-                <h3 className="mt-3 text-xs font-black text-[#003653]">{node.title}</h3>
-                <p className="mt-1.5 text-[11px] leading-4 text-[#577487]">{node.description}</p>
+                {!isLast ? (
+                  <div className="absolute right-[-34px] top-1/2 z-10 -translate-y-1/2 text-[#94ccff]">
+                    <ChevronRight aria-hidden="true" className="size-4" strokeWidth={1.8} />
+                  </div>
+                ) : null}
               </div>
-              {!isLast ? (
-                <div className="absolute right-[-18px] top-1/2 z-10 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border bg-white text-[#005d90] shadow-sm" style={{ borderColor: borderGray }}>
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
 function ArchitectureSection({ section }: { section: SectionData }) {
-  const isPipelineSection = section.id === 'rag-pipeline';
-
   return (
     <section
       id={section.id}
-      className="border-t px-6 py-16 sm:px-10 sm:py-20 lg:px-20 xl:px-28 2xl:px-36"
-      style={{ borderColor: borderGray }}
+      className="border-t bg-white py-20 sm:py-24"
+      style={{ borderColor: section.id === 'rag-pipeline' ? '#e7eeff' : borderGray }}
     >
-      <div
-        className={`mx-auto ${
-          isPipelineSection ? 'max-w-[1040px]' : 'max-w-[960px]'
-        }`}
-      >
-        <div className="mx-auto max-w-3xl text-center">
-          <p className="text-xs font-black uppercase tracking-[0.26em] text-[#0075b4]">{section.eyebrow}</p>
-          <h2 className="mt-3 text-3xl font-black tracking-[-0.045em] text-[#002f49] sm:text-4xl">
+      <div className="mx-auto w-full max-w-6xl px-6">
+        <div className="mx-auto max-w-[780px] text-center">
+          <p className="text-2xl font-extrabold text-[#005d90]">{section.eyebrow}</p>
+          <h2 className="mt-5 text-[56px] font-black leading-[1.04] tracking-[-0.065em] text-[#001b3c] sm:text-[84px]">
             {section.heading}
           </h2>
-          <p className="mt-5 text-sm leading-7 text-[#577487] sm:text-base">{section.body}</p>
+          <div className="mx-auto mt-5 h-[3px] w-[72px] rounded-full bg-[#0077b6]" />
         </div>
 
-        <div className="mt-9 grid gap-5 md:grid-cols-3">
+        <div className="mt-12 grid gap-5 lg:grid-cols-3">
           {section.cards.map((card, index) => {
             const Icon = section.icons[index] ?? Sparkles;
 
             return (
-              <article
+              <Card
                 key={card.title}
-                className={`rounded-xl border bg-white shadow-[0_10px_30px_rgba(0,93,144,0.045)] transition hover:-translate-y-1 hover:shadow-[0_18px_45px_rgba(0,93,144,0.10)] ${
-                  isPipelineSection ? 'p-7' : 'p-6'
-                }`}
-                style={{ borderColor: borderGray }}
+                className="relative overflow-hidden border-primary/10 bg-card transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-primary/10"
               >
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#005d90]/10 text-[#005d90]">
-                  <Icon className="h-[18px] w-[18px]" />
-                </div>
-                <h3 className="mt-5 text-base font-black text-[#003653]">{card.title}</h3>
-                <p className="mt-3 text-sm leading-6 text-[#577487]">{card.description}</p>
-              </article>
+                <CardContent className="space-y-5">
+                  <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-300 group-hover:scale-110">
+                    <Icon aria-hidden="true" className="size-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-[32px] font-bold leading-10 tracking-tight text-foreground">{card.title}</h3>
+                    <p className="mt-5 text-xl leading-9 text-muted-foreground">{card.description}</p>
+                  </div>
+                </CardContent>
+              </Card>
             );
           })}
         </div>
@@ -139,131 +137,313 @@ function ArchitectureSection({ section }: { section: SectionData }) {
   );
 }
 
+function getPageCopy(isVietnamese: boolean): PageCopy {
+  if (!isVietnamese) {
+    return {
+      heroTitle: 'Multi-agent AI assistant for Ham Ninh travel',
+      heroDescription:
+        'The architecture combines a large language model (LLM), Retrieval-Augmented Generation (RAG), and Multi-Agent logic to provide accurate, realtime tour and heritage knowledge for Ham Ninh.',
+      flowEyebrow: 'Data flow',
+      flowHeading: 'System data-flow architecture',
+      copyright: '© 2026 Ham Ninh Guide AI. AI can make mistakes - please verify important information.',
+      flowNodes: [
+        { title: 'User', description: 'Send request', icon: UserRound },
+        { title: 'Frontend', description: 'React interface', icon: Monitor },
+        { title: 'Agent Orchestrator', description: 'LangGraph logic', icon: BrainCircuit },
+        { title: 'Worker', description: 'RAG, Maps, retrieval and processing', icon: Settings2 },
+        { title: 'SSE Streaming', description: 'Data delivery', icon: RadioTower },
+        { title: 'Response', description: 'Stream result', icon: Send },
+      ],
+      sections: [
+        {
+          id: 'rag-pipeline',
+          eyebrow: 'Knowledge retrieval',
+          heading: 'RAG Pipeline - Tour Q&A with citations',
+          cards: [
+            {
+              title: 'Knowledge base',
+              description: 'Stores tourism, policy, and local knowledge in chunks optimized for semantic search.',
+            },
+            {
+              title: 'Vector search',
+              description: 'Embeds the user query and retrieves the most relevant documents for each travel question.',
+            },
+            {
+              title: 'Source-grounded answer',
+              description: 'The LLM summarizes final answers with inline citations to keep recommendations transparent.',
+            },
+          ],
+          icons: [Database, Search, BookOpen],
+        },
+        {
+          id: 'maps-api',
+          eyebrow: 'Realtime place data',
+          heading: 'Maps & Places API - Realtime Ham Ninh places',
+          cards: [
+            {
+              title: 'Find places',
+              description: 'Integrates Places API to fetch the latest restaurants, services, and points of interest.',
+            },
+            {
+              title: 'Plan itineraries',
+              description: 'Calculates distance and travel time between places to optimize day-trip schedules.',
+            },
+            {
+              title: 'Fallback handling',
+              description: 'Uses cache and backup providers when the primary API is slow or unavailable.',
+            },
+          ],
+          icons: [MapPin, Route, ShieldAlert],
+        },
+        {
+          id: 'ensemble-reranker',
+          eyebrow: 'Smart ranking',
+          heading: 'Ensemble Re-ranking - Fair Ham Ninh tour suggestions',
+          cards: [
+            {
+              title: 'Multi-factor scoring',
+              description: 'Analyzes user intent, price, location, and popularity to produce a blended recommendation score.',
+            },
+            {
+              title: 'Policy weights',
+              description: 'Adjusts ranking priorities based on active tourism policies or sustainability campaigns.',
+            },
+            {
+              title: 'Fair ranking',
+              description: 'Balances relevance with diversity to avoid hiding smaller local businesses.',
+            },
+          ],
+          icons: [GitBranch, Scale, SlidersHorizontal],
+        },
+        {
+          id: 'orchestration',
+          eyebrow: 'Agent',
+          heading: 'Agent Orchestration - LangGraph supervision model',
+          cards: [
+            {
+              title: 'Supervisor model',
+              description: 'Uses LangGraph to coordinate specialized worker flows for short and complex conversations.',
+            },
+            {
+              title: 'Streaming distribution',
+              description: 'Splits responses into streaming chunks so the interface can show progress and context quickly.',
+            },
+            {
+              title: 'Full traceability',
+              description: 'Records agent decisions, tool calls, and correction steps for auditing and quality review.',
+            },
+          ],
+          icons: [MessageSquare, RadioTower, History],
+        },
+        {
+          id: 'frontend-shell',
+          eyebrow: 'App',
+          heading: 'Frontend Shell & System Observability',
+          cards: [
+            {
+              title: 'Platform interface',
+              description: 'Builds on Next.js with a modern, accessible UI that supports the daily needs of Ham Ninh visitors.',
+            },
+            {
+              title: 'Realtime monitoring',
+              description: 'Dashboards track system metrics, error rates, and user feedback signals.',
+            },
+            {
+              title: 'AI safety layer',
+              description: 'Screens inputs and outputs to limit inappropriate guidance or serious misinformation.',
+            },
+          ],
+          icons: [Monitor, Activity, ShieldAlert],
+        },
+      ],
+    };
+  }
+
+  return {
+    heroTitle: 'Trợ lý AI đa agent cho du lịch Hàm Ninh',
+    heroDescription:
+      'Kiến trúc hiện đại kết hợp mô hình ngôn ngữ lớn (LLM), Retrieval-Augmented Generation (RAG) và hệ thống Multi-Agent để cung cấp tri thức tour & hải sản Hàm Ninh chính xác, realtime.',
+    flowEyebrow: 'Luồng dữ liệu',
+    flowHeading: 'Kiến trúc luồng dữ liệu hệ thống',
+    copyright: '© 2026 Hàm Ninh Guide AI. AI có thể mắc lỗi - vui lòng kiểm tra thông tin quan trọng.',
+    flowNodes: [
+      { title: 'Người dùng', description: 'Gửi yêu cầu', icon: UserRound },
+      { title: 'Frontend', description: 'Giao diện React', icon: Monitor },
+      { title: 'Bộ điều phối Agent', description: 'LangGraph Logic', icon: BrainCircuit },
+      { title: 'Worker (RAG, Maps)', description: 'Truy xuất & xử lý', icon: Settings2 },
+      { title: 'SSE Streaming', description: 'Truyền tải dữ liệu', icon: RadioTower },
+      { title: 'Phản hồi', description: 'Streaming kết quả', icon: Send },
+    ],
+    sections: [
+      {
+        id: 'rag-pipeline',
+        eyebrow: 'Truy xuất tri thức',
+        heading: 'RAG Pipeline - Hỏi đáp tour có trích dẫn',
+        cards: [
+          {
+            title: 'Kho dữ liệu',
+            description:
+              'Lưu trữ các văn bản du lịch, chính sách giá và thông tin tour được phân mảnh (chunking) tối ưu cho việc tìm kiếm semantic.',
+          },
+          {
+            title: 'Tìm kiếm vector',
+            description:
+              'Sử dụng Embedding Model cao cấp để tìm kiếm các đoạn văn bản có ý nghĩa gần nhất với câu hỏi của khách du lịch.',
+          },
+          {
+            title: 'Câu trả lời có nguồn',
+            description:
+              'LLM tổng hợp câu trả lời cuối cùng kèm theo trích dẫn chính xác từ kho dữ liệu, đảm bảo tính minh bạch và tin cậy.',
+          },
+        ],
+        icons: [Database, Search, BookOpen],
+      },
+      {
+        id: 'maps-api',
+        eyebrow: 'Dữ liệu địa điểm thực tế',
+        heading: 'Maps & Places API - Địa điểm Hàm Ninh realtime',
+        cards: [
+          {
+            title: 'Tìm kiếm địa điểm',
+            description:
+              'Tích hợp Google Places API để lấy thông tin các khách sạn, nhà bè, và địa điểm tại Hàm Ninh mới nhất.',
+          },
+          {
+            title: 'Lập lịch hành trình',
+            description:
+              'Tính toán khoảng cách và thời gian di chuyển thực tế giữa các điểm đến để tối ưu hóa lịch trình tham quan làng chài.',
+          },
+          {
+            title: 'Xử lý dự phòng',
+            description:
+              'Cơ chế caching thông minh và fallback dữ liệu của phương khi API bên thứ ba gặp sự cố hoặc quá tải.',
+          },
+        ],
+        icons: [MapPin, Route, ShieldAlert],
+      },
+      {
+        id: 'ensemble-reranker',
+        eyebrow: 'Xếp hạng thông minh',
+        heading: 'Ensemble Re-ranking - Gợi ý tour Hàm Ninh công bằng',
+        cards: [
+          {
+            title: 'Chấm điểm đa chiều',
+            description:
+              'Phân tích đánh giá người dùng, giá cả và độ phổ biến để tạo ra bộ điểm số tổng hợp cho mỗi kết quả đề xuất.',
+          },
+          {
+            title: 'Trọng số chính sách',
+            description:
+              'Điều chỉnh thứ tự hiển thị dựa trên các chiến dịch khuyến mãi hoặc đối tác ưu tiên một cách linh hoạt.',
+          },
+          {
+            title: 'Xếp hạng công bằng',
+            description:
+              'Đảm bảo sự đa dạng trong kết quả, tránh việc các địa điểm lớn lấn át hoàn toàn các doanh nghiệp địa phương nhỏ lẻ tại Hàm Ninh.',
+          },
+        ],
+        icons: [GitBranch, Scale, SlidersHorizontal],
+      },
+      {
+        id: 'orchestration',
+        eyebrow: 'Agent',
+        heading: 'Điều phối Agent - Mô hình giám sát LangGraph',
+        cards: [
+          {
+            title: 'Mô hình giám sát',
+            description:
+              'Sử dụng LangGraph để thiết kế luồng suy nghĩ (state machine) cho AI, giúp quản lý các hội thoại phức tạp.',
+          },
+          {
+            title: 'Phân tán streaming',
+            description:
+              'Phân phối được đầy đủ giao diện theo thời gian thực (streaming token) giúp giảm thiểu độ trễ cảm nhận cho người dùng.',
+          },
+          {
+            title: 'Theo dõi toàn trình',
+            description:
+              'Ghi lại toàn bộ quá trình đưa ra quyết định của Agent để phục vụ việc tinh chỉnh và kiểm soát chất lượng nội dung.',
+          },
+        ],
+        icons: [MessageSquare, RadioTower, History],
+      },
+      {
+        id: 'frontend-shell',
+        eyebrow: 'App',
+        heading: 'Frontend Shell & Quan sát hệ thống',
+        cards: [
+          {
+            title: 'Giao diện đa nền tảng',
+            description:
+              'Xây dựng trên nền tảng Next.js hiện đại, hỗ trợ SSR và PWA để truy cập nhanh chóng ngay cả khi mạng yếu tại Hàm Ninh.',
+          },
+          {
+            title: 'Quan sát thời gian thực',
+            description:
+              'Dashboard theo dõi hiệu năng hệ thống, tỷ lệ chính xác của câu trả lời và phản hồi tiêu cực từ người dùng.',
+          },
+          {
+            title: 'Lớp bảo mật AI',
+            description:
+              'Kiểm duyệt đầu vào và đầu ra để ngăn chặn các nội dung không phù hợp hoặc sai lệch thông tin nghiêm trọng.',
+          },
+        ],
+        icons: [Monitor, Activity, ShieldAlert],
+      },
+    ],
+  };
+}
+
 export default async function ArchitecturePage({ params }: Props) {
   const { locale } = await params;
   if (!routing.locales.includes(locale as (typeof routing.locales)[number])) notFound();
   setRequestLocale(locale);
 
-  const t = await getTranslations('Architecture');
-  const isVietnamese = locale !== 'en';
-
-  const flowNodes: FlowNode[] = [
-    {
-      title: isVietnamese ? 'Người dùng' : 'User',
-      description: isVietnamese ? 'Gửi yêu cầu' : 'Send request',
-      icon: UserRound,
-    },
-    {
-      title: 'Frontend',
-      description: isVietnamese ? 'Giao diện React' : 'React interface',
-      icon: Monitor,
-    },
-    {
-      title: 'Agent Orchestrator',
-      description: 'LangGraph Logic',
-      icon: BrainCircuit,
-    },
-    {
-      title: 'Worker',
-      description: isVietnamese ? 'RAG, Maps và xử lý tác vụ' : 'RAG, Maps and task processing',
-      icon: Settings2,
-    },
-    {
-      title: 'SSE Streaming',
-      description: isVietnamese ? 'Truyền tải dữ liệu' : 'Data delivery',
-      icon: RadioTower,
-    },
-    {
-      title: isVietnamese ? 'Phản hồi' : 'Response',
-      description: isVietnamese ? 'Streaming kết quả' : 'Streamed result',
-      icon: Send,
-    },
-  ];
-
-  const sections: SectionData[] = [
-    {
-      id: 'rag-pipeline',
-      eyebrow: t('ragPipeline.eyebrow'),
-      heading: t('ragPipeline.heading'),
-      body: t('ragPipeline.body'),
-      cards: isCardEntryArray(t.raw('ragPipeline.cards')),
-      icons: [Database, Search, BookOpen],
-    },
-    {
-      id: 'maps-api',
-      eyebrow: t('mapsApi.eyebrow'),
-      heading: t('mapsApi.heading'),
-      body: t('mapsApi.body'),
-      cards: isCardEntryArray(t.raw('mapsApi.cards')),
-      icons: [MapPin, Route, ShieldAlert],
-    },
-    {
-      id: 'ensemble-reranker',
-      eyebrow: t('ensembleReranker.eyebrow'),
-      heading: t('ensembleReranker.heading'),
-      body: t('ensembleReranker.body'),
-      cards: isCardEntryArray(t.raw('ensembleReranker.cards')),
-      icons: [GitBranch, SlidersHorizontal, Scale],
-    },
-    {
-      id: 'orchestration',
-      eyebrow: t('orchestration.eyebrow'),
-      heading: t('orchestration.heading'),
-      body: t('orchestration.body'),
-      cards: isCardEntryArray(t.raw('orchestration.cards')),
-      icons: [BrainCircuit, MessageSquare, History],
-    },
-    {
-      id: 'frontend-shell',
-      eyebrow: t('frontendShell.eyebrow'),
-      heading: t('frontendShell.heading'),
-      body: t('frontendShell.body'),
-      cards: isCardEntryArray(t.raw('frontendShell.cards')),
-      icons: [Monitor, Languages, Activity],
-    },
-  ];
+  const copy = getPageCopy(locale !== 'en');
 
   return (
-    <main className="min-h-screen bg-[#f9f9ff] text-[#002f49]">
-      <section id="architecture-hero" className="relative overflow-hidden px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
-        <div className="absolute left-1/2 top-[-220px] h-[420px] w-[820px] -translate-x-1/2 rounded-full bg-[#005d90]/10 blur-3xl" />
-        <div className="relative mx-auto max-w-6xl">
-          <div className="mx-auto max-w-3xl text-center">
-            <p className="inline-flex rounded-full border bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.24em] text-[#005d90]" style={{ borderColor: borderGray }}>
-              {isVietnamese ? 'Kiến trúc hệ thống' : 'System architecture'}
-            </p>
-            <h1 className="mt-7 text-4xl font-black tracking-[-0.055em] text-[#002f49] sm:text-5xl">
-              {isVietnamese ? 'Trợ lý AI đa agent cho du lịch Hàm Ninh' : 'Multi-agent AI assistant for Ham Ninh travel'}
+    <div className="min-h-screen bg-[#f9f9ff] text-[#001b3c]">
+      <section id="architecture-hero" className="px-4 pb-[76px] pt-[86px] sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-[960px]">
+          <div className="mx-auto max-w-[640px] text-center">
+            <h1 className="text-[56px] font-black leading-[1.04] tracking-[-0.06em] text-[#001b3c] sm:text-[78px]">
+              {copy.heroTitle}
             </h1>
-            <p className="mx-auto mt-6 max-w-2xl text-sm leading-7 text-[#577487] sm:text-base">
-              {isVietnamese
-                ? 'Kiến trúc kết hợp RAG, Maps API, điều phối LangGraph và streaming để trả lời câu hỏi du lịch có nguồn tham khảo, vị trí realtime và gợi ý công bằng.'
-                : 'A system combining RAG, Maps API, LangGraph orchestration, and streaming responses for grounded travel answers, realtime places, and fair recommendations.'}
+            <p className="mx-auto mt-10 max-w-[760px] text-xl font-medium leading-9 text-[#404850]">
+              {copy.heroDescription}
             </p>
           </div>
 
-          <section id="architecture-flow" className="mx-auto mt-10 max-w-5xl">
+          <section id="architecture-flow" className="mx-auto mt-7 max-w-[960px]">
             <div className="text-center">
-              <p className="text-xs font-black uppercase tracking-[0.26em] text-[#0075b4]">
-                {isVietnamese ? 'Luồng dữ liệu' : 'Data flow'}
-              </p>
-              <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-[#002f49] sm:text-[2.5rem]">
-                {isVietnamese ? 'Kiến trúc luồng dữ liệu hệ thống' : 'System data-flow architecture'}
+              <p className="text-2xl font-extrabold text-[#005d90]">{copy.flowEyebrow}</p>
+              <h2 className="mt-5 text-[56px] font-black leading-[1.04] tracking-[-0.065em] text-[#001b3c] sm:text-[86px]">
+                {copy.flowHeading}
               </h2>
             </div>
-            <FlowDiagram nodes={flowNodes} />
+            <FlowDiagram nodes={copy.flowNodes} />
           </section>
         </div>
       </section>
 
-      {sections.map((section) => (
+      {copy.sections.map((section) => (
         <ArchitectureSection key={section.id} section={section} />
       ))}
 
-      <footer className="border-t bg-white/70 py-10 text-center text-xs text-[#577487]" style={{ borderColor: borderGray }}>
-        <p className="font-semibold text-[#003653]">Ham Ninh Guide AI Architecture</p>
-        <p className="mt-2">Next.js 16 · FastAPI · LangGraph · Qdrant · Goong Maps Platform</p>
+      <footer className="border-t bg-[#e7eeff] px-4 py-10 text-center text-[22px] font-semibold leading-8 text-[#707881]" style={{ borderColor: borderGray }}>
+        <p>{copy.copyright}</p>
+        <nav aria-label="Legal links" className="mt-6 flex flex-wrap items-center justify-center gap-x-10 gap-y-4 text-xl font-black text-[#707881]">
+          <a href="#" className="transition hover:text-[#005d90]">
+            Privacy Policy
+          </a>
+          <a href="#" className="transition hover:text-[#005d90]">
+            Terms of Service
+          </a>
+          <a href="#" className="transition hover:text-[#005d90]">
+            Security Disclosure
+          </a>
+        </nav>
       </footer>
-    </main>
+    </div>
   );
 }
