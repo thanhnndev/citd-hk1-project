@@ -23,6 +23,7 @@ from agents.graph.nodes import (
     get_services,
     rag_agent_node,
     grade_documents_node,
+    rewrite_query_node,
 )
 from app.models.rag import RAGChunk, RetrievalResult
 from app.models.response import ChatResponse, Citation
@@ -874,3 +875,174 @@ class TestGradeDocumentsNode:
         assert messages[1]["role"] == "user"
         assert "Test Title" in messages[1]["content"]
         assert "What is Ham Ninh culture?" in messages[1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# RewriteQuery mock helper
+# ---------------------------------------------------------------------------
+
+
+def _make_rewrite_completion(
+    rewritten_query: str = "văn hóa làng chài Hàm Ninh Phú Quốc truyền thống",
+    reasoning: str = "Added location context for better retrieval",
+) -> MagicMock:
+    """Create a mock OpenAI completion with a RewriteQuery JSON response."""
+    content = json.dumps({"rewritten_query": rewritten_query, "reasoning": reasoning})
+    mock_choice = MagicMock()
+    mock_choice.message.content = content
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    return mock_completion
+
+
+# ===========================================================================
+# Section 3: rewrite_query_node tests
+# ===========================================================================
+
+
+class TestRewriteQueryNode:
+    """Tests for rewrite_query_node: LLM structured-output query rewrite."""
+
+    @pytest.mark.asyncio
+    async def test_success_path_with_mocked_llm(
+        self,
+        mock_llm_client,
+    ):
+        """LLM returns valid RewriteQuery → rewritten_query is set, rewrite_count incremented."""
+        mock_llm_client.chat.completions.create.return_value = _make_rewrite_completion(
+            rewritten_query="văn hóa làng chài Hàm Ninh Phú Quốc truyền thống",
+            reasoning="Added location context for better retrieval",
+        )
+
+        services = NodeServices(llm_client=mock_llm_client)
+        configure_services(services)
+
+        state = {
+            "message": "văn hóa làng chài",
+            "rewrite_count": 0,
+            "session_id": "test-rewrite-001",
+        }
+
+        result = await rewrite_query_node(state)
+
+        assert result["rewritten_query"] == "văn hóa làng chài Hàm Ninh Phú Quốc truyền thống"
+        assert result["rewrite_count"] == 1
+        mock_llm_client.chat.completions.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_llm_passthrough(self):
+        """No LLM client → returns original message, rewrite_count unchanged."""
+        services = NodeServices(llm_client=None)
+        configure_services(services)
+
+        state = {
+            "message": "văn hóa làng chài",
+            "rewrite_count": 2,
+            "session_id": "test-rewrite-002",
+        }
+
+        result = await rewrite_query_node(state)
+
+        assert result["rewritten_query"] == "văn hóa làng chài"
+        assert result["rewrite_count"] == 2  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_returns_original_message(
+        self,
+        mock_llm_client,
+    ):
+        """LLM raises generic exception → returns original message, rewrite_count incremented."""
+        mock_llm_client.chat.completions.create.side_effect = Exception(
+            "OpenAI API rate limit exceeded"
+        )
+
+        services = NodeServices(llm_client=mock_llm_client)
+        configure_services(services)
+
+        state = {
+            "message": "lịch sử Hàm Ninh",
+            "rewrite_count": 0,
+            "session_id": "test-rewrite-003",
+        }
+
+        result = await rewrite_query_node(state)
+
+        assert result["rewritten_query"] == "lịch sử Hàm Ninh"
+        assert result["rewrite_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_llm_timeout_returns_original_message(
+        self,
+        mock_llm_client,
+    ):
+        """LLM raises TimeoutError → returns original message, rewrite_count incremented."""
+        import asyncio
+
+        mock_llm_client.chat.completions.create.side_effect = asyncio.TimeoutError(
+            "LLM request timed out after 30s"
+        )
+
+        services = NodeServices(llm_client=mock_llm_client)
+        configure_services(services)
+
+        state = {
+            "message": "đường đi đến Hàm Ninh",
+            "rewrite_count": 1,
+            "session_id": "test-rewrite-004",
+        }
+
+        result = await rewrite_query_node(state)
+
+        assert result["rewritten_query"] == "đường đi đến Hàm Ninh"
+        assert result["rewrite_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_rewrite_count_incremented_on_success(
+        self,
+        mock_llm_client,
+    ):
+        """Success path: rewrite_count goes from N to N+1."""
+        mock_llm_client.chat.completions.create.return_value = _make_rewrite_completion(
+            rewritten_query="improved query",
+            reasoning="more specific",
+        )
+
+        services = NodeServices(llm_client=mock_llm_client)
+        configure_services(services)
+
+        # Start at rewrite_count=3
+        state = {
+            "message": "original query",
+            "rewrite_count": 3,
+            "session_id": "test-rewrite-005",
+        }
+
+        result = await rewrite_query_node(state)
+
+        assert result["rewrite_count"] == 4
+        assert result["rewritten_query"] == "improved query"
+
+    @pytest.mark.asyncio
+    async def test_rewrite_count_incremented_on_failure(
+        self,
+        mock_llm_client,
+    ):
+        """Failure path: rewrite_count goes from N to N+1."""
+        mock_llm_client.chat.completions.create.side_effect = ConnectionError(
+            "Network unreachable"
+        )
+
+        services = NodeServices(llm_client=mock_llm_client)
+        configure_services(services)
+
+        # Start at rewrite_count=5
+        state = {
+            "message": "failing query",
+            "rewrite_count": 5,
+            "session_id": "test-rewrite-006",
+        }
+
+        result = await rewrite_query_node(state)
+
+        assert result["rewrite_count"] == 6
+        assert result["rewritten_query"] == "failing query"

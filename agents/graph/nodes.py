@@ -44,6 +44,7 @@ import structlog
 from agents.graph.state import (
     AgentState,
     GradeDocuments,
+    RewriteQuery,
     RouterOutput,
     NODE_TIMEOUT_GUARDRAILS,
     NODE_TIMEOUT_INTENT_ROUTER,
@@ -1005,43 +1006,128 @@ async def grade_documents_node(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 8. rewrite_query_stub_node (STUB — passthrough for T02+ expansion)
+# 8. rewrite_query_node (REAL — LLM structured-output query rewrite)
 # ---------------------------------------------------------------------------
 
+_REWRITE_QUERY_SYSTEM_PROMPT = """\
+You are a query rewriter for the Ham Ninh tourism assistant's self-corrective RAG system.
+When the initial retrieval returns irrelevant documents, rewrite the user's query to improve \
+retrieval relevance while preserving the original intent and language (Vietnamese or English).
 
-async def rewrite_query_stub_node(state: AgentState) -> dict[str, Any]:
-    """Stub: Query rewrite for self-corrective RAG.
+Make the query more specific and retrieval-friendly:
+- Add location context (Hàm Ninh, Phú Quốc) when relevant
+- Expand abbreviations or ambiguous terms
+- Use more precise vocabulary for tourism domain
+- Keep the query concise (under 50 words)
 
-    This is a passthrough stub that preserves the original query.
-    The graph assembler (T02) will replace this with a real implementation
-    that calls the LLM with ``response_format=RewriteQuery``.
+Respond with the rewritten query and a brief reasoning for the changes.
+"""
+
+
+async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
+    """Rewrite query via LLM structured output for self-corrective RAG.
+
+    Calls the LLM with ``response_format=RewriteQuery`` to produce an improved
+    query when initial retrieval returns irrelevant documents. Increments
+    ``rewrite_count`` on each attempt (success or failure).
+
+    Degrades gracefully:
+    - No LLM client → return original message (no_llm_passthrough mode)
+    - LLM failure → return original message and increment rewrite_count (llm_failed mode)
+    - LLM timeout → return original message and increment rewrite_count (llm_failed mode)
 
     Reads:
-        - ``state["message"]``, ``state["rewrite_count"]``
+        - ``state["message"]``, ``state["rewrite_count"]``, ``state["session_id"]``
     Writes:
         - ``rewritten_query``, ``rewrite_count``
     """
     t0 = time.perf_counter()
     session_id = state.get("session_id", "")
+    message = state.get("message", "")
+    rewrite_count = state.get("rewrite_count", 0)
 
     logger.info(
         "graph.node_enter",
-        node="rewrite_query_stub",
+        node="rewrite_query",
         session_id=session_id,
     )
 
-    elapsed = round((time.perf_counter() - t0) * 1000, 3)
-    logger.info(
-        "graph.node_exit",
-        node="rewrite_query_stub",
-        session_id=session_id,
-        mode="stub_passthrough",
-        duration_ms=elapsed,
-    )
-    return {
-        "rewritten_query": None,
-        "rewrite_count": state.get("rewrite_count", 0),
-    }
+    services = get_services()
+    client = services.llm_client
+
+    # --- No LLM client: pass-through with original message ---
+    if client is None or RewriteQuery is None:
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="rewrite_query",
+            session_id=session_id,
+            mode="no_llm_passthrough",
+            rewritten_query=message,
+            reasoning="no_llm_client",
+            duration_ms=elapsed,
+        )
+        return {
+            "rewritten_query": message,
+            "rewrite_count": rewrite_count,
+        }
+
+    # --- Call LLM with structured output ---
+    import json as _json
+
+    try:
+        completion = await client.chat.completions.create(
+            model=services.model,
+            messages=[
+                {"role": "system", "content": _REWRITE_QUERY_SYSTEM_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            response_format=RewriteQuery,
+            max_completion_tokens=128,
+        )
+
+        raw_content = completion.choices[0].message.content or "{}"
+        parsed = _json.loads(raw_content)
+        rewritten_query = parsed.get("rewritten_query", message)
+        reasoning = parsed.get("reasoning", "")
+
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="rewrite_query",
+            session_id=session_id,
+            mode="llm_rewrite",
+            rewritten_query=rewritten_query,
+            reasoning=reasoning,
+            duration_ms=elapsed,
+        )
+        return {
+            "rewritten_query": rewritten_query,
+            "rewrite_count": rewrite_count + 1,
+        }
+
+    except Exception as exc:
+        logger.warning(
+            "rewrite_query.llm_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+            session_id=session_id,
+            duration_ms=round((time.perf_counter() - t0) * 1000, 3),
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="rewrite_query",
+            session_id=session_id,
+            mode="llm_failed",
+            rewritten_query=message,
+            reasoning=f"llm_error: {type(exc).__name__}",
+            duration_ms=elapsed,
+        )
+        return {
+            "rewritten_query": message,
+            "rewrite_count": rewrite_count + 1,
+        }
 
 
 # ---------------------------------------------------------------------------
