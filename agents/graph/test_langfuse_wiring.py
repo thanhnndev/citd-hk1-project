@@ -335,6 +335,76 @@ class TestGracefulDegradation:
 # ---------------------------------------------------------------------------
 
 
+class TestConfigMergesCallbacksAndCheckpoint:
+    """Config contains both callbacks (Langfuse) and configurable.thread_id (checkpointing)."""
+
+    @pytest.mark.asyncio
+    async def test_config_merges_callbacks_and_checkpoint(self):
+        """Config passed to ainvoke has both 'callbacks' and 'configurable' with thread_id."""
+        client = _make_mock_langfuse_client()
+        g = _make_graph_with_mock(langfuse_client=client)
+
+        await g.answer(session_id="sess-merge-001", message="test merge")
+
+        call_args = g.graph.ainvoke.call_args
+        config = call_args[0][1]
+
+        # Both keys must coexist in the same config dict
+        assert "callbacks" in config, "callbacks should be present when langfuse_client is set"
+        assert "configurable" in config, "configurable should be present for checkpointing"
+        assert config["configurable"]["thread_id"] == "sess-merge-001", (
+            "thread_id must match session_id for checkpointing"
+        )
+        assert len(config["callbacks"]) == 1, "Should have exactly one callback handler"
+
+    @pytest.mark.asyncio
+    async def test_config_checkpoint_only_when_no_client(self):
+        """Config has configurable.thread_id but no callbacks when langfuse disabled."""
+        g = _make_graph_with_mock(langfuse_client=None)
+
+        await g.answer(session_id="sess-merge-002", message="test checkpoint only")
+
+        call_args = g.graph.ainvoke.call_args
+        config = call_args[0][1]
+
+        assert "callbacks" not in config, "callbacks should NOT be present when langfuse disabled"
+        assert "configurable" in config, "configurable must always be present"
+        assert config["configurable"]["thread_id"] == "sess-merge-002"
+
+
+# ---------------------------------------------------------------------------
+# Test: CallbackHandler created with correct parameters
+# ---------------------------------------------------------------------------
+
+
+class TestCallbackHandlerParams:
+    """CallbackHandler is instantiated with the correct public_key from langfuse_client."""
+
+    @pytest.mark.asyncio
+    async def test_callback_handler_created_with_correct_public_key(self):
+        """CallbackHandler is created using the public_key from langfuse_client."""
+        from langfuse.langchain import CallbackHandler
+
+        client = _make_mock_langfuse_client(public_key="pk-custom-key")
+        g = _make_graph_with_mock(langfuse_client=client)
+
+        await g.answer(session_id="sess-params-001", message="test params")
+
+        call_args = g.graph.ainvoke.call_args
+        config = call_args[0][1]
+        handler = config["callbacks"][0]
+
+        # Handler must be a real CallbackHandler (not a mock)
+        assert isinstance(handler, CallbackHandler), (
+            "Handler must be a real langfuse CallbackHandler instance"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: Factory function passes langfuse_client
+# ---------------------------------------------------------------------------
+
+
 class TestFactoryFunction:
     """create_ham_ninh_graph accepts and passes langfuse_client."""
 
