@@ -17,7 +17,7 @@ import {
   type ChatConversationSummary,
   type StoredChatConversation,
 } from "@/lib/chat-storage";
-import { ArrowDown, ArrowUp, AlertCircle, Loader2, MapPinned, Menu, RotateCcw, Trash2, ArrowRight } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, BookOpen, Loader2, MapPinned, Menu, PanelLeftClose, PanelLeftOpen, RotateCcw, Trash2, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -107,6 +107,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [placesOpen, setPlacesOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [placesPanelOpen, setPlacesPanelOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -357,6 +359,28 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       : sourceCount > 0
         ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
         : "";
+  const hasPlaces = latestPlaces.length > 0;
+  const showDesktopSidebar = !sidebarCollapsed;
+  const showDesktopPlaces = hasPlaces && placesPanelOpen;
+  const desktopGridClass = showDesktopSidebar
+    ? showDesktopPlaces
+      ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
+      : "lg:grid-cols-[240px_minmax(0,1fr)]"
+    : showDesktopPlaces
+      ? "lg:grid-cols-[minmax(0,1fr)_360px]"
+      : "lg:grid-cols-[minmax(0,1fr)]";
+  const sidebarToggleLabel = sidebarCollapsed
+    ? language === "vi" ? "Mở sidebar" : "Open sidebar"
+    : language === "vi" ? "Đóng sidebar" : "Close sidebar";
+  const sourcesToggleLabel = placesPanelOpen
+    ? language === "vi" ? "Đóng panel nguồn" : "Close sources panel"
+    : language === "vi" ? "Mở panel nguồn" : "Open sources panel";
+
+  useEffect(() => {
+    if (latestPlaces.length > 0) {
+      setPlacesPanelOpen(true);
+    }
+  }, [latestPlaces.length]);
 
   // ── Deterministic Quick Reply Chips ──────────────────────────────────────
   // Derives chip labels from local UI state only — no LLM/API calls.
@@ -464,11 +488,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   return (
     <div className="h-[calc(100dvh-4rem)] min-h-[36rem] overflow-hidden bg-white text-[#37352f]">
       <div
-        className={`grid h-full min-h-0 ${
-          latestPlaces.length > 0
-            ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
-            : "lg:grid-cols-[240px_minmax(0,1fr)]"
-        }`}
+        className={`grid h-full min-h-0 ${desktopGridClass}`}
       >
         <ChatSidebar
           locale={locale}
@@ -480,9 +500,40 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onSelectConversation={handleSelectConversation}
           mobileOpen={sidebarOpen}
           onMobileClose={() => setSidebarOpen(false)}
+          desktopOpen={!sidebarCollapsed}
+          onDesktopToggle={() => setSidebarCollapsed((current) => !current)}
         />
 
         <main className="relative flex min-h-0 min-w-0 flex-col bg-white">
+      <div className="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-[#e9e9e7] bg-white px-3 lg:px-4">
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-full border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-semibold text-[#37352f] shadow-sm transition hover:bg-[#f7f7f5]"
+          onClick={() => setSidebarCollapsed((current) => !current)}
+          aria-label={sidebarToggleLabel}
+          aria-pressed={!sidebarCollapsed}
+        >
+          {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+          <span className="hidden sm:inline">
+            {sidebarCollapsed
+              ? language === "vi" ? "Mở lịch sử" : "Open history"
+              : language === "vi" ? "Ẩn lịch sử" : "Hide history"}
+          </span>
+        </button>
+
+        {hasPlaces && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb]"
+            onClick={() => setPlacesPanelOpen((current) => !current)}
+            aria-label={sourcesToggleLabel}
+            aria-pressed={placesPanelOpen}
+          >
+            <BookOpen className="size-4" />
+            <span>{placeTranslations.placeResultsHeading}</span>
+          </button>
+        )}
+      </div>
 
       {/* Full-height scroll region — mobile-first with safe-area bottom padding for the composer */}
       <div
@@ -676,7 +727,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               >
                 <Menu className="size-4" />
               </button>
-              {latestPlaces.length > 0 && (
+              {hasPlaces && (
                 <button
                   type="button"
                   className="mr-1 rounded-md p-1 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
@@ -731,12 +782,14 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       </footer>
         </main>
 
-        {latestPlaces.length > 0 && (
+        {hasPlaces && (
           <PlaceResultsPanel
             places={latestPlaces}
             translations={placeTranslations}
             mobileOpen={placesOpen}
             onMobileClose={() => setPlacesOpen(false)}
+            desktopOpen={placesPanelOpen}
+            onDesktopClose={() => setPlacesPanelOpen(false)}
           />
         )}
       </div>

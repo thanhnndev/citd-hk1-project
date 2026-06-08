@@ -11,6 +11,8 @@ interface PlaceResultsPanelProps {
   };
   mobileOpen: boolean;
   onMobileClose: () => void;
+  desktopOpen: boolean;
+  onDesktopClose: () => void;
 }
 
 export function PlaceResultsPanel({
@@ -18,6 +20,8 @@ export function PlaceResultsPanel({
   translations,
   mobileOpen,
   onMobileClose,
+  desktopOpen,
+  onDesktopClose,
 }: PlaceResultsPanelProps) {
   if (places.length === 0) return null;
 
@@ -37,18 +41,28 @@ export function PlaceResultsPanel({
 
   return (
     <>
-      <aside
-        className="hidden h-full min-h-0 w-[360px] shrink-0 flex-col border-l border-[#e9e9e7] bg-white lg:flex"
-        aria-label={translations.placeResultsHeading}
-      >
-        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[#e9e9e7] px-5">
-          <BadgeCheck className="size-4 text-[#2eaadc]" />
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#37352f]">
-            {translations.placeResultsHeading}
-          </h2>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{cards}</div>
-      </aside>
+      {desktopOpen && (
+        <aside
+          className="hidden h-full min-h-0 w-[360px] shrink-0 flex-col border-l border-[#e9e9e7] bg-white lg:flex"
+          aria-label={translations.placeResultsHeading}
+        >
+          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[#e9e9e7] px-5">
+            <BadgeCheck className="size-4 text-[#2eaadc]" />
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#37352f]">
+              {translations.placeResultsHeading}
+            </h2>
+            <button
+              type="button"
+              onClick={onDesktopClose}
+              className="ml-auto rounded p-1.5 text-[#787774] hover:bg-[#f7f7f5]"
+              aria-label="Close sources panel"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">{cards}</div>
+        </aside>
+      )}
 
       {mobileOpen && (
         <div className="fixed inset-0 z-50 bg-black/25 lg:hidden" role="dialog" aria-modal="true" aria-label={translations.placeResultsHeading}>
