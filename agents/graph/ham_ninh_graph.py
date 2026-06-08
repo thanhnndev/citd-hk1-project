@@ -1,7 +1,7 @@
 """HamNinhGraph — LangGraph StateGraph assembler with per-node timeout policy.
 
 This module assembles the full agent pipeline as a LangGraph StateGraph with:
-- 9 nodes (5 real + 4 stubs) from agents.graph.nodes
+- 9 nodes (7 real + 2 stubs) from agents.graph.nodes
 - Per-node TimeoutPolicy via asyncio.wait_for
 - Conditional routing based on supervisor decisions
 - AsyncPostgresSaver or MemorySaver checkpointing
@@ -10,7 +10,7 @@ The graph topology:
     START → input_guardrails → (conditional: blocked → END, else → intent_router)
     intent_router → supervisor → (conditional routing)
         → conversational → output_guardrails → END
-        → rag_agent → output_guardrails → END
+        → rag_agent → grade_documents → (conditional) → output_guardrails → END
         → maps_agent → output_guardrails → END
         → output_guardrails → END (direct block)
 
@@ -268,10 +268,20 @@ class HamNinhGraph:
             },
         )
 
-        # Fixed edges: processing nodes → output_guardrails
+        # Fixed edges: processing nodes → next step
         builder.add_edge("conversational", "output_guardrails")
-        builder.add_edge("rag_agent", "output_guardrails")
+        builder.add_edge("rag_agent", "grade_documents")
         builder.add_edge("maps_agent", "output_guardrails")
+
+        # Conditional edge: grade_documents → output_guardrails
+        # (S03 will add rewrite_query routing for irrelevant grades)
+        builder.add_conditional_edges(
+            "grade_documents",
+            self._route_after_grade,
+            {
+                "output_guardrails": "output_guardrails",
+            },
+        )
 
         # Final edge: output_guardrails → END
         builder.add_edge("output_guardrails", END)
@@ -296,6 +306,22 @@ class HamNinhGraph:
         if intent in ("blocked", "off_topic"):
             return END
         return "intent_router"
+
+    @staticmethod
+    def _route_after_grade(state: AgentState) -> str:
+        """Routing function: after grade_documents node.
+
+        Currently always routes to output_guardrails. S03 will expand
+        this to route to rewrite_query when grade_label == 'irrelevant'
+        and rewrite_count < max_rewrites.
+
+        Args:
+            state: Current AgentState after grade_documents execution.
+
+        Returns:
+            Next node name: "output_guardrails" (S03: or "rewrite_query").
+        """
+        return "output_guardrails"
 
     @staticmethod
     def _route_after_supervisor(state: AgentState) -> str:
