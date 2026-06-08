@@ -92,6 +92,8 @@ class AgentState(TypedDict, total=False):
     location_consent: bool
     sort_by_nearest: bool
     user_location: dict[str, float] | None
+    # Graph flow control
+    blocked: bool
 
 
 TOOLS = [

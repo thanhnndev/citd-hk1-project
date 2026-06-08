@@ -1,0 +1,546 @@
+"""HamNinhGraph — LangGraph StateGraph assembler with per-node timeout policy.
+
+This module assembles the full agent pipeline as a LangGraph StateGraph with:
+- 9 nodes (5 real + 4 stubs) from agents.graph.nodes
+- Per-node TimeoutPolicy via asyncio.wait_for
+- Conditional routing based on supervisor decisions
+- AsyncPostgresSaver or MemorySaver checkpointing
+
+The graph topology:
+    START → input_guardrails → (conditional: blocked → END, else → intent_router)
+    intent_router → supervisor → (conditional routing)
+        → conversational → output_guardrails → END
+        → rag_agent → output_guardrails → END
+        → maps_agent → output_guardrails → END
+        → output_guardrails → END (direct block)
+
+TimeoutPolicy:
+    Each node is wrapped with asyncio.wait_for(node_timeout).
+    On timeout: raises NodeTimeoutError, logs structured event, returns error state.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any, AsyncGenerator, Literal
+
+import structlog
+
+from agents.graph.state import (
+    AgentState,
+    NodeTimeoutError,
+    NODE_TIMEOUT_GUARDRAILS,
+    NODE_TIMEOUT_INTENT_ROUTER,
+    NODE_TIMEOUT_LLM,
+    NODE_TIMEOUT_TOOL,
+    NODE_TIMEOUT_RETRIEVE,
+    NODE_TIMEOUT_SEMANTIC_FALLBACK,
+)
+from agents.graph.nodes import (
+    NodeServices,
+    configure_services,
+    input_guardrails_node,
+    intent_router_node,
+    supervisor_node,
+    conversational_node,
+    output_guardrails_node,
+    rag_agent_stub_node,
+    grade_documents_stub_node,
+    rewrite_query_stub_node,
+    maps_agent_stub_node,
+)
+
+try:
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.checkpoint.memory import MemorySaver
+except Exception:  # pragma: no cover - optional runtime dependency
+    END = "__end__"
+    START = "__start__"
+    StateGraph = None
+    MemorySaver = None
+
+logger = structlog.get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# TimeoutPolicy — per-node timeout configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TimeoutPolicy:
+    """Per-node timeout policy.
+
+    Each node has a maximum execution time in seconds. If exceeded,
+    the wrapper raises ``NodeTimeoutError`` and logs a structured event.
+    """
+
+    timeouts: dict[str, int] = field(default_factory=lambda: {
+        "input_guardrails": NODE_TIMEOUT_GUARDRAILS,
+        "intent_router": NODE_TIMEOUT_INTENT_ROUTER,
+        "supervisor": NODE_TIMEOUT_INTENT_ROUTER,  # Same tier as router
+        "conversational": NODE_TIMEOUT_LLM,
+        "output_guardrails": NODE_TIMEOUT_GUARDRAILS,
+        "rag_agent": NODE_TIMEOUT_RETRIEVE,
+        "grade_documents": NODE_TIMEOUT_SEMANTIC_FALLBACK,
+        "rewrite_query": NODE_TIMEOUT_SEMANTIC_FALLBACK,
+        "maps_agent": NODE_TIMEOUT_TOOL,
+    })
+
+    def get(self, node_name: str) -> int:
+        """Return the timeout for a node, defaulting to 10s."""
+        return self.timeouts.get(node_name, 10)
+
+
+# ---------------------------------------------------------------------------
+# Timeout wrapper
+# ---------------------------------------------------------------------------
+
+
+def _wrap_with_timeout(node_fn, node_name: str, timeout_seconds: int):
+    """Wrap an async node function with asyncio.wait_for timeout.
+
+    On timeout:
+        - Logs ``graph.timeout`` with node_name and timeout_seconds
+        - Raises ``NodeTimeoutError`` (caught by graph executor)
+
+    Returns:
+        Wrapped async function with the same signature as node_fn.
+    """
+    async def wrapper(state: AgentState) -> dict[str, Any]:
+        try:
+            return await asyncio.wait_for(node_fn(state), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.error(
+                "graph.timeout",
+                node_name=node_name,
+                timeout_seconds=timeout_seconds,
+            )
+            raise NodeTimeoutError(node_name, timeout_seconds)
+        except Exception as exc:
+            # Re-raise non-timeout exceptions with context
+            logger.error(
+                "graph.node_error",
+                node_name=node_name,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            raise
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Graph result container
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GraphResult:
+    """Container for graph execution results.
+
+    Returned by ``HamNinhGraph.answer()`` with the final state fields.
+    """
+
+    response_text: str = ""
+    suggestions: list[str] = field(default_factory=list)
+    citations: list[Any] = field(default_factory=list)
+    places: list[Any] = field(default_factory=list)
+    intent: str | None = None
+    routing_tier: str | None = None
+    guardrail_flags: dict[str, Any] = field(default_factory=dict)
+    blocked: bool = False
+
+
+# ---------------------------------------------------------------------------
+# HamNinhGraph — main graph assembler
+# ---------------------------------------------------------------------------
+
+
+class HamNinhGraph:
+    """LangGraph StateGraph assembler for the Ham Ninh tourism agent.
+
+    Assembles the full graph topology with per-node TimeoutPolicy and
+    conditional routing. Supports both in-memory and Postgres checkpointing.
+
+    Usage:
+        graph = HamNinhGraph(checkpointer=MemorySaver())
+        result = await graph.answer(
+            session_id="user-123",
+            message="Xin chào",
+            language="vi",
+        )
+        print(result.response_text)
+
+    Attributes:
+        graph: The compiled LangGraph CompiledStateGraph instance.
+    """
+
+    def __init__(
+        self,
+        checkpointer: Any = None,
+        services: NodeServices | None = None,
+    ) -> None:
+        """Initialize and compile the StateGraph.
+
+        Args:
+            checkpointer: LangGraph checkpoint saver (MemorySaver or AsyncPostgresSaver).
+                Defaults to MemorySaver if None.
+            services: Optional NodeServices for dependency injection into nodes.
+                If provided, calls configure_services() before compilation.
+        """
+        if StateGraph is None:
+            raise RuntimeError("langgraph is not installed")
+
+        # Configure node services if provided
+        if services is not None:
+            configure_services(services)
+
+        # Default to in-memory checkpointing
+        if checkpointer is None:
+            checkpointer = MemorySaver() if MemorySaver is not None else None
+
+        self._checkpointer = checkpointer
+        self._timeout_policy = TimeoutPolicy()
+
+        # Build and compile the graph
+        self.graph = self._build_graph()
+
+        logger.info(
+            "graph.compiled",
+            checkpoint_mode=type(checkpointer).__name__ if checkpointer else "none",
+            node_count=9,
+        )
+
+    def _build_graph(self) -> Any:
+        """Assemble the StateGraph topology with all nodes and edges.
+
+        Returns:
+            CompiledStateGraph ready for execution.
+        """
+        builder = StateGraph(AgentState)
+
+        # Add all nodes with timeout wrappers
+        nodes = [
+            ("input_guardrails", input_guardrails_node),
+            ("intent_router", intent_router_node),
+            ("supervisor", supervisor_node),
+            ("conversational", conversational_node),
+            ("output_guardrails", output_guardrails_node),
+            ("rag_agent", rag_agent_stub_node),
+            ("grade_documents", grade_documents_stub_node),
+            ("rewrite_query", rewrite_query_stub_node),
+            ("maps_agent", maps_agent_stub_node),
+        ]
+
+        for node_name, node_fn in nodes:
+            timeout = self._timeout_policy.get(node_name)
+            wrapped = _wrap_with_timeout(node_fn, node_name, timeout)
+            builder.add_node(node_name, wrapped)
+
+        # Entry edge: START → input_guardrails
+        builder.add_edge(START, "input_guardrails")
+
+        # Conditional edge: input_guardrails → (blocked → END, else → intent_router)
+        builder.add_conditional_edges(
+            "input_guardrails",
+            self._route_after_guardrails,
+            {
+                "intent_router": "intent_router",
+                END: END,
+            },
+        )
+
+        # Fixed edge: intent_router → supervisor
+        builder.add_edge("intent_router", "supervisor")
+
+        # Conditional edge: supervisor → (conversational | rag_agent | maps_agent | output_guardrails)
+        builder.add_conditional_edges(
+            "supervisor",
+            self._route_after_supervisor,
+            {
+                "conversational": "conversational",
+                "rag_agent": "rag_agent",
+                "maps_agent": "maps_agent",
+                "output_guardrails": "output_guardrails",
+            },
+        )
+
+        # Fixed edges: processing nodes → output_guardrails
+        builder.add_edge("conversational", "output_guardrails")
+        builder.add_edge("rag_agent", "output_guardrails")
+        builder.add_edge("maps_agent", "output_guardrails")
+
+        # Final edge: output_guardrails → END
+        builder.add_edge("output_guardrails", END)
+
+        # Compile with checkpointer
+        return builder.compile(checkpointer=self._checkpointer)
+
+    @staticmethod
+    def _route_after_guardrails(state: AgentState) -> str:
+        """Routing function: after input_guardrails node.
+
+        If guardrails blocked (intent == 'blocked' or 'off_topic'), route to END.
+        Otherwise, continue to intent_router.
+
+        Args:
+            state: Current AgentState after input_guardrails execution.
+
+        Returns:
+            Next node name: "intent_router" or END.
+        """
+        intent = state.get("intent")
+        if intent in ("blocked", "off_topic"):
+            return END
+        return "intent_router"
+
+    @staticmethod
+    def _route_after_supervisor(state: AgentState) -> str:
+        """Routing function: after supervisor node.
+
+        Reads ``state["next_node"]`` set by supervisor and returns it.
+        Defaults to "conversational" if next_node is not set.
+
+        Args:
+            state: Current AgentState after supervisor execution.
+
+        Returns:
+            Next node name: "conversational", "rag_agent", "maps_agent", or "output_guardrails".
+        """
+        next_node = state.get("next_node", "conversational")
+        return next_node
+
+    async def answer(
+        self,
+        *,
+        session_id: str,
+        message: str,
+        language: str = "vi",
+        history: list[dict[str, str]] | None = None,
+    ) -> GraphResult:
+        """Execute the graph and return a structured result.
+
+        This is the primary entry point for synchronous graph execution.
+        For streaming, use ``stream_sse()`` instead.
+
+        Args:
+            session_id: Unique session identifier for checkpointing.
+            message: User's input message.
+            language: Language code ("vi" or "en").
+            history: Optional conversation history (overrides checkpoint).
+
+        Returns:
+            GraphResult with response_text, suggestions, citations, places, etc.
+
+        Raises:
+            NodeTimeoutError: If a node exceeds its timeout (logged and re-raised).
+        """
+        # Build initial state
+        state: AgentState = {
+            "session_id": session_id,
+            "message": message,
+            "language": language,
+            "history": history or [],
+            "messages": [],
+            "tool_calls": [],
+            "citations": [],
+            "places": [],
+            "suggestions": [],
+            "reasoning_log": None,
+            "intent": None,
+            "response_text": "",
+            "langfuse_trace_id": None,
+            "prior_context": None,
+            "followup_decision": None,
+            "context_source": None,
+            "tool_call_signatures": [],
+            "knowledge_chunks": [],
+            "knowledge_response_ready": False,
+            "intent_confidence": None,
+            "routing_tier": None,
+            "needs_location": False,
+            "next_node": None,
+            "guardrail_flags": {},
+            "grade_score": None,
+            "grade_label": None,
+            "rewrite_count": 0,
+            "rewritten_query": None,
+            "history_included": False,
+            "location_consent": False,
+            "sort_by_nearest": False,
+            "user_location": None,
+            "blocked": False,
+        }
+
+        # Config with thread_id for checkpointing
+        config = {"configurable": {"thread_id": session_id}}
+
+        try:
+            # Execute the graph
+            final_state = await self.graph.ainvoke(state, config)
+
+            # Extract result fields
+            return GraphResult(
+                response_text=final_state.get("response_text", ""),
+                suggestions=final_state.get("suggestions", []),
+                citations=final_state.get("citations", []),
+                places=final_state.get("places", []),
+                intent=final_state.get("intent"),
+                routing_tier=final_state.get("routing_tier"),
+                guardrail_flags=final_state.get("guardrail_flags", {}),
+                blocked=final_state.get("intent") in ("blocked", "off_topic"),
+            )
+
+        except NodeTimeoutError as exc:
+            # Timeout already logged by wrapper, re-raise
+            logger.error(
+                "graph.execution_timeout",
+                session_id=session_id,
+                node_name=exc.node_name,
+                timeout_seconds=exc.timeout_seconds,
+            )
+            raise
+
+    async def stream_sse(
+        self,
+        *,
+        session_id: str,
+        message: str,
+        language: str = "vi",
+        history: list[dict[str, str]] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Execute the graph with streaming and yield SSE markers.
+
+        Uses the StreamingAdapter to convert LangGraph stream events to
+        SSE marker strings: [STATUS], [PLACES], [CITATIONS], [SUGGESTIONS], etc.
+
+        Args:
+            session_id: Unique session identifier for checkpointing.
+            message: User's input message.
+            language: Language code ("vi" or "en").
+            history: Optional conversation history (overrides checkpoint).
+
+        Yields:
+            SSE marker strings ready for the chat.py SSE wrapper.
+        """
+        from agents.graph.streaming import StreamingAdapter
+
+        # Build initial state
+        state: AgentState = {
+            "session_id": session_id,
+            "message": message,
+            "language": language,
+            "history": history or [],
+            "messages": [],
+            "tool_calls": [],
+            "citations": [],
+            "places": [],
+            "suggestions": [],
+            "reasoning_log": None,
+            "intent": None,
+            "response_text": "",
+            "langfuse_trace_id": None,
+            "prior_context": None,
+            "followup_decision": None,
+            "context_source": None,
+            "tool_call_signatures": [],
+            "knowledge_chunks": [],
+            "knowledge_response_ready": False,
+            "intent_confidence": None,
+            "routing_tier": None,
+            "needs_location": False,
+            "next_node": None,
+            "guardrail_flags": {},
+            "grade_score": None,
+            "grade_label": None,
+            "rewrite_count": 0,
+            "rewritten_query": None,
+            "history_included": False,
+            "location_consent": False,
+            "sort_by_nearest": False,
+            "user_location": None,
+            "blocked": False,
+        }
+
+        # Config with thread_id for checkpointing
+        config = {"configurable": {"thread_id": session_id}}
+
+        # Stream with updates + custom modes for full observability
+        adapter = StreamingAdapter()
+
+        try:
+            graph_stream = self.graph.astream(
+                state,
+                config,
+                stream_mode=["updates", "custom"],
+                version="v2",
+            )
+
+            async for sse_marker in adapter.adapt_stream(graph_stream):
+                yield sse_marker
+
+        except NodeTimeoutError as exc:
+            logger.error(
+                "graph.stream_timeout",
+                session_id=session_id,
+                node_name=exc.node_name,
+                timeout_seconds=exc.timeout_seconds,
+            )
+            yield f"[ERROR] Node '{exc.node_name}' timed out. Please try again."
+
+        except Exception as exc:
+            error_type = type(exc).__name__
+            logger.error(
+                "graph.stream_error",
+                session_id=session_id,
+                error_type=error_type,
+                error=str(exc),
+            )
+            yield f"[ERROR] {error_type}"
+
+
+# ---------------------------------------------------------------------------
+# Module-level convenience function
+# ---------------------------------------------------------------------------
+
+
+async def create_ham_ninh_graph(
+    checkpoint_mode: Literal["memory", "postgres"] = "memory",
+    database_url: str | None = None,
+    services: NodeServices | None = None,
+) -> HamNinhGraph:
+    """Factory function to create a HamNinhGraph with the specified checkpointer.
+
+    Args:
+        checkpoint_mode: "memory" for in-memory, "postgres" for AsyncPostgresSaver.
+        database_url: PostgreSQL connection string (required if checkpoint_mode="postgres").
+        services: Optional NodeServices for dependency injection.
+
+    Returns:
+        Configured HamNinhGraph instance.
+
+    Raises:
+        ValueError: If checkpoint_mode="postgres" but database_url is None.
+    """
+    if checkpoint_mode == "postgres":
+        if database_url is None:
+            raise ValueError("database_url required for postgres checkpoint mode")
+
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+            checkpointer = AsyncPostgresSaver.from_conn_string(database_url)
+            logger.info("graph.checkpoint_mode", mode="postgres")
+        except ImportError:
+            logger.warning(
+                "graph.postgres_saver_unavailable",
+                fallback="memory",
+            )
+            checkpointer = MemorySaver() if MemorySaver is not None else None
+    else:
+        checkpointer = MemorySaver() if MemorySaver is not None else None
+        logger.info("graph.checkpoint_mode", mode="memory")
+
+    return HamNinhGraph(checkpointer=checkpointer, services=services)
