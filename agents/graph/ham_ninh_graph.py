@@ -153,6 +153,7 @@ class GraphResult:
     routing_tier: str | None = None
     guardrail_flags: dict[str, Any] = field(default_factory=dict)
     blocked: bool = False
+    langfuse_trace_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,7 @@ class HamNinhGraph:
         self,
         checkpointer: Any = None,
         services: NodeServices | None = None,
+        langfuse_client: Any | None = None,
     ) -> None:
         """Initialize and compile the StateGraph.
 
@@ -191,6 +193,8 @@ class HamNinhGraph:
                 Defaults to MemorySaver if None.
             services: Optional NodeServices for dependency injection into nodes.
                 If provided, calls configure_services() before compilation.
+            langfuse_client: Optional Langfuse client for tracing. When provided,
+                creates CallbackHandler for automatic graph topology tracing.
         """
         if StateGraph is None:
             raise RuntimeError("langgraph is not installed")
@@ -205,6 +209,7 @@ class HamNinhGraph:
 
         self._checkpointer = checkpointer
         self._timeout_policy = TimeoutPolicy()
+        self._langfuse_client = langfuse_client
 
         # Build and compile the graph
         self.graph = self._build_graph()
@@ -418,9 +423,40 @@ class HamNinhGraph:
         # Config with thread_id for checkpointing
         config = {"configurable": {"thread_id": session_id}}
 
+        # Add Langfuse CallbackHandler if client is present
+        langfuse_handler = None
+        if self._langfuse_client is not None:
+            try:
+                from langfuse.langchain import CallbackHandler
+                langfuse_handler = CallbackHandler(
+                    public_key=self._langfuse_client.public_key,
+                )
+                config["callbacks"] = [langfuse_handler]
+                logger.debug("langfuse.callback_created", session_id=session_id)
+            except Exception as exc:
+                logger.warning(
+                    "langfuse.callback_failed",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                langfuse_handler = None
+
         try:
             # Execute the graph
             final_state = await self.graph.ainvoke(state, config)
+
+            # Extract trace ID if Langfuse handler was created
+            trace_id = None
+            if langfuse_handler is not None:
+                try:
+                    trace_id = self._langfuse_client.get_current_trace_id()
+                    logger.debug("langfuse.trace_id_extracted", trace_id=trace_id)
+                except Exception as exc:
+                    logger.warning(
+                        "langfuse.trace_id_extraction_failed",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
 
             # Extract result fields
             return GraphResult(
@@ -432,6 +468,7 @@ class HamNinhGraph:
                 routing_tier=final_state.get("routing_tier"),
                 guardrail_flags=final_state.get("guardrail_flags", {}),
                 blocked=final_state.get("intent") in ("blocked", "off_topic"),
+                langfuse_trace_id=trace_id,
             )
 
         except NodeTimeoutError as exc:
@@ -513,6 +550,24 @@ class HamNinhGraph:
         # Config with thread_id for checkpointing
         config = {"configurable": {"thread_id": session_id}}
 
+        # Add Langfuse CallbackHandler if client is present
+        langfuse_handler = None
+        if self._langfuse_client is not None:
+            try:
+                from langfuse.langchain import CallbackHandler
+                langfuse_handler = CallbackHandler(
+                    public_key=self._langfuse_client.public_key,
+                )
+                config["callbacks"] = [langfuse_handler]
+                logger.debug("langfuse.callback_created_stream", session_id=session_id)
+            except Exception as exc:
+                logger.warning(
+                    "langfuse.callback_failed_stream",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                langfuse_handler = None
+
         # Stream with updates + custom modes for full observability
         adapter = StreamingAdapter()
 
@@ -556,6 +611,7 @@ async def create_ham_ninh_graph(
     checkpoint_mode: Literal["memory", "postgres"] = "memory",
     database_url: str | None = None,
     services: NodeServices | None = None,
+    langfuse_client: Any | None = None,
 ) -> HamNinhGraph:
     """Factory function to create a HamNinhGraph with the specified checkpointer.
 
@@ -563,6 +619,7 @@ async def create_ham_ninh_graph(
         checkpoint_mode: "memory" for in-memory, "postgres" for AsyncPostgresSaver.
         database_url: PostgreSQL connection string (required if checkpoint_mode="postgres").
         services: Optional NodeServices for dependency injection.
+        langfuse_client: Optional Langfuse client for tracing graph topology.
 
     Returns:
         Configured HamNinhGraph instance.
@@ -589,4 +646,4 @@ async def create_ham_ninh_graph(
         checkpointer = MemorySaver() if MemorySaver is not None else None
         logger.info("graph.checkpoint_mode", mode="memory")
 
-    return HamNinhGraph(checkpointer=checkpointer, services=services)
+    return HamNinhGraph(checkpointer=checkpointer, services=services, langfuse_client=langfuse_client)
