@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 # ---------------------------------------------------------------------------
 # Imports that ARE available
@@ -307,6 +308,247 @@ class TestUserLocationWiring:
             if len(events) > 10:
                 break
         assert isinstance(events, list)
+
+
+@pytest.mark.skipif(not _HAS_GRAPH, reason="ham_ninh_graph.py not available (T01 artifact missing)")
+class TestMapsAgent:
+    """Test maps_agent_node with PlaceRecommendationService integration."""
+
+    def _make_score_breakdown(self, rank: int = 1, final_score: float = 0.85) -> "ScoreBreakdown":
+        """Create a test ScoreBreakdown with proximity and geo_locality."""
+        from app.models.response import ScoreBreakdown
+        return ScoreBreakdown(
+            relevance=0.90,
+            proximity=0.75,
+            quality=0.80,
+            geo_locality=0.95,
+            popularity_damping=0.02,
+            weights={"relevance": 0.40, "proximity": 0.25, "quality": 0.20, "geo_locality": 0.15},
+            gate_passed=True,
+            final_score=final_score,
+            rank=rank,
+        )
+
+    def _make_place_result(self, place_id: str = "ChIJ123", rank: int = 1) -> "PlaceResult":
+        """Create a test PlaceResult with score_breakdown."""
+        from app.models.response import PlaceResult, PlaceExplanation
+        from app.models.request import LatLng
+        return PlaceResult(
+            place_id=place_id,
+            display_name=f"Test Place {rank}",
+            formatted_address="123 Test Street, Phu Quoc",
+            location=LatLng(lat=10.2800, lng=103.9800),
+            types=["restaurant", "seafood_restaurant"],
+            primary_type="restaurant",
+            primary_type_display_name="Restaurant",
+            rating=4.5,
+            user_rating_count=100,
+            price_level=2,
+            open_now=True,
+            business_status="OPERATIONAL",
+            geo_locality=0.95,
+            final_score=0.85,
+            score_breakdown=self._make_score_breakdown(rank=rank),
+            accessibility_score=0.80,
+            map_uri=f"https://maps.example.com/?place_id={place_id}",
+            explanation=PlaceExplanation(
+                rank=rank,
+                primary_reason="Test place for maps_agent_node",
+                local_context="strong local signal",
+                fairness_note="supports local representation",
+            ),
+        )
+
+    def _make_chat_response(self, places: list["PlaceResult"], message: str = "Test response") -> "ChatResponse":
+        """Create a test ChatResponse with places."""
+        from app.models.response import ChatResponse
+        return ChatResponse(
+            session_id="test-session",
+            message=message,
+            citations=[],
+            places=places,
+            intent="place_recommendation",
+            latency_ms=100.0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_returns_places(self):
+        """Verify maps_agent_node calls places_service.recommend() and returns places."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange: mock PlaceRecommendationService
+        mock_service = AsyncMock()
+        place1 = self._make_place_result(place_id="ChIJ001", rank=1)
+        place2 = self._make_place_result(place_id="ChIJ002", rank=2)
+        mock_response = self._make_chat_response([place1, place2], message="Here are 2 places")
+        mock_service.recommend = AsyncMock(return_value=mock_response)
+
+        # Inject mock service
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: call maps_agent_node
+        state: AgentState = {
+            "session_id": "test-session-001",
+            "message": "find restaurants",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": False,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: service was called with correct params
+        mock_service.recommend.assert_called_once()
+        call_kwargs = mock_service.recommend.call_args.kwargs
+        assert call_kwargs["query"] == "find restaurants"
+        assert call_kwargs["session_id"] == "test-session-001"
+        assert call_kwargs["language"] == "vi"
+
+        # Assert: result contains places and response_text
+        assert "places" in result
+        assert len(result["places"]) == 2
+        assert result["places"][0]["place_id"] == "ChIJ001"
+        assert result["places"][1]["place_id"] == "ChIJ002"
+        assert result["response_text"] == "Here are 2 places"
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_with_user_location(self):
+        """Verify user_location is passed through to places_service.recommend()."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange
+        mock_service = AsyncMock()
+        mock_response = self._make_chat_response([self._make_place_result()], message="Nearby place")
+        mock_service.recommend = AsyncMock(return_value=mock_response)
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: call with user_location
+        state: AgentState = {
+            "session_id": "test-session-002",
+            "message": "places near me",
+            "language": "en",
+            "user_location": {"lat": 10.776, "lng": 106.700},
+            "needs_location": False,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: user_location passed to service
+        call_kwargs = mock_service.recommend.call_args.kwargs
+        assert call_kwargs["user_location"] == {"lat": 10.776, "lng": 106.700}
+        assert call_kwargs["query"] == "places near me"
+
+        # Assert: result has places
+        assert len(result["places"]) == 1
+        assert result["response_text"] == "Nearby place"
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_location_consent_prompt(self):
+        """Verify consent prompt when needs_location=True but user_location=None."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange: service should NOT be called
+        mock_service = AsyncMock()
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: needs_location=True, user_location=None
+        state: AgentState = {
+            "session_id": "test-session-003",
+            "message": "find nearby places",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": True,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: service NOT called (consent check happens first)
+        mock_service.recommend.assert_not_called()
+
+        # Assert: consent prompt returned
+        assert "places" in result
+        assert result["places"] == []
+        assert "response_text" in result
+        # Vietnamese consent message
+        assert "vị trí" in result["response_text"] or "location" in result["response_text"].lower()
+
+    @pytest.mark.asyncio
+    async def test_maps_agent_service_failure(self):
+        """Verify graceful error handling when places_service raises an exception."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange: service raises exception
+        mock_service = AsyncMock()
+        mock_service.recommend = AsyncMock(side_effect=Exception("Service unavailable"))
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act: call maps_agent_node
+        state: AgentState = {
+            "session_id": "test-session-004",
+            "message": "find places",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": False,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: graceful error response (not exception propagation)
+        assert "places" in result
+        assert result["places"] == []
+        assert "response_text" in result
+        # Error message should be non-empty and indicate an error
+        assert len(result["response_text"]) > 0
+        # Should contain error indication (apology or error mention)
+        error_indicators = ["xin lỗi", "sorry", "lỗi", "error", "thất bại", "failed"]
+        assert any(indicator in result["response_text"].lower() for indicator in error_indicators), (
+            f"Error message should indicate failure: {result['response_text']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_score_breakdown_present(self):
+        """Verify places include score_breakdown with proximity and geo_locality fields."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        # Arrange: create places with explicit score_breakdown
+        mock_service = AsyncMock()
+        place1 = self._make_place_result(place_id="ChIJ101", rank=1)
+        place2 = self._make_place_result(place_id="ChIJ102", rank=2)
+        mock_response = self._make_chat_response([place1, place2], message="Ranked places")
+        mock_service.recommend = AsyncMock(return_value=mock_response)
+        configure_services(NodeServices(places_service=mock_service))
+
+        # Act
+        state: AgentState = {
+            "session_id": "test-session-005",
+            "message": "best restaurants",
+            "language": "vi",
+            "user_location": None,
+            "needs_location": False,
+        }
+        result = await maps_agent_node(state)
+
+        # Assert: places have score_breakdown with required fields
+        assert len(result["places"]) == 2
+
+        for place_dict in result["places"]:
+            # score_breakdown present as dict (from model_dump())
+            assert "score_breakdown" in place_dict
+            score_bd = place_dict["score_breakdown"]
+            assert isinstance(score_bd, dict)
+
+            # Verify key fields: proximity and geo_locality
+            assert "proximity" in score_bd
+            assert "geo_locality" in score_bd
+            assert isinstance(score_bd["proximity"], float)
+            assert isinstance(score_bd["geo_locality"], float)
+            assert 0.0 <= score_bd["proximity"] <= 1.0
+            assert 0.0 <= score_bd["geo_locality"] <= 1.0
+
+            # Verify final_score and rank
+            assert "final_score" in score_bd
+            assert "rank" in score_bd
+            assert score_bd["final_score"] > 0
+
+        # Verify ranking order
+        assert result["places"][0]["score_breakdown"]["rank"] == 1
+        assert result["places"][1]["score_breakdown"]["rank"] == 2
 
 
 # ===========================================================================
