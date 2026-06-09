@@ -1,7 +1,8 @@
 /**
  * Next.js route handler: GET /api/chat/stream
  *
- * Proxies the FastAPI SSE stream as a raw ReadableStream passthrough.
+ * Proxies the FastAPI SSE stream.
+ * Yields structured, user-friendly SSE error packets instead of HTTP 502 or technical logs.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -53,7 +54,41 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch {
-    return NextResponse.json({ error: "Backend unavailable" }, { status: 502 });
+    const errData = {
+      type: "connection_offline",
+      retryable: false,
+      message_vi: "Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối. Yêu cầu của bạn chưa được thực hiện.",
+      message_en: "The Ham Ninh travel assistant is currently unreachable. Your request was not processed.",
+      next_action: "none"
+    };
+    return new Response(`data: [ERROR] ${JSON.stringify(errData)}\n\n`, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  if (!backendRes.ok) {
+    const errData = {
+      type: "provider_unavailable",
+      retryable: true,
+      message_vi: "Hệ thống gợi ý du lịch đang gặp lỗi xử lý hoặc quá tải. Không có thông tin nào của bạn bị thay đổi. Bạn vui lòng thử lại sau vài giây.",
+      message_en: "The travel recommendation system is currently busy or encountered a processing issue. None of your data was changed. Please try again in a few seconds.",
+      next_action: "retry"
+    };
+    return new Response(`data: [ERROR] ${JSON.stringify(errData)}\n\n`, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
   }
 
   return new Response(backendRes.body, {

@@ -345,6 +345,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           try {
             if (streamErrorMessage.includes("off_topic") || streamErrorMessage.includes("input_blocked")) {
               renderGuardrailResponse(streamErrorMessage);
+            } else if (streamErrorMessage.trim().startsWith("{") && streamErrorMessage.trim().endsWith("}")) {
+              throw new Error(streamErrorMessage);
             } else {
               await renderPostFallback();
             }
@@ -710,26 +712,137 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           ))}
 
           {error && (() => {
+            const isConnectionOfflineError = (errStr: string): boolean => {
+              const normalized = errStr.toLowerCase();
+              if (
+                normalized.includes("fetch failed") ||
+                normalized.includes("econnrefused") ||
+                normalized.includes("failed to fetch") ||
+                normalized.includes("connection error") ||
+                normalized.includes("backend unavailable") ||
+                normalized.includes("unreachable") ||
+                normalized.includes("typeerror") ||
+                normalized.includes("stream failed") ||
+                normalized.includes("502")
+              ) {
+                return true;
+              }
+              try {
+                if (errStr.trim().startsWith("{") && errStr.trim().endsWith("}")) {
+                  const parsed = JSON.parse(errStr);
+                  return parsed.type === "connection_offline" || parsed.retryable === false;
+                }
+              } catch {}
+              return false;
+            };
+
+            const isOffline = isConnectionOfflineError(error);
             let errorTitle = language === "vi" ? "Lỗi kết nối" : "Connection error";
             let errorMessage = error;
             let showRetry = true;
+            let parsedDetails: any = null;
 
             try {
               if (error.trim().startsWith("{") && error.trim().endsWith("}")) {
-                const parsed = JSON.parse(error);
-                errorMessage = language === "vi" ? parsed.message_vi : parsed.message_en;
-                showRetry = !!parsed.retryable;
+                parsedDetails = JSON.parse(error);
+                errorMessage = language === "vi" ? parsedDetails.message_vi : parsedDetails.message_en;
+                showRetry = !!parsedDetails.retryable;
                 
-                if (parsed.type === "timeout") {
+                if (parsedDetails.type === "timeout") {
                   errorTitle = language === "vi" ? "Yêu cầu quá hạn" : "Request Timeout";
-                } else if (parsed.type === "provider_unavailable") {
+                } else if (parsedDetails.type === "provider_unavailable") {
                   errorTitle = language === "vi" ? "Dịch vụ tạm thời không khả dụng" : "Service Unavailable";
+                } else if (parsedDetails.type === "connection_offline") {
+                  errorTitle = language === "vi" ? "Hệ thống tạm ngưng hoạt động" : "System Offline";
                 } else {
                   errorTitle = language === "vi" ? "Lỗi hệ thống" : "System Error";
                 }
               }
             } catch (e) {
-              // Not a JSON error, fallback to raw error string
+              // Not a JSON error
+            }
+
+            if (isOffline) {
+              errorTitle = language === "vi" ? "Hệ thống tạm ngưng hoạt động" : "System Offline";
+              return (
+                <div className="flex gap-4 animate-slideUp border border-red-100 rounded-2xl bg-[#fffbfa]/95 p-5 shadow-lg max-w-[800px] mx-auto my-4 relative overflow-hidden backdrop-blur-sm">
+                  {/* Decorative modern side-bar indicator */}
+                  <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-red-500/80" />
+                  
+                  <div
+                    className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-full bg-red-50 text-red-600 ring-1 ring-red-500/10 shadow-sm"
+                    aria-hidden="true"
+                  >
+                    <AlertCircle className="size-5" />
+                  </div>
+                  <div className="flex-1 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-red-800 tracking-wide uppercase">
+                        {errorTitle}
+                      </h4>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-[#37352f]">
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Sự cố xảy ra" : "What Failed"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed">
+                          {language === "vi"
+                            ? "Trợ lý du lịch Hàm Ninh hiện không thể kết nối đến hệ thống máy chủ thông tin."
+                            : "The Ham Ninh travel assistant currently cannot establish a connection to the server."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Trạng thái dữ liệu" : "Data Safety"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed">
+                          {language === "vi"
+                            ? "Mọi lịch trình và thông tin đã nhập của bạn vẫn được lưu giữ an toàn trên thiết bị này."
+                            : "Your entered preferences and itinerary details remain saved safely on this device."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Khuyên dùng gửi lại" : "Retry Status"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed font-semibold text-amber-700">
+                          {language === "vi"
+                            ? "Yêu cầu lúc này không khả dụng. Bạn vui lòng không tiếp tục bấm gửi hoặc thử lại."
+                            : "Resending queries is currently disabled to prevent unnecessary network load."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Giải pháp thay thế" : "Alternatives"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed">
+                          {language === "vi"
+                            ? "Vui lòng tải lại trang sau ít phút, hoặc tra cứu trực tiếp thông tin/bản đồ ngoại tuyến."
+                            : "Try reloading the page in a few minutes, or refer directly to local maps/guides."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-red-50 text-[11px] text-slate-500 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+                      <span>
+                        {language === "vi"
+                          ? "Sự cố mạng tạm thời • Dịch vụ bảo trì"
+                          : "Temporary network interruption • Maintenance mode"}
+                      </span>
+                      <span className="font-medium text-[#0b5f63]">
+                        {language === "vi"
+                          ? "Hỗ trợ khẩn cấp: Trung tâm du khách Phú Quốc"
+                          : "Emergency support: Phu Quoc Visitor Center"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
             }
 
             return (
