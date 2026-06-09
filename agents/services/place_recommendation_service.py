@@ -831,6 +831,10 @@ _SHOP_TYPES = frozenset({"store", "shopping_mall", "clothing_store", "supermarke
 _SERVICE_TYPES = frozenset({"child_care_agency", "day_care_center", "preschool", "school", "doctor", "hospital", "local_government_office", "real_estate_agency", "bank", "atm"})
 _CAFE_TYPES = frozenset({"cafe", "coffee_shop"})
 
+_DANGEROUS_FAMILY_TYPES = frozenset({"waterfall", "canyon", "cave", "mountain"})
+_DANGEROUS_FAMILY_KEYWORDS_VI = ("thác", "thac", "suối", "suoi", "hang", "đèo", "deo", "vực", "vuc", "núi", "nui")
+_DANGEROUS_FAMILY_KEYWORDS_EN = ("waterfall", "stream", "canyon", "cave", "pass", "mountain")
+
 _GOAL_TERMS = {
     "itinerary": ("lịch trình", "lich trinh", "ghé đâu", "ghe dau", "đi đâu", "di dau", "visit", "where should", "plan"),
     "food": ("ăn", "an ", "quán", "quan", "nhà hàng", "nha hang", "hải sản", "hai san", "food", "restaurant", "seafood"),
@@ -934,11 +938,24 @@ def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: Recommenda
     accessibility_required = "accessibility" in frame.constraints
     accessibility_verified = _has_verified_wheelchair_access(candidate)
     required_types = _CAFE_TYPES if frame.goal == "cafe" else frozenset()
+
+    # Dangerous places check for family/kids audience
+    is_dangerous_for_kids = False
+    if frame.audience == "family":
+        candidate_types = _candidate_type_set(candidate)
+        if candidate_types & _DANGEROUS_FAMILY_TYPES:
+            is_dangerous_for_kids = True
+        else:
+            name_lower = (candidate.display_name or "").lower()
+            if any(kw in name_lower for kw in _DANGEROUS_FAMILY_KEYWORDS_VI + _DANGEROUS_FAMILY_KEYWORDS_EN):
+                is_dangerous_for_kids = True
+
     disqualified = (
         role in frame.disallowed_roles
         or (role not in frame.desired_roles and frame.goal in {"food", "stay", "itinerary"})
         or (required_types and not (_candidate_type_set(candidate) & required_types))
         or (accessibility_required and not accessibility_verified)
+        or is_dangerous_for_kids
     )
     score = 0.0
     if role in frame.desired_roles:
@@ -961,6 +978,18 @@ def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: Recommenda
     role_vi = {"visit": "điểm tham quan", "eat": "điểm ăn uống", "stay": "nơi lưu trú", "shop": "cửa hàng", "service": "dịch vụ", "unknown": "địa điểm"}.get(role, "địa điểm")
     role_en = {"visit": "visit stop", "eat": "food stop", "stay": "place to stay", "shop": "shop", "service": "service", "unknown": "place"}.get(role, "place")
     if disqualified:
+        if is_dangerous_for_kids:
+            reason_vi = f"{candidate.display_name} không phù hợp cho nhóm đi cùng trẻ em vì địa điểm này (suối, thác, hang động, núi) có thể gây nguy hiểm cho trẻ nhỏ."
+            reason_en = f"{candidate.display_name} is not suitable for groups with children as this location (waterfall, stream, cave, mountain) can be hazardous for kids."
+            return CandidateSuitability(
+                role=role,
+                score=score,
+                primary_reason_vi=reason_vi,
+                primary_reason_en=reason_en,
+                disqualified=True,
+                caveats_vi=(reason_vi,),
+                caveats_en=(reason_en,),
+            )
         if required_types and not (_candidate_type_set(candidate) & required_types):
             reason_vi = f"{candidate.display_name} không có loại cafe/coffee shop trong metadata nhà cung cấp."
             reason_en = f"{candidate.display_name} is not typed as a cafe or coffee shop in provider metadata."

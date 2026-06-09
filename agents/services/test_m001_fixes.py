@@ -57,3 +57,32 @@ def test_proximity_guard_far_user() -> None:
     close_user = LatLng(lat=10.1835, lng=104.06)
     origin_close = FeatureExtractor._effective_origin(close_user)
     assert origin_close.lat == close_user.lat
+
+def test_family_dangerous_places_filter() -> None:
+    from agents.services.place_recommendation_service import (
+        _build_recommendation_frame,
+        _evaluate_candidate_suitability,
+    )
+    
+    # Create request recommendation frame for family
+    frame = _build_recommendation_frame("Đi với trẻ em nên ghé đâu?")
+    assert frame.audience == "family"
+    
+    # A safe place: Teddy Bear Museum
+    safe_museum = _candidate("Teddy Bear Museum", 10.1835, 104.05, ["museum", "tourist_attraction"])
+    suitability_safe = _evaluate_candidate_suitability(safe_museum, frame)
+    assert not suitability_safe.disqualified
+    assert "đáng cân nhắc cho nhóm đi cùng trẻ em" in suitability_safe.primary_reason_vi
+
+    # A dangerous place: Fairy Waterfall (by type)
+    waterfall = _candidate("Fairy Waterfall", 10.1835, 104.05, ["waterfall", "tourist_attraction"])
+    suitability_waterfall = _evaluate_candidate_suitability(waterfall, frame)
+    assert suitability_waterfall.disqualified
+    assert "không phù hợp cho nhóm đi cùng trẻ em" in suitability_waterfall.primary_reason_vi
+
+    # A dangerous place: Suối Đá Bàn (by name keyword)
+    suoi_da_ban = _candidate("Khu du lịch sinh thái (Suối Đá Bàn)", 10.1835, 104.05, ["tourist_attraction"])
+    suitability_suoi = _evaluate_candidate_suitability(suoi_da_ban, frame)
+    assert suitability_suoi.disqualified
+    assert "không phù hợp cho nhóm đi cùng trẻ em" in suitability_suoi.primary_reason_vi
+

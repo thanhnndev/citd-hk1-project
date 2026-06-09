@@ -6,6 +6,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import http from "node:http";
+import { Readable } from "node:stream";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,62 +45,80 @@ export async function GET(request: NextRequest) {
 
   const backendUrl = `http://localhost:${BACKEND_PORT}/chat/stream?${backendParams.toString()}`;
 
-  let backendRes: globalThis.Response;
-  try {
-    backendRes = await fetch(backendUrl, {
-      cache: "no-store",
-      headers: {
-        "Accept": "text/event-stream",
-        "X-Request-ID": requestId,
-        "X-API-Key": process.env.HN_API_KEY ?? "",
+  return new Promise<Response>((resolve) => {
+    const req = http.request(
+      backendUrl,
+      {
+        method: "GET",
+        headers: {
+          "Accept": "text/event-stream",
+          "X-Request-ID": requestId,
+          "X-API-Key": process.env.HN_API_KEY ?? "",
+        },
       },
-    });
-  } catch {
-    const errData = {
-      type: "connection_offline",
-      retryable: false,
-      message_vi: "Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối. Yêu cầu của bạn chưa được thực hiện.",
-      message_en: "The Ham Ninh travel assistant is currently unreachable. Your request was not processed.",
-      next_action: "none"
-    };
-    return new Response(`data: [ERROR] ${JSON.stringify(errData)}\n\n`, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  }
+      (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          const errData = {
+            type: "provider_unavailable",
+            retryable: true,
+            message_vi: "Hệ thống gợi ý du lịch đang gặp lỗi xử lý hoặc quá tải. Không có thông tin nào của bạn bị thay đổi. Bạn vui lòng thử lại sau vài giây.",
+            message_en: "The travel recommendation system is currently busy or encountered a processing issue. None of your data was changed. Please try again in a few seconds.",
+            next_action: "retry"
+          };
+          resolve(
+            new Response(`data: [ERROR] ${JSON.stringify(errData)}\n\n`, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+              },
+            })
+          );
+          return;
+        }
 
-  if (!backendRes.ok) {
-    const errData = {
-      type: "provider_unavailable",
-      retryable: true,
-      message_vi: "Hệ thống gợi ý du lịch đang gặp lỗi xử lý hoặc quá tải. Không có thông tin nào của bạn bị thay đổi. Bạn vui lòng thử lại sau vài giây.",
-      message_en: "The travel recommendation system is currently busy or encountered a processing issue. None of your data was changed. Please try again in a few seconds.",
-      next_action: "retry"
-    };
-    return new Response(`data: [ERROR] ${JSON.stringify(errData)}\n\n`, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  }
+        // Convert the Node incoming message stream to Web ReadableStream
+        const webStream = Readable.toWeb(res) as unknown as ReadableStream;
 
-  return new Response(backendRes.body, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-      "X-Request-ID": requestId,
-    },
+        resolve(
+          new Response(webStream, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/event-stream; charset=utf-8",
+              "Cache-Control": "no-cache, no-transform",
+              "Connection": "keep-alive",
+              "X-Accel-Buffering": "no",
+              "X-Request-ID": requestId,
+            },
+          })
+        );
+      }
+    );
+
+    req.on("error", (err) => {
+      const errData = {
+        type: "connection_offline",
+        retryable: false,
+        message_vi: "Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối. Yêu cầu của bạn chưa được thực hiện.",
+        message_en: "The Ham Ninh travel assistant is currently unreachable. Your request was not processed.",
+        next_action: "none"
+      };
+      resolve(
+        new Response(`data: [ERROR] ${JSON.stringify(errData)}\n\n`, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+          },
+        })
+      );
+    });
+
+    req.end();
   });
 }
+

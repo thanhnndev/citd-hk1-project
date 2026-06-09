@@ -91,6 +91,10 @@ const STATUS_LABELS: Record<"vi" | "en", Record<string, string>> = {
     verifying: "Đang kiểm tra kết quả",
     "failed-recoverable": "Có lỗi tạm thời, có thể thử lại",
     "failed-terminal": "Không thể tiếp tục yêu cầu này",
+    routing: "Đang điều hướng yêu cầu",
+    dispatching: "Đang phân bổ xử lý",
+    input_flagged: "Đang kiểm duyệt an toàn câu hỏi",
+    output_flagged: "Đang kiểm duyệt an toàn câu trả lời",
   },
   en: {
     planning: "Planning the response",
@@ -103,6 +107,10 @@ const STATUS_LABELS: Record<"vi" | "en", Record<string, string>> = {
     verifying: "Checking the result",
     "failed-recoverable": "A temporary error can be retried",
     "failed-terminal": "This request cannot continue",
+    routing: "Routing the request",
+    dispatching: "Dispatching execution",
+    input_flagged: "Reviewing input safety",
+    output_flagged: "Reviewing response safety",
   },
 };
 
