@@ -10,7 +10,7 @@
     "localeLabel": "Ngôn ngữ",
     "localeSwitcherLabel": "Chọn ngôn ngữ",
     "copyright": "© {year} Hàm Ninh AI Guide. Bảo tồn di sản, hỗ trợ du lịch bền vững.",
-    "tagline": "Xây dựng vì cộng đồng — AI có trách nhiệm cho làng chài Hàm Ninh, Phú Quốc."
+    "tagline": "Xây dựng vì cộng đồng — bối cảnh địa phương, nguồn rõ ràng và hỗ trợ du lịch hữu ích."
   },
   "Auth": {
     "common": {
@@ -83,7 +83,7 @@
     "hero": {
       "eyebrow": "Du lịch bền vững cho làng chài Hàm Ninh",
       "title": "Hàm Ninh AI Guide — Bảo tồn Di sản. Hỗ trợ Du lịch. Công bằng cho Ngư dân.",
-      "description": "Hệ thống Multi-Agent AI kết hợp RAG bảo tồn văn hóa và Ensemble Re-ranking để hỗ trợ sinh kế địa phương tại làng chài Hàm Ninh, Phú Quốc.",
+      "description": "Trợ lý du lịch AI hướng vận hành thực tế, kết hợp câu trả lời có căn cứ, tìm địa điểm, bằng chứng rõ ràng và gợi ý cân bằng cho làng chài Hàm Ninh, Phú Quốc.",
       "ctaExplore": "Khám phá ngay",
       "ctaArchitecture": "Xem kiến trúc",
       "trustBadges": [
@@ -125,8 +125,8 @@
     },
     "solution": {
       "eyebrow": "Giải pháp",
-      "heading": "Một hệ thống nhiều agent kết nối văn hóa, bản đồ và công bằng thuật toán",
-      "body": "Landing page giới thiệu kiến trúc mục tiêu: RAG cho tri thức địa phương, Maps Agent cho dữ liệu địa điểm, và Ensemble Re-ranker cho thứ hạng có trách nhiệm.",
+      "heading": "Một trợ lý kết nối văn hóa, địa điểm và bối cảnh địa phương",
+      "body": "Trải nghiệm tập trung vào kết quả du lịch hữu ích: trả lời văn hóa có căn cứ, tìm địa điểm, bằng chứng gợi ý rõ ràng và tiến độ agent có thể phục hồi.",
       "pillars": [
         {
           "title": "RAG Agent — Local Guide",
@@ -137,117 +137,8 @@
           "description": "Dự kiến kết nối Places API để tìm địa điểm, tuyến đường và thông tin tiếp cận."
         },
         {
-          "title": "Ensemble Re-ranker — Fairness Engine",
-          "description": "Kết hợp 3 cây quyết định dựa trên quy tắc định sẵn qua kỹ thuật bagging và 2 stump hiệu chỉnh để cân bằng chất lượng, khoảng cách và local_factor — không cần huấn luyện."
-        }
-      ]
-    },
-    "responsibleAI": {
-      "eyebrow": "AI có trách nhiệm",
-      "heading": "Năm trục kiểm soát từ dữ liệu đến trải nghiệm người dùng",
-      "body": "Mỗi trục gắn với một chỉ số hoặc cơ chế kiểm chứng để giảm rủi ro khi hệ thống chat và bản đồ được triển khai ở các slice sau.",
-      "axes": [
-        {
-          "id": "reliability",
-          "title": "Độ tin cậy",
-          "description": "Câu trả lời văn hóa phải bám nguồn truy xuất và có citation.",
-          "metric": "Faithfulness mục tiêu ≥ 0.85"
-        },
-        {
-          "id": "fairness",
-          "title": "Công bằng & xử lý thiên vị",
-          "description": "Thứ hạng địa điểm xét đến local_factor để hỗ trợ cơ sở bản địa.",
-          "metric": "Local business top-5 ≥ 40%"
-        },
-        {
-          "id": "robustness",
-          "title": "Khả năng chịu lỗi",
-          "description": "Guardrails, topic filter và fallback giúp hệ thống không phụ thuộc một điểm lỗi.",
-          "metric": "Circuit breaker đúng điều kiện"
-        },
-        {
-          "id": "socialImpact",
-          "title": "Tác động xã hội",
-          "description": "Ưu tiên sinh kế tiểu thương, người cao tuổi và khả năng tiếp cận.",
-          "metric": "Metadata địa phương phủ ≥ 80%"
-        },
-        {
-          "id": "explainability",
-          "title": "Tính minh bạch",
-          "description": "Reasoning log, citation và score breakdown giúp người dùng hiểu gợi ý.",
-          "metric": "100% phản hồi có trace mục tiêu"
-        }
-      ]
-    },
-    "algorithmShowcase": {
-      "eyebrow": "Thuật toán",
-      "heading": "Ensemble Re-ranking biến dữ liệu địa điểm thành thứ hạng công bằng hơn",
-      "body": "Minh họa cách 3 cây quyết định dựa trên quy tắc định sẵn được kết hợp qua bagging và các stump hiệu chỉnh thành một điểm số cuối cùng có thể giải thích — không cần huấn luyện.",
-      "chart": {
-        "title": "Đóng góp minh họa vào Final Score",
-        "ariaLabel": "Biểu đồ cột minh họa đóng góp của local factor, rating và distance vào điểm cuối.",
-        "description": "Dữ liệu bên dưới là ví dụ giải thích giao diện, không phải kết quả Places API trực tiếp.",
-        "bars": [
-          {
-            "key": "tree1_locality",
-            "label": "Cây quyết định 1: Ưu tiên địa phương",
-            "value": 0.78,
-            "description": "Cây quyết định đầu tiên chấm điểm dựa trên mức độ gắn với cộng đồng địa phương."
-          },
-          {
-            "key": "tree2_proximity",
-            "label": "Cây quyết định 2: Ưu tiên khoảng cách",
-            "value": 0.65,
-            "description": "Cây quyết định thứ hai ưu tiên các địa điểm gần vị trí hoặc tuyến tham quan."
-          },
-          {
-            "key": "tree3_quality",
-            "label": "Cây quyết định 3: Ưu tiên chất lượng",
-            "value": 0.58,
-            "description": "Cây quyết định thứ ba đánh giá chất lượng từ rating và phản hồi khách tham quan."
-          },
-          {
-            "key": "s_bag",
-            "label": "Bagging: Trung bình 3 cây",
-            "value": 0.67,
-            "description": "Kết hợp 3 cây bằng kỹ thuật bagging để giảm phương sai và tăng ổn định."
-          },
-          {
-            "key": "delta1_fairness",
-            "label": "Điều chỉnh công bằng (phạt chuỗi cửa hàng)",
-            "value": -0.045,
-            "description": "Phạt các cơ sở chuỗi (η × -0.15) để giảm lợi thế xếp hạng của họ và hỗ trợ tiểu thương địa phương."
-          },
-          {
-            "key": "delta2_access",
-            "label": "Điều chỉnh tiếp cận (+3%)",
-            "value": 0.03,
-            "description": "Bù điểm cho địa điểm có khả năng tiếp cận cao, hỗ trợ du khách khuyết tật."
-          },
-          {
-            "key": "final_score",
-            "label": "Điểm cuối cùng",
-            "value": 0.75,
-            "description": "Kết quả ensemble cuối cùng — tổng hợp bagging và các điều chỉnh công bằng, tiếp cận."
-          }
-        ]
-      },
-      "steps": [
-        {
-          "title": "Cây quyết định",
-          "description": "Ngưỡng định sẵn trên rating, khoảng cách và local_factor — mỗi cây áp dụng một quy tắc ưu tiên đơn giản."
-        },
-        {
-          "title": "Bagging: Trung bình 3 cây",
-          "description": "Trung bình cộng 3 cây viết tay để ổn định điểm số và giảm phương sai từ một cây đơn lẻ."
-        },
-        {
-          "title": "Stump hiệu chỉnh: công bằng + tiếp cận",
-          "description": "Áp dụng 2 hiệu chỉnh do chuyên gia định nghĩa: phạt chuỗi cửa hàng về công bằng, thưởng cho tính tiếp cận."
-        },
-        {
-          "title": "Điểm cuối: clip và xếp hạng",
-          "description": "Giới hạn kết quả trong [0,1] và gán xếp hạng thứ 1-based — hoàn toàn có thể giải thích, không cần huấn luyện."
+          "title": "Fairness Re-ranker — Cân bằng địa phương",
+          "description": "Dùng tín hiệu chấm điểm deterministic, có thể audit để cân bằng độ liên quan, chất lượng, khoảng cách, khả năng tiếp cận và đại diện địa phương."
         }
       ]
     },
@@ -277,8 +168,8 @@
           "description": "Nguồn dữ liệu địa điểm và tuyến đường trong các slice sau."
         },
         {
-          "name": "Ensemble định sẵn",
-          "description": "Cây quyết định viết tay với bagging và stump hiệu chỉnh cho re-ranking có thể giải thích — không cần huấn luyện ML."
+          "name": "Xếp hạng công bằng deterministic",
+          "description": "Chấm điểm và cân bằng có thể audit cho gợi ý địa điểm địa phương, liên quan và dễ tiếp cận."
         },
         {
           "name": "RAGAS",
@@ -408,7 +299,7 @@
     "overview": {
       "eyebrow": "Thiết kế hệ thống",
       "heading": "Trợ lý AI đa agent cho làng chài Hàm Ninh",
-      "body": "Kiến trúc kết hợp Retrieval-Augmented Generation cho tri thức văn hóa, Google Places API cho thông tin địa điểm, ensemble re-ranking cho công bằng, và điều phối agent dựa trên LangGraph — tất cả được phục vụ qua frontend Next.js song ngữ với khả năng quan sát toàn diện.",
+      "body": "Kiến trúc kết hợp Retrieval-Augmented Generation cho tri thức văn hóa, công cụ địa điểm/tuyến đường, fairness re-ranking deterministic và điều phối agent dựa trên LangGraph — tất cả được phục vụ qua frontend Next.js song ngữ với khả năng quan sát toàn diện.",
       "cards": [
         {
           "title": "Luồng dữ liệu",
@@ -454,22 +345,22 @@
         }
       ]
     },
-    "ensembleReranker": {
-      "eyebrow": "Công cụ công bằng",
-      "heading": "Ensemble Re-ranking — Chấm điểm công bằng và giải thích được",
-      "body": "Ba cây quyết định dựa trên quy tắc (Ưu tiên địa phương, Ưu tiên khoảng cách, Ưu tiên chất lượng) được kết hợp qua bagging. Hai correction stump áp dụng phạt công bằng cho chuỗi cửa hàng và thưởng tiếp cận. local_factor đảm bảo ≥40% địa điểm địa phương xuất hiện trong top-5.",
+    "fairnessReranking": {
+      "eyebrow": "Fairness re-ranking",
+      "heading": "Chấm điểm deterministic cho gợi ý hữu ích và cân bằng địa phương",
+      "body": "Kết quả provider chỉ là candidate. Hệ thống lọc và xếp hạng bằng các tín hiệu có thể audit: độ liên quan, khoảng cách, chất lượng, tính bản địa, giảm thiên vị độ phổ biến, khả năng tiếp cận và trạng thái provider. UI hiển thị receipt và giải thích, không hiển thị các trục policy nội bộ.",
       "cards": [
         {
-          "title": "Cây quyết định",
-          "description": "Cây Ưu tiên địa phương, Khoảng cách và Chất lượng chấm điểm bằng quy tắc viết tay — không cần huấn luyện."
+          "title": "Độ phù hợp candidate",
+          "description": "Địa điểm không khớp mục đích chuyến đi được lọc trước khi xếp hạng, thay vì trả raw provider dump cho người dùng."
         },
         {
-          "title": "Stump hiệu chỉnh",
-          "description": "Phạt công bằng giảm thứ hạng chuỗi cửa hàng; thưởng tiếp cận cho địa điểm thân thiện người khuyết tật."
+          "title": "Chấm điểm có thể audit",
+          "description": "Score breakdown giải thích các tín hiệu thực tế như độ liên quan, khoảng cách, chất lượng, tính bản địa và khả năng tiếp cận."
         },
         {
-          "title": "Ràng buộc công bằng",
-          "description": "local_factor tăng điểm doanh nghiệp địa phương để ít nhất 40% kết quả top-5 là cơ sở cộng đồng."
+          "title": "Fairness audit",
+          "description": "Mỗi lượt recommendation ghi nhận số candidate, đại diện địa phương, thiếu metadata, trạng thái provider và cảnh báo fallback."
         }
       ]
     },

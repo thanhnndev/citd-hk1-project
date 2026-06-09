@@ -81,32 +81,28 @@ const SOURCE_LABELS = {
 
 const STATUS_LABELS: Record<"vi" | "en", Record<string, string>> = {
   vi: {
-    validating: "Bảo mật & An toàn",
-    routing: "Phân tích yêu cầu",
-    dispatching: "Tối ưu hóa công bằng",
-    "processing:rag": "Truy xuất kiến thức",
-    "processing:maps": "Tra cứu bản đồ địa điểm",
-    verifying: "Xác thực phản hồi",
-    understanding: "Đang hiểu câu hỏi...",
-    using_history: "Đang dùng ngữ cảnh cuộc trò chuyện...",
-    input_flagged: "Câu hỏi hơi mơ hồ, mình sẽ xử lý thận trọng...",
-    searching_knowledge: "Đang tìm nguồn phù hợp...",
-    checking_places: "Đang kiểm tra địa điểm/đường đi...",
-    composing: "Đang tổng hợp câu trả lời...",
+    planning: "Đang lập kế hoạch trả lời",
+    "gathering:knowledge": "Đang tìm nguồn phù hợp",
+    "gathering:places": "Đang kiểm tra địa điểm",
+    executing: "Đang thực hiện yêu cầu",
+    waiting_for_user_input: "Cần thêm thông tin từ bạn",
+    waiting_for_approval: "Đang chờ bạn xác nhận",
+    retrying: "Đang thử lại",
+    verifying: "Đang kiểm tra kết quả",
+    "failed-recoverable": "Có lỗi tạm thời, có thể thử lại",
+    "failed-terminal": "Không thể tiếp tục yêu cầu này",
   },
   en: {
-    validating: "Safety & Security",
-    routing: "Request Analysis",
-    dispatching: "Fairness Optimization",
-    "processing:rag": "Knowledge Retrieval",
-    "processing:maps": "Map & Place Lookup",
-    verifying: "Response Verification",
-    understanding: "Understanding your question...",
-    using_history: "Using conversation context...",
-    input_flagged: "The question is ambiguous, handling carefully...",
-    searching_knowledge: "Searching relevant sources...",
-    checking_places: "Checking places/routes...",
-    composing: "Composing the answer...",
+    planning: "Planning the response",
+    "gathering:knowledge": "Finding relevant sources",
+    "gathering:places": "Checking places",
+    executing: "Working on the request",
+    waiting_for_user_input: "Waiting for more information",
+    waiting_for_approval: "Waiting for your confirmation",
+    retrying: "Trying again",
+    verifying: "Checking the result",
+    "failed-recoverable": "A temporary error can be retried",
+    "failed-terminal": "This request cannot continue",
   },
 };
 
@@ -125,7 +121,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [placesPanelOpen, setPlacesPanelOpen] = useState(true);
   const [sourcesPanelOpen, setSourcesPanelOpen] = useState(true);
   const [budgetFilter, setBudgetFilter] = useState<string | null>(null);
-  const [accessibilityRequired, setAccessibilityRequired] = useState<boolean>(true);
+  const [accessibilityRequired, setAccessibilityRequired] = useState<boolean>(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [pendingLocationResolve, setPendingLocationResolve] = useState<((loc: any) => void) | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -227,24 +223,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       setLoading(true);
       setIsNearBottom(true);
 
-      const lastAssistantBeforeSubmit = [...messages].reverse().find((message) => message.role === "assistant");
-      const normalized = messageText.trim().toLowerCase();
-      const confirmsLocation = /^(có|co|ok|okay|được|duoc|yes|yep|sure)$/i.test(normalized);
-      const pendingLocation = Boolean(
-        lastAssistantBeforeSubmit?.content &&
-        /chia sẻ vị trí|biết vị trí|current location|share your location/i.test(lastAssistantBeforeSubmit.content),
-      );
-      let requestLocation = userLocation;
-      if (pendingLocation && confirmsLocation && !requestLocation) {
-        try {
-          requestLocation = await getBrowserLocation();
-          setUserLocation(requestLocation);
-        } catch (err) {
-          setLoading(false);
-          setError(err instanceof Error ? err.message : translations.error);
-          return;
-        }
-      }
+      const requestLocation = userLocation;
 
       const requestHistory: ChatHistoryTurn[] = messages
         .filter((message): message is Message & { content: string } => Boolean(message.content) && (message.role === "user" || message.role === "assistant"))
@@ -257,8 +236,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         content: "",
         citations: [],
         status: "submitted",
-        streamStatus: "validating",
-        statusHistory: ["validating"],
+        streamStatus: "planning",
+        statusHistory: ["planning"],
       };
       setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
       setInput("");
@@ -293,7 +272,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           streamStatus: null,
           statusHistory: message.statusHistory && message.statusHistory.length > 0
             ? message.statusHistory
-            : ["verifying"],
+            : ["planning", "verifying"],
         }));
       };
 
@@ -312,7 +291,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           fallback: true,
           status: "complete",
           streamStatus: null,
-          statusHistory: ["understanding", "composing"],
+          statusHistory: ["planning", "failed-terminal"],
         }));
       };
 
@@ -338,29 +317,12 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onSuggestions: (suggestions) => updateLastAssistant((message) => ({ ...message, suggestions })),
           onReasoning: (reasoningLog) => updateLastAssistant((message) => ({ ...message, reasoningLog })),
           onInterrupt: async (interruptData) => {
-            // LangGraph interrupt detected - backend needs user input
-            console.log('Interrupt received:', interruptData);
-            
             if (interruptData.requires_geolocation) {
-              // Automatically request geolocation from browser
               try {
-                const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-                  navigator.geolocation.getCurrentPosition(resolve, reject, {
-                    enableHighAccuracy: true,
-                    timeout: 5000,
-                    maximumAge: 0
-                  });
-                });
-                
-                const location = {
-                  lat: position.coords.latitude,
-                  lng: position.coords.longitude
-                };
-                
-                console.log('Geolocation obtained:', location);
+                const location = await getBrowserLocation();
+                setUserLocation(location);
                 return location;
-              } catch (error) {
-                console.warn('Geolocation request failed, falling back to manual selection:', error);
+              } catch {
                 return new Promise((resolve) => {
                   setPendingLocationResolve(() => resolve);
                 });
@@ -482,7 +444,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   // Normalize dynamic streamStatus keys (e.g., routing:conversational -> routing)
   const rawStatus = lastAssistant?.streamStatus;
   const statusKey = rawStatus
-    ? rawStatus.startsWith("processing:")
+    ? rawStatus.startsWith("processing:") || rawStatus.startsWith("gathering:")
       ? rawStatus
       : rawStatus.startsWith("routing:")
         ? "routing"

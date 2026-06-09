@@ -198,11 +198,11 @@ export default async function ArchitecturePage({ params }: Props) {
       icons: [MapPin, Route, ShieldAlert],
     },
     {
-      id: 'ensemble-reranker',
-      eyebrow: t('ensembleReranker.eyebrow'),
-      heading: t('ensembleReranker.heading'),
-      body: t('ensembleReranker.body'),
-      cards: isCardEntryArray(t.raw('ensembleReranker.cards')),
+      id: 'fairness-reranking',
+      eyebrow: t('fairnessReranking.eyebrow'),
+      heading: t('fairnessReranking.heading'),
+      body: t('fairnessReranking.body'),
+      cards: isCardEntryArray(t.raw('fairnessReranking.cards')),
       icons: [GitBranch, SlidersHorizontal, Scale],
     },
     {

@@ -54,9 +54,27 @@ FollowUpDecision = Literal[
     "clarification_needed",
     "insufficient_context",
 ]
+AgentRunStatus = Literal[
+    "idle",
+    "drafting",
+    "planning",
+    "gathering",
+    "executing",
+    "waiting_for_user_input",
+    "waiting_for_approval",
+    "retrying",
+    "verifying",
+    "completed",
+    "failed-recoverable",
+    "failed-terminal",
+]
 
 
 class AgentState(TypedDict, total=False):
+    run_status: AgentRunStatus
+    current_step: str | None
+    error_code: str | None
+    retry_count: int
     session_id: str
     message: str
     language: str
@@ -81,6 +99,7 @@ class AgentState(TypedDict, total=False):
     # --- v4.2.0 agent intelligence fields ---
     # Routing
     intent_confidence: float | None
+    is_followup: bool
     routing_tier: Literal["strict", "soft", "fallback"] | None
     needs_location: bool
     next_node: str | None  # Routing hint from supervisor to conditional edge (T02)
@@ -97,6 +116,11 @@ class AgentState(TypedDict, total=False):
     location_consent: bool
     sort_by_nearest: bool
     user_location: dict[str, float] | None
+    last_places: list[Any]
+    last_place_query: str | None
+    last_place_included_type: str | None
+    last_place_accessibility_required: bool
+    last_place_user_location: dict[str, float] | None
     # Graph flow control
     blocked: bool
     # User preference filters (v4.3.0)

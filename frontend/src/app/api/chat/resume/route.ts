@@ -8,7 +8,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND_URL = process.env.HN_BACKEND_URL ?? "http://backend:8000";
+const BACKEND_PORT = process.env.HN_BACKEND_HOST_PORT ?? "48721";
+const BACKEND_URL = process.env.HN_BACKEND_URL ?? `http://localhost:${BACKEND_PORT}`;
 
 export async function POST(request: NextRequest) {
   const body = await request.json();

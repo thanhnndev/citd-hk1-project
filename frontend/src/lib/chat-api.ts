@@ -33,12 +33,6 @@ export interface ScoreBreakdown {
   gate_passed?: boolean;
   final_score: number;
   rank: number;
-  tree1_locality?: number;
-  tree2_proximity?: number;
-  tree3_quality?: number;
-  s_bag?: number;
-  delta1_fairness?: number;
-  delta2_access?: number;
 }
 
 /**
@@ -100,6 +94,8 @@ export interface PlaceResult {
   score_breakdown: ScoreBreakdown;
   accessibility_score?: number | null;
   accessibility_warning?: string | null;
+  route_distance_meters?: number | null;
+  route_duration_seconds?: number | null;
   map_uri: string;
   /** Structured why-this-recommendation data from backend. Never fabricated. */
   explanation?: PlaceExplanation;
@@ -127,18 +123,16 @@ export interface ChatResponse {
 }
 
 export type ChatStreamStatus =
-  | "validating"
-  | "routing"
-  | "dispatching"
-  | "processing:rag"
-  | "processing:maps"
+  | "planning"
+  | "gathering:knowledge"
+  | "gathering:places"
+  | "executing"
+  | "waiting_for_user_input"
+  | "waiting_for_approval"
+  | "retrying"
   | "verifying"
-  | "understanding"
-  | "using_history"
-  | "input_flagged"
-  | "searching_knowledge"
-  | "checking_places"
-  | "composing";
+  | "failed-recoverable"
+  | "failed-terminal";
 
 /**
  * Provider source vocabulary — reflects which provider actually served results.
@@ -215,7 +209,7 @@ export async function sendChat(
     message,
     language,
     budget_filter: budgetFilter,
-    accessibility_required: accessibilityRequired ?? true,
+    accessibility_required: accessibilityRequired ?? false,
     user_location: userLocation ?? null,
   };
 
@@ -329,13 +323,12 @@ export async function streamChat(
 
       if (data.startsWith("[STATUS] ")) {
         const rawStatus = data.slice(9);
-        let statusKey = rawStatus;
-        if (rawStatus.startsWith("routing:")) {
-          statusKey = "routing";
-        } else if (rawStatus.startsWith("dispatching:")) {
-          statusKey = "dispatching";
-        }
-        callbacks.onStatus?.(statusKey as ChatStreamStatus);
+        callbacks.onStatus?.(rawStatus as ChatStreamStatus);
+        continue;
+      }
+
+      if (data.startsWith("[MESSAGE] ")) {
+        callbacks.onToken(data.slice(10));
         continue;
       }
 

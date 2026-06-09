@@ -57,7 +57,7 @@ async def _collect_events(async_gen):
 
 @pytest.mark.asyncio
 async def test_adapter_maps_input_guardrails_blocked(adapter):
-    """Input guardrails node with blocked flag yields [STATUS] blocked."""
+    """A blocked request enters the terminal failure state."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -67,12 +67,12 @@ async def test_adapter_maps_input_guardrails_blocked(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "[STATUS] blocked" in events
+    assert "[STATUS] failed-terminal" in events
 
 
 @pytest.mark.asyncio
 async def test_adapter_maps_input_guardrails_validating(adapter):
-    """Input guardrails node without blocked flag yields [STATUS] validating."""
+    """A valid request enters planning."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -82,12 +82,12 @@ async def test_adapter_maps_input_guardrails_validating(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "[STATUS] validating" in events
+    assert "[STATUS] planning" in events
 
 
 @pytest.mark.asyncio
 async def test_adapter_maps_intent_router(adapter):
-    """Intent router node yields [STATUS] routing:{intent}."""
+    """Internal routing remains represented as user-facing planning."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -97,13 +97,12 @@ async def test_adapter_maps_intent_router(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert any("routing:travel" in e for e in events)
-    assert any("0.85" in e for e in events)
+    assert "[STATUS] planning" in events
 
 
 @pytest.mark.asyncio
 async def test_adapter_maps_supervisor(adapter):
-    """Supervisor node yields [STATUS] dispatching:{next_node}."""
+    """Internal dispatch remains represented as user-facing planning."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -113,12 +112,12 @@ async def test_adapter_maps_supervisor(adapter):
         }
 
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "[STATUS] dispatching:rag_agent" in events
+    assert "[STATUS] planning" in events
 
 
 @pytest.mark.asyncio
 async def test_adapter_maps_conversational_response(adapter):
-    """Conversational node with response_text yields the text."""
+    """Completed conversational response is marked as a full message, not a token."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -128,12 +127,13 @@ async def test_adapter_maps_conversational_response(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "Xin chào!" in events
+    assert "[MESSAGE] Xin chào!" in events
+    assert "Xin chào!" not in events
 
 
 @pytest.mark.asyncio
 async def test_adapter_maps_rag_agent(adapter):
-    """RAG agent node yields [STATUS] processing:rag."""
+    """RAG work is exposed as evidence gathering."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -143,12 +143,12 @@ async def test_adapter_maps_rag_agent(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "[STATUS] processing:rag" in events
+    assert "[STATUS] gathering:knowledge" in events
 
 
 @pytest.mark.asyncio
 async def test_adapter_maps_maps_agent(adapter):
-    """Maps agent node yields [STATUS] processing:maps."""
+    """Place lookup is exposed as place gathering."""
     async def fake_stream():
         yield {
             "type": "updates",
@@ -158,7 +158,7 @@ async def test_adapter_maps_maps_agent(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "[STATUS] processing:maps" in events
+    assert "[STATUS] gathering:places" in events
 
 
 @pytest.mark.asyncio
@@ -191,6 +191,38 @@ async def test_adapter_handles_custom_token_events(adapter):
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
     assert events == ["Hello", " world"]
+
+
+@pytest.mark.asyncio
+async def test_adapter_does_not_repeat_completed_message_after_real_tokens(adapter):
+    """Node updates must not replay response_text after custom token deltas."""
+    async def fake_stream():
+        yield {"type": "custom", "data": {"type": "token", "content": "Xin chào"}}
+        yield {
+            "type": "updates",
+            "data": {"conversational": {"response_text": "Xin chào"}},
+        }
+
+    events = await _collect_events(adapter.adapt_stream(fake_stream()))
+
+    assert events.count("Xin chào") == 1
+    assert "[MESSAGE] Xin chào" not in events
+
+
+@pytest.mark.asyncio
+async def test_adapter_emits_final_response_as_message_not_token(adapter):
+    """Final response_text fallback is a full message marker, not fake token streaming."""
+    async def fake_stream():
+        yield {
+            "type": "updates",
+            "data": {
+                "output_guardrails": {"response_text": "Completed answer"}
+            }
+        }
+
+    events = await _collect_events(adapter.adapt_stream(fake_stream()))
+    assert "[MESSAGE] Completed answer" in events
+    assert "Completed answer" not in events
 
 
 @pytest.mark.asyncio
@@ -347,7 +379,7 @@ async def test_adapter_ignores_unknown_chunk_types(adapter):
         }
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "Hello" in events
+    assert "[MESSAGE] Hello" in events
     assert not any("foo" in e for e in events)
 
 
@@ -393,7 +425,7 @@ async def test_stream_graph_to_sse_convenience_function(mock_graph):
     config = {"configurable": {"thread_id": "test"}}
     
     events = await _collect_events(stream_graph_to_sse(mock_graph, state, config))
-    assert "Test response" in events
+    assert "[MESSAGE] Test response" in events
 
 
 @pytest.mark.asyncio
@@ -468,11 +500,11 @@ async def test_adapter_accumulates_state_across_updates(adapter):
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
     
     # Check status markers
-    assert any("routing:travel" in e for e in events)
-    assert "[STATUS] processing:rag" in events
+    assert "[STATUS] planning" in events
+    assert "[STATUS] gathering:knowledge" in events
     
-    # Check response text (from conversational node)
-    assert "Here are places" in events
+    # Check completed message (from conversational node)
+    assert "[MESSAGE] Here are places" in events
     
     # Check final markers
     assert any(e.startswith("[PLACES]") for e in events)

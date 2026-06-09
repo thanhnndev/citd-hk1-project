@@ -26,7 +26,7 @@ langgraph==1.2.1
 langgraph-checkpoint-postgres==3.1.0
 langchain-core==1.4.0
 langchain-openai==1.2.2
-# ML — Ensemble Re-ranking
+# Recommendation re-ranking support
 cohere>=5.13.0
 # Authentication
 bcrypt==5.0.0

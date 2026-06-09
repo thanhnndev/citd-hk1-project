@@ -7,8 +7,13 @@ This service routes both `POST /chat` and `GET /chat/stream` through the shared 
 - FastAPI startup creates one `app.state.agent_service` after retrievers and answer services are initialized.
 - `backend/app/routers/chat.py` keeps the public response contracts for `POST /chat` and `GET /chat/stream`, but delegates agent work to the shared service.
 - Each request carries a `session_id`; the LangGraph thread id is derived from that value so follow-up questions can use the same conversation context.
+- New turns explicitly clear prior response artifacts and routing fields while retaining checkpointed conversation messages.
+- The latest grounded place candidate set and its active constraints are stored separately from turn output so comparative follow-ups can reuse them without a provider search.
+- Geolocation interrupts are reserved for user-relative requests such as `near me`. Landmark-relative requests such as `near the beach` continue without browser location.
+- Interrupts resume on the same thread with `Command(resume=...)`; the resume proxy uses the same backend host configuration as the chat and stream proxies.
 - The graph has retrieval, answer, fallback, and completion phases. It returns grounded citations when evidence exists and an honest no-evidence answer when retrieval cannot support the question.
-- Streaming responses emit answer chunks, citation metadata, and a terminal completion marker while preserving the existing frontend SSE parser contract.
+- Streaming emits semantic run-state events, structured receipts, and a terminal completion marker. Raw unmarked chunks are reserved for real LLM token streams; deterministic/tool responses must be emitted as `[MESSAGE] ...` rather than fake token chunks.
+- Once real token deltas have been emitted for a node, its completed `response_text` update is state only and must not be emitted again.
 
 ## Checkpoint Configuration
 

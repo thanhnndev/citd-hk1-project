@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Loader2,
   UserRound,
-  ArrowRight,
   FileText,
   MapPinned,
   ThumbsUp,
@@ -72,6 +71,11 @@ const markdownComponents: Components = {
 
 export type MessageStatus = "submitted" | "streaming" | "complete";
 
+function normalizeStreamStatus(status: ChatStreamStatus): string {
+  if (status.startsWith("gathering:")) return status;
+  return status.split(":")[0];
+}
+
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
@@ -131,12 +135,12 @@ export function MessageBubble({
   assistantLabel = "Ham Ninh Assistant",
   userLabel = "You",
   sourcesLabel = "Sources",
-  streamStatusLabel: _streamStatusLabel,
+  streamStatusLabel,
   status = "complete",
-  guardrailStatus,
-  fallback,
-  langfuseTraceId,
-  cacheHit,
+  guardrailStatus: _guardrailStatus,
+  fallback: _fallback,
+  langfuseTraceId: _langfuseTraceId,
+  cacheHit: _cacheHit,
   statusHistory,
   streamStatusLabels,
   placeTranslations,
@@ -155,7 +159,6 @@ export function MessageBubble({
   const isPending = !content;
   const hasSources = Boolean(citations?.length);
   const showComplete = !isUser && status === "complete" && content;
-  const hasStatusHistory = !isUser && statusHistory && statusHistory.length > 0;
   const isStreaming = status === "streaming" || status === "submitted";
   const [showAllPlaces, setShowAllPlaces] = useState(false);
   const [feedbackState, setFeedbackState] = useState<"like" | "dislike" | null>(null);
@@ -215,23 +218,6 @@ export function MessageBubble({
     setShowReasonInput(false);
     setReason("");
   };
-
-  /** Build a compact post-response summary from status history + data signals. */
-  const postResponseSummary = (() => {
-    if (!hasStatusHistory || status !== "complete") return null;
-    const lastPhase =
-      streamStatusLabels?.[statusHistory[statusHistory.length - 1]];
-    const parts: string[] = [];
-    if (lastPhase) parts.push(lastPhase.replace(/\.\.\.$/, ""));
-    if (citations && citations.length > 0)
-      parts.push(
-        `${citations.length} ${sourcesLabel?.toLowerCase() ?? "sources"}`,
-      );
-    if (places && places.length > 0) parts.push(`${places.length} places`);
-    if (fallback) parts.push("fallback");
-    if (cacheHit) parts.push("cache");
-    return parts.length > 0 ? parts.join(" · ") : null;
-  })();
 
   return (
     <article
@@ -400,91 +386,36 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* 5-axis Responsible AI Streaming Timeline Stepper */}
+        {/* Semantic run progress. Responsible-AI controls remain implementation policy, not UI steps. */}
         {!isUser && isStreaming && (
-          <div className="mt-3 w-full rounded-2xl border border-slate-100 bg-slate-50/50 p-4 shadow-inner">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-500 mb-3 px-1">
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="size-3.5 animate-spin text-[#0b5f63]" />
-                <span>{locale === "en" ? "AI processing across 5 responsible axes..." : "Hệ thống AI đang xử lý theo 5 trục có trách nhiệm..."}</span>
-              </span>
+          <div
+            className="mt-3 w-full rounded-xl border border-[#e9e9e7] bg-[#fbfaf7] px-4 py-3"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-[#123436]">
+              <Loader2 className="size-4 animate-spin text-[#0b5f63]" aria-hidden="true" />
+              <span>{streamStatusLabel ?? typingLabel}</span>
             </div>
-            <div className="relative flex items-center justify-between">
-              {/* Background progress line */}
-              <div className="absolute left-0 right-0 top-3 h-0.5 bg-slate-200" aria-hidden="true" />
-              
-              {[
-                { key: "validating", labelVi: "An toàn", labelEn: "Safety" },
-                { key: "routing", labelVi: "Định tuyến", labelEn: "Routing" },
-                { key: "dispatching", labelVi: "Công bằng", labelEn: "Fairness" },
-                { key: "processing", labelVi: "Truy xuất", labelEn: "Retrieval" },
-                { key: "verifying", labelVi: "Đối chiếu", labelEn: "Verification" },
-              ].map((step, idx) => {
-                const getStepState = (stepIndex: number, current: string | null | undefined, history: ChatStreamStatus[] | undefined) => {
-                  const statuses = ["validating", "routing", "dispatching", "processing", "verifying"];
-                  const currentNormalized = current?.startsWith("processing:") ? "processing" : current?.split(":")[0];
-                  const historyNormalized = (history || []).map(h => h.startsWith("processing:") ? "processing" : h.split(":")[0]);
-                  
-                  const targetStatus = statuses[stepIndex];
-                  
-                  if (currentNormalized === targetStatus) {
-                    return "active";
-                  }
-                  
-                  const targetIndexInHistory = historyNormalized.indexOf(targetStatus);
-                  if (targetIndexInHistory !== -1) {
-                    return "completed";
-                  }
-                  
-                  const subsequentStatuses = statuses.slice(stepIndex + 1);
-                  const hasSeenSubsequent = subsequentStatuses.some(s => historyNormalized.includes(s));
-                  if (hasSeenSubsequent) {
-                    return "completed";
-                  }
-                  
-                  return "pending";
-                };
-
-                const state = getStepState(idx, streamStatus, statusHistory);
-                
-                let dotClass = "";
-                let icon = null;
-                let labelClass = "text-[10px] sm:text-xs mt-1.5 font-medium ";
-                
-                if (state === "completed") {
-                  dotClass = "bg-emerald-500 text-white ring-4 ring-emerald-500/10";
-                  icon = (
-                    <svg className="size-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  );
-                  labelClass += "text-emerald-600 font-semibold";
-                } else if (state === "active") {
-                  dotClass = "bg-[#0b5f63] text-white ring-4 ring-[#0b5f63]/20 animate-pulse";
-                  icon = (
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
-                    </span>
-                  );
-                  labelClass += "text-[#0b5f63] font-bold";
-                } else {
-                  dotClass = "bg-white border-2 border-slate-300 text-slate-400";
-                  icon = <span className="text-[10px] font-bold">{idx + 1}</span>;
-                  labelClass += "text-slate-400";
-                }
-                
-                return (
-                  <div key={step.key} className="relative z-10 flex flex-col items-center flex-1">
-                    <div className={`flex size-6 sm:size-7 items-center justify-center rounded-full transition-all duration-300 ${dotClass}`}>
-                      {icon}
-                    </div>
-                    <span className={labelClass}>
-                      {locale === "en" ? step.labelEn : step.labelVi}
-                    </span>
-                  </div>
-                );
-              })}
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(statusHistory ?? [])
+                .filter((item, index, items) => {
+                  const normalized = normalizeStreamStatus(item);
+                  const current = streamStatus ? normalizeStreamStatus(streamStatus) : null;
+                  return normalized !== current && items.findIndex(
+                    (candidate) => normalizeStreamStatus(candidate) === normalized,
+                  ) === index;
+                })
+                .slice(-3)
+                .map((item) => (
+                  <span
+                    key={item}
+                    className="inline-flex items-center gap-1 text-xs text-[#5d7373]"
+                  >
+                    <CheckCircle2 className="size-3 text-emerald-600" aria-hidden="true" />
+                    {streamStatusLabels?.[item] ?? item}
+                  </span>
+                ))}
             </div>
           </div>
         )}

@@ -220,6 +220,7 @@ class GooglePlacesService:
             }
         if request.included_type:
             body["includedType"] = request.included_type
+            body["strictTypeFiltering"] = request.strict_type_filtering
 
         return await self._execute_search(
             operation="text_search",

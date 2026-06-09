@@ -198,30 +198,30 @@ class AgentService:
             # Emit status for observability
             decision = state.get("followup_decision")
             if decision == "structured_context":
-                yield "[STATUS] using_context"
+                yield "[STATUS] planning"
             elif decision == "history_context":
-                yield "[STATUS] using_history"
+                yield "[STATUS] planning"
             else:
-                yield "[STATUS] clarifying"
-            yield resolved.get("response_text", "")
+                yield "[STATUS] planning"
+            yield f"[MESSAGE] {resolved.get('response_text', '')}"
             response = self._response_from_state(resolved, started)
             await self._save_turn(session_id, message, response.message, response)
             return
         # Expose context source in streaming for observability (R052)
         if state.get("followup_decision") == "structured_context":
-            yield "[STATUS] using_context"
+            yield "[STATUS] planning"
         elif state.get("followup_decision") == "history_context":
-            yield "[STATUS] using_history"
+            yield "[STATUS] planning"
         else:
-            yield "[STATUS] understanding"
+            yield "[STATUS] planning"
         preflight_handled = await self._run_preflight_route(state)
         if preflight_handled:
             yield _status_for_state(state)
-            yield state.get("response_text", "")
+            yield f"[MESSAGE] {state.get('response_text', '')}"
         elif self._client is None:
             state = await self._deterministic_decide_and_run(state)
             yield _status_for_state(state)
-            yield state.get("response_text", "")
+            yield f"[MESSAGE] {state.get('response_text', '')}"
         else:
             async for event in self._run_streaming_tool_loop(state):
                 if isinstance(event, str):
@@ -229,10 +229,10 @@ class AgentService:
                 else:
                     state = event
                     # When the LLM answers directly (e.g. greeting), stream
-                    # the composed response_text so the SSE client sees it.
+                    # the composed response_text as a completed message.
                     if state.get("response_text"):
                         yield _status_for_state(state)
-                        yield state["response_text"]
+                        yield f"[MESSAGE] {state['response_text']}"
         response = self._response_from_state(state, started)
         await self._save_turn(session_id, message, response.message, response)
         if response.places:
@@ -695,4 +695,3 @@ def _real_client(llm_service: Any | None) -> Any | None:
     if client is None or type(client).__module__.startswith("unittest.mock"):
         return None
     return client
-

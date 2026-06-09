@@ -155,8 +155,8 @@ class TestStreamingAdapter:
         events = []
         async for event in adapter.adapt_stream(mock_stream()):
             events.append(event)
-        assert "[STATUS] routing:conversational:0.95" in events
-        assert "Xin chào!" in events
+        assert "[STATUS] planning" in events
+        assert "[MESSAGE] Xin chào!" in events
 
 
 # ===========================================================================
@@ -218,6 +218,57 @@ class TestConversationalRouting:
         assert result is not None
         assert result.response_text is not None
         assert len(result.response_text) > 0
+
+    @pytest.mark.asyncio
+    async def test_conversational_llm_emits_real_tokens_and_hides_suggestion_marker(self, monkeypatch):
+        """The node forwards provider chunks, not a completed response split later."""
+        from agents.graph.nodes import NodeServices, configure_services, conversational_node
+        import langgraph.config
+
+        class Chunk:
+            def __init__(self, content: str) -> None:
+                self.choices = [MagicMock(delta=MagicMock(content=content))]
+
+        async def provider_stream():
+            for content in ("Xin ", "chào", "[SUG", "GESTIONS] A | B | C"):
+                yield Chunk(content)
+
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=provider_stream())
+        configure_services(NodeServices(llm_client=client))
+
+        emitted: list[dict[str, str]] = []
+        monkeypatch.setattr(langgraph.config, "get_stream_writer", lambda: emitted.append)
+
+        result = await conversational_node({
+            "session_id": "real-token-stream",
+            "message": "Bạn giới thiệu ngắn về mình",
+            "language": "vi",
+            "history": [],
+        })
+
+        client.chat.completions.create.assert_awaited_once()
+        assert client.chat.completions.create.call_args.kwargs["stream"] is True
+        assert "".join(event["content"] for event in emitted) == "Xin chào"
+        assert result["response_text"] == "Xin chào"
+        assert result["suggestions"] == ["A", "B", "C"]
+
+    @pytest.mark.asyncio
+    async def test_family_place_question_routes_to_places_without_llm(self):
+        """Family venue discovery is a grounded place task, not free-form prose."""
+        from agents.graph.nodes import NodeServices, configure_services, intent_router_node
+
+        configure_services(NodeServices(llm_client=None))
+        result = await intent_router_node({
+            "session_id": "family-routing",
+            "message": "Đi với trẻ em nên ghé đâu?",
+            "language": "vi",
+            "history": [],
+            "messages": [],
+        })
+
+        assert result["intent"] == "restaurant_search"
+        assert result["needs_location"] is False
 
 
 @pytest.mark.skipif(not _HAS_GRAPH, reason="ham_ninh_graph.py not available (T01 artifact missing)")
@@ -507,6 +558,104 @@ class TestMapsAgent:
         assert result["places"] == []
         assert result["response_text"] == "Test"
 
+    def test_location_policy_distinguishes_user_position_from_landmark_proximity(self):
+        """GPS is required for 'near me', not for 'near the beach'."""
+        from agents.graph.nodes import _requires_user_location
+
+        assert _requires_user_location("Có homestay gần biển không?") is False
+        assert _requires_user_location("Có homestay gần tôi không?") is True
+        assert _requires_user_location("Find a homestay near the beach") is False
+        assert _requires_user_location("Find a homestay near me") is True
+
+    def test_new_turn_state_clears_checkpointed_outputs(self):
+        """Every user turn starts without prior response artifacts or routing."""
+        from agents.graph.ham_ninh_graph import HamNinhGraph
+
+        state = HamNinhGraph._new_turn_state(
+            session_id="continuous-session",
+            message="ok",
+            language="vi",
+            history=[{"role": "assistant", "content": "Prior answer"}],
+            user_location=None,
+            budget_filter=None,
+            accessibility_required=True,
+        )
+
+        assert state["response_text"] == ""
+        assert state["places"] == []
+        assert state["citations"] == []
+        assert state["suggestions"] == []
+        assert state["intent"] is None
+        assert state["needs_location"] is False
+
+    @pytest.mark.asyncio
+    async def test_soft_place_intent_still_routes_to_maps(self):
+        """Classifier confidence must not redirect a known place intent to RAG."""
+        from agents.graph.nodes import supervisor_node
+
+        result = await supervisor_node({
+            "session_id": "soft-place-routing",
+            "intent": "restaurant_search",
+            "routing_tier": "soft",
+            "guardrail_flags": {},
+        })
+
+        assert result["next_node"] == "maps_agent"
+
+    @pytest.mark.asyncio
+    async def test_place_comparison_reuses_previous_candidates_without_provider_call(self):
+        """'Which is closer?' compares the last grounded set instead of searching again."""
+        from agents.graph.nodes import maps_agent_node, NodeServices, configure_services
+
+        mock_service = AsyncMock()
+        configure_services(NodeServices(places_service=mock_service))
+        state: AgentState = {
+            "session_id": "compare-session",
+            "message": "quán nào gần hơn?",
+            "language": "vi",
+            "last_place_user_location": {"lat": 10.18, "lng": 104.05},
+            "last_place_accessibility_required": True,
+            "last_place_included_type": "cafe",
+            "last_places": [
+                {
+                    "place_id": "far",
+                    "display_name": "Cafe Xa",
+                    "location": {"lat": 10.20, "lng": 104.05},
+                    "route_distance_meters": 2200,
+                },
+                {
+                    "place_id": "near",
+                    "display_name": "Cafe Gần",
+                    "location": {"lat": 10.181, "lng": 104.05},
+                    "route_distance_meters": 120,
+                },
+            ],
+        }
+
+        result = await maps_agent_node(state)
+
+        mock_service.recommend.assert_not_called()
+        assert result["intent"] == "place_comparison"
+        assert result["places"][0]["place_id"] == "near"
+        assert "Cafe Gần" in result["response_text"]
+
+    def test_new_turn_preserves_structured_place_memory_by_omitting_it_from_delta(self):
+        """Checkpointed place memory survives because new-turn input does not overwrite it."""
+        from agents.graph.ham_ninh_graph import HamNinhGraph
+
+        state = HamNinhGraph._new_turn_state(
+            session_id="place-memory",
+            message="quán nào gần hơn?",
+            language="vi",
+            history=[],
+            user_location=None,
+            budget_filter=None,
+            accessibility_required=False,
+        )
+
+        assert "last_places" not in state
+        assert "last_place_query" not in state
+
     @pytest.mark.asyncio
     async def test_streaming_adapter_emits_maps_response_text(self):
         """SSE adapter must emit maps_agent response_text, not only status markers."""
@@ -520,8 +669,8 @@ class TestMapsAgent:
 
         events = [event async for event in adapter.adapt_stream(graph_stream())]
 
-        assert "[STATUS] processing:maps" in events
-        assert "Từ Dương Đông đi Hàm Ninh mất khoảng 25-35 phút." in events
+        assert "[STATUS] gathering:places" in events
+        assert "[MESSAGE] Từ Dương Đông đi Hàm Ninh mất khoảng 25-35 phút." in events
 
     @pytest.mark.asyncio
     async def test_maps_agent_service_failure(self):
@@ -690,7 +839,7 @@ class TestMapsAgent:
         mock_service.recommend = AsyncMock(return_value=mock_response)
         configure_services(NodeServices(places_service=mock_service))
 
-        # Act: no budget_filter in state (defaults to None), accessibility defaults to True
+        # Act: no optional filters.
         state: AgentState = {
             "session_id": "test-nofilter-001",
             "message": "show me restaurants",
@@ -698,7 +847,7 @@ class TestMapsAgent:
             "user_location": None,
             "needs_location": False,
             "budget_filter": None,
-            "accessibility_required": True,
+            "accessibility_required": False,
         }
         result = await maps_agent_node(state)
 
@@ -706,8 +855,7 @@ class TestMapsAgent:
         mock_service.recommend.assert_called_once()
         call_kwargs = mock_service.recommend.call_args.kwargs
         assert call_kwargs["budget"] is None
-        # accessibility defaults to True in maps_agent_node when not set
-        assert call_kwargs["accessibility"] is True
+        assert call_kwargs["accessibility"] is False
 
         # Assert: result has places
         assert len(result["places"]) == 1
@@ -735,8 +883,8 @@ class TestMapsAgent:
             f"budget_filter default should be None, got {budget_param.default}"
         )
         accessibility_param = sig.parameters["accessibility_required"]
-        assert accessibility_param.default is True, (
-            f"accessibility_required default should be True (safe default), got {accessibility_param.default}"
+        assert accessibility_param.default is False, (
+            f"accessibility_required default should be False (explicit opt-in), got {accessibility_param.default}"
         )
 
 

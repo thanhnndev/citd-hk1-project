@@ -50,7 +50,7 @@ export function HeroSection({
               </a>
             </Button>
             <Button asChild variant="outline" size="lg">
-              <a href="#algorithm-showcase">
+              <a href="#tech-stack">
                 {ctaArchitecture}
                 <Boxes aria-hidden="true" />
               </a>
@@ -66,7 +66,7 @@ export function HeroSection({
               </span>
               <div>
                 <p className="text-sm font-semibold text-foreground">Ham Ninh AI Guide</p>
-                <p className="text-sm text-muted-foreground">RAG · Maps · Ensemble Re-ranking</p>
+                <p className="text-sm text-muted-foreground">Local knowledge · Places · Clear evidence</p>
               </div>
             </div>
             

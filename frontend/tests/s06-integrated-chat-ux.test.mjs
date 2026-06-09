@@ -129,12 +129,13 @@ const FIXTURE_RECOMMENDATION = {
       local_factor: 0.85,
       final_score: 87.5,
       score_breakdown: {
-        tree1_locality: 9.0,
-        tree2_proximity: 8.5,
-        tree3_quality: 8.0,
-        s_bag: 7.5,
-        delta1_fairness: 9.0,
-        delta2_access: 8.0,
+        relevance: 0.9,
+        proximity: 0.85,
+        quality: 0.8,
+        geo_locality: 0.85,
+        popularity_damping: 0.05,
+        weights: { relevance: 0.4, proximity: 0.25, quality: 0.2, geo_locality: 0.15 },
+        gate_passed: true,
         final_score: 87.5,
         rank: 1,
       },
@@ -260,10 +261,10 @@ async function mockStreamRoute(page, fixture, { failWith = null } = {}) {
     }
 
     const events = [];
-    events.push('data: [STATUS] understanding\n');
-    events.push('data: [STATUS] searching_knowledge\n');
-    events.push('data: [STATUS] checking_places\n');
-    events.push('data: [STATUS] composing\n');
+    events.push('data: [STATUS] planning\n');
+    events.push('data: [STATUS] gathering:knowledge\n');
+    events.push('data: [STATUS] gathering:places\n');
+    events.push('data: [STATUS] verifying\n');
 
     if (fixture.message) {
       const words = fixture.message.split(' ');
@@ -492,8 +493,9 @@ let context;
       // 7. Thinking/status summary retained after streaming
       assert.ok(
         pageContent.includes('Completed') || pageContent.includes('Processing') ||
-        pageContent.includes('PROCESSING') || pageContent.includes('composing') ||
-        pageContent.includes('Đang hiểu') || pageContent.includes('Đang tổng hợp'),
+        pageContent.includes('PROCESSING') || pageContent.includes('Planning') ||
+        pageContent.includes('Finding relevant sources') || pageContent.includes('Đang lập kế hoạch') ||
+        pageContent.includes('Đang tìm nguồn phù hợp'),
         'Thinking/status timeline must be retained after response'
       );
 

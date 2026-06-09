@@ -193,6 +193,8 @@ class GraphResult:
     guardrail_flags: dict[str, Any] = field(default_factory=dict)
     blocked: bool = False
     langfuse_trace_id: str | None = None
+    reasoning_log: str | None = None
+    guardrail_status: str | None = None
     interrupted: bool = False
     interrupt: dict[str, Any] | None = None
 
@@ -287,12 +289,17 @@ class HamNinhGraph:
             wrapped = _wrap_with_timeout(node_fn, node_name, timeout)
             builder.add_node(node_name, wrapped)
 
-        # Entry edges: START → input_guardrails & intent_router (Parallel Fan-out)
+        # Guardrails must finish before intent routing. Running both from START
+        # allows blocked input and routing updates to race into the supervisor.
         builder.add_edge(START, "input_guardrails")
-        builder.add_edge(START, "intent_router")
-
-        # Merge edges: both go to supervisor (Fan-in)
-        builder.add_edge("input_guardrails", "supervisor")
+        builder.add_conditional_edges(
+            "input_guardrails",
+            self._route_after_guardrails,
+            {
+                "intent_router": "intent_router",
+                "output_guardrails": "output_guardrails",
+            },
+        )
         builder.add_edge("intent_router", "supervisor")
 
         # Conditional edge: supervisor → (conversational | rag_agent | maps_agent | output_guardrails)
@@ -342,12 +349,60 @@ class HamNinhGraph:
             state: Current AgentState after input_guardrails execution.
 
         Returns:
-            Next node name: "intent_router" or END.
+            Next node name: "intent_router" or "output_guardrails".
         """
         intent = state.get("intent")
         if intent in ("blocked", "off_topic"):
-            return END
+            return "output_guardrails"
         return "intent_router"
+
+    @staticmethod
+    def _new_turn_state(
+        *,
+        session_id: str,
+        message: str,
+        language: str,
+        history: list[dict[str, str]] | None,
+        user_location: dict[str, float] | None,
+        budget_filter: str | None,
+        accessibility_required: bool,
+    ) -> AgentState:
+        """Build a turn delta that explicitly clears checkpointed turn output."""
+        return {
+            "run_status": "planning",
+            "current_step": "understand_request",
+            "error_code": None,
+            "retry_count": 0,
+            "session_id": session_id,
+            "message": message,
+            "language": language,
+            "history": history or [],
+            "messages": [{"role": "user", "content": message}],
+            "tool_calls": [],
+            "citations": [],
+            "places": [],
+            "suggestions": [],
+            "reasoning_log": None,
+            "intent": None,
+            "intent_confidence": None,
+            "is_followup": False,
+            "routing_tier": None,
+            "needs_location": False,
+            "next_node": None,
+            "guardrail_flags": {},
+            "response_text": "",
+            "langfuse_trace_id": None,
+            "knowledge_chunks": [],
+            "knowledge_response_ready": False,
+            "grade_score": None,
+            "grade_label": None,
+            "rewrite_count": 0,
+            "rewritten_query": None,
+            "user_location": user_location,
+            "budget_filter": budget_filter,
+            "accessibility_required": accessibility_required,
+            "blocked": False,
+        }
 
     @staticmethod
     def _route_after_grade(state: AgentState) -> str:
@@ -395,7 +450,7 @@ class HamNinhGraph:
         history: list[dict[str, str]] | None = None,
         user_location: dict[str, float] | None = None,
         budget_filter: str | None = None,
-        accessibility_required: bool = True,
+        accessibility_required: bool = False,
     ) -> GraphResult:
         """Execute the graph and return a structured result.
 
@@ -417,18 +472,15 @@ class HamNinhGraph:
         # Build initial state as a delta over checkpointed memory.
         # Keep prior checkpointed messages/history intact and only inject the
         # current turn plus any fresh request fields.
-        state: AgentState = {
-            "session_id": session_id,
-            "message": message,
-            "language": language,
-            "history": history or [],
-            "messages": [{"role": "user", "content": message}],
-            "tool_calls": [],
-            "langfuse_trace_id": None,
-            "user_location": user_location,
-            "budget_filter": budget_filter,
-            "accessibility_required": accessibility_required,
-        }
+        state = self._new_turn_state(
+            session_id=session_id,
+            message=message,
+            language=language,
+            history=history,
+            user_location=user_location,
+            budget_filter=budget_filter,
+            accessibility_required=accessibility_required,
+        )
 
         # Config with thread_id for checkpointing and static parameters
         config = {
@@ -582,7 +634,7 @@ class HamNinhGraph:
         history: list[dict[str, str]] | None = None,
         user_location: dict[str, float] | None = None,
         budget_filter: str | None = None,
-        accessibility_required: bool = True,
+        accessibility_required: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Execute the graph with streaming and yield SSE markers.
 
@@ -603,18 +655,15 @@ class HamNinhGraph:
         # Build initial state as a delta over checkpointed memory.
         # Keep prior checkpointed messages/history intact and only inject the
         # current turn plus any fresh request fields.
-        state: AgentState = {
-            "session_id": session_id,
-            "message": message,
-            "language": language,
-            "history": history or [],
-            "messages": [{"role": "user", "content": message}],
-            "tool_calls": [],
-            "langfuse_trace_id": None,
-            "user_location": user_location,
-            "budget_filter": budget_filter,
-            "accessibility_required": accessibility_required,
-        }
+        state = self._new_turn_state(
+            session_id=session_id,
+            message=message,
+            language=language,
+            history=history,
+            user_location=user_location,
+            budget_filter=budget_filter,
+            accessibility_required=accessibility_required,
+        )
 
         # Config with thread_id for checkpointing and static parameters
         config = {
@@ -687,6 +736,7 @@ class HamNinhGraph:
                                     interrupt_type=interrupt_value.get("type"),
                                     requires_geolocation=interrupt_value.get("requires_geolocation"),
                                 )
+                                yield "[STATUS] waiting_for_user_input"
                                 yield f"[INTERRUPT] {json.dumps(interrupt_value)}"
                                 stream_interrupted = True
                                 break
@@ -700,6 +750,7 @@ class HamNinhGraph:
                 node_name=exc.node_name,
                 timeout_seconds=exc.timeout_seconds,
             )
+            yield "[STATUS] failed-recoverable"
             yield f"[ERROR] Node '{exc.node_name}' timed out. Please try again."
 
         except Exception as exc:
@@ -710,6 +761,7 @@ class HamNinhGraph:
                 error_type=error_type,
                 error=str(exc),
             )
+            yield "[STATUS] failed-recoverable"
             yield f"[ERROR] {error_type}"
 
 

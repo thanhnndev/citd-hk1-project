@@ -11,7 +11,7 @@ for (const id of [
   "architecture-flow",
   "rag-pipeline",
   "maps-api",
-  "ensemble-reranker",
+  "fairness-reranking",
   "orchestration",
   "frontend-shell",
 ]) {

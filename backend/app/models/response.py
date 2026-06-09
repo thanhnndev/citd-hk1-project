@@ -174,6 +174,16 @@ class PlaceResult(BaseModel):
         default=None,
         description="Specific accessibility caveat if known.",
     )
+    route_distance_meters: int | None = Field(
+        default=None,
+        ge=0,
+        description="Provider or route-service distance from the active origin.",
+    )
+    route_duration_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        description="Provider or route-service duration from the active origin.",
+    )
     map_uri: str = Field(
         description="Deep link to open the place in a provider map.",
     )

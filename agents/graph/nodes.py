@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -133,6 +134,135 @@ def _routing_tier_from_confidence(confidence: float) -> str:
     if confidence >= 0.45:
         return "soft"
     return "fallback"
+
+
+_USER_LOCATION_PATTERNS = (
+    r"\bgần\s+(tôi|mình|đây)\b",
+    r"\bquanh\s+(tôi|mình|đây)\b",
+    r"\btừ\s+vị\s+trí\s+(của\s+)?(tôi|mình)\b",
+    r"\bvị\s+trí\s+hiện\s+tại\b",
+    r"\bnear\s+me\b",
+    r"\bnearby\b",
+    r"\baround\s+here\b",
+    r"\bfrom\s+my\s+(current\s+)?location\b",
+    r"\bclosest\s+to\s+me\b",
+)
+
+
+def _requires_user_location(message: str) -> bool:
+    """Return true only when the request depends on the user's current GPS.
+
+    Location permission is a deterministic product boundary. The model may
+    classify intent, but it must not turn object-relative phrases such as
+    "near the beach" into a request for sensitive browser geolocation.
+    """
+    normalized = " ".join((message or "").strip().lower().split())
+    return any(re.search(pattern, normalized) for pattern in _USER_LOCATION_PATTERNS)
+
+
+def _requests_accessibility(message: str) -> bool:
+    text = " ".join((message or "").strip().lower().split())
+    return any(term in text for term in (
+        "xe lăn", "xe lan", "wheelchair", "lối đi tiếp cận", "accessible entrance",
+    ))
+
+
+def _is_place_comparison_followup(message: str, state: AgentState) -> bool:
+    if not state.get("last_places"):
+        return False
+    text = " ".join((message or "").strip().lower().split())
+    return any(term in text for term in (
+        "gần hơn", "gần nhất", "xa hơn", "nearer", "nearest", "closer",
+        "rẻ hơn", "rẻ nhất", "cheaper", "cheapest",
+        "đánh giá cao hơn", "rating cao hơn", "highest rated",
+    ))
+
+
+def _haversine_meters(
+    origin: dict[str, float] | None,
+    destination: dict[str, Any] | None,
+) -> int | None:
+    if not origin or not destination:
+        return None
+    try:
+        lat1 = math.radians(float(origin["lat"]))
+        lng1 = math.radians(float(origin["lng"]))
+        lat2 = math.radians(float(destination["lat"]))
+        lng2 = math.radians(float(destination["lng"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    value = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    return round(6_371_000 * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value)))
+
+
+def _compare_previous_places(state: AgentState) -> dict[str, Any]:
+    """Compare only the grounded places from the immediately preceding search."""
+    language = state.get("language", "vi")
+    origin = state.get("last_place_user_location") or state.get("user_location")
+    places: list[dict[str, Any]] = []
+    estimated_distance_used = False
+    for raw in state.get("last_places") or []:
+        item = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw) if isinstance(raw, dict) else None
+        if item is None:
+            continue
+        distance = item.get("route_distance_meters")
+        if not isinstance(distance, int):
+            distance = _haversine_meters(origin, item.get("location"))
+            if distance is not None:
+                item["route_distance_meters"] = distance
+                estimated_distance_used = True
+        places.append(item)
+
+    text = " ".join((state.get("message") or "").strip().lower().split())
+    if any(term in text for term in ("rẻ hơn", "rẻ nhất", "cheaper", "cheapest")):
+        ranked = [p for p in places if isinstance(p.get("price_level"), int)]
+        ranked.sort(key=lambda p: p["price_level"])
+        metric = "price"
+    elif any(term in text for term in ("đánh giá cao hơn", "rating cao hơn", "highest rated")):
+        ranked = [p for p in places if isinstance(p.get("rating"), (int, float))]
+        ranked.sort(key=lambda p: p["rating"], reverse=True)
+        metric = "rating"
+    else:
+        ranked = [p for p in places if isinstance(p.get("route_distance_meters"), int)]
+        ranked.sort(key=lambda p: p["route_distance_meters"])
+        metric = "distance"
+
+    if len(ranked) < 2:
+        response_text = (
+            "Mình giữ nguyên các địa điểm vừa gợi ý, nhưng dữ liệu hiện có chưa đủ để so sánh tiêu chí này. "
+            "Mình sẽ không thay chúng bằng một lượt tìm kiếm mới."
+            if language == "vi"
+            else "I kept the previous recommendations, but the available data is not enough for this comparison. "
+            "I will not replace them with a new search."
+        )
+        return {"response_text": response_text, "places": places, "intent": "place_comparison"}
+
+    best = ranked[0]
+    name = best.get("display_name") or "Địa điểm đầu tiên"
+    if metric == "distance":
+        distance = int(best["route_distance_meters"])
+        distance_text = f"{distance / 1000:.1f} km" if distance >= 1000 else f"{distance} m"
+        distance_suffix = " (ước tính từ tọa độ hiện có)" if estimated_distance_used else ""
+        response_text = (
+            f"Trong các địa điểm vừa gợi ý, **{name}** gần hơn, khoảng {distance_text}{distance_suffix} từ vị trí đã dùng để tìm kiếm."
+            if language == "vi"
+            else f"Among the previous recommendations, **{name}** is closer, about {distance_text}{distance_suffix} from the search origin."
+        )
+    elif metric == "price":
+        response_text = (
+            f"Trong các địa điểm vừa gợi ý, **{name}** có mức giá thấp hơn theo metadata nhà cung cấp."
+            if language == "vi"
+            else f"Among the previous recommendations, **{name}** has the lower provider price level."
+        )
+    else:
+        response_text = (
+            f"Trong các địa điểm vừa gợi ý, **{name}** có điểm đánh giá cao hơn ({best['rating']:.1f}⭐)."
+            if language == "vi"
+            else f"Among the previous recommendations, **{name}** has the higher rating ({best['rating']:.1f}⭐)."
+        )
+    return {"response_text": response_text, "places": ranked, "intent": "place_comparison", "suggestions": []}
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +409,8 @@ Classify the user's message into one of these intents:
 - cultural_query: questions about culture, history, fishing life, local food background
 - food_culture: specifically about food traditions, recipes, local specialties
 - restaurant_search: finding restaurants, cafes, hotels, places, directions, maps
+  Also use this for requests asking where to go with children/family, because
+  concrete venue suitability must be checked against provider place data.
 - navigation: asking for directions, routes, maps
 - conversational: greetings, thanks, capability questions, simple acknowledgments
 - unknown: anything that does not fit the above
@@ -296,6 +428,7 @@ Examples:
 - "Tìm quán hải sản gần đây" -> restaurant_search, high confidence, needs_location=true
 - "Có quán ăn nào gần tôi không?" -> restaurant_search, high confidence, needs_location=true
 - "Tìm nhà hàng hải sản ở Hàm Ninh" -> restaurant_search, high confidence, needs_location=false
+- "Đi với trẻ em nên ghé đâu?" -> restaurant_search, high confidence, needs_location=false
 """
 
 
@@ -325,6 +458,15 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
         query_hash=query_hash,
     )
 
+    if _is_place_comparison_followup(message, state):
+        return {
+            "intent": "restaurant_search",
+            "intent_confidence": 1.0,
+            "is_followup": True,
+            "routing_tier": "strict",
+            "needs_location": False,
+        }
+
     services = get_services()
     client = services.llm_client
 
@@ -352,7 +494,8 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 intent_label = message.parsed.intent
                 confidence = float(message.parsed.confidence)
                 is_followup = bool(message.parsed.is_followup)
-                needs_location = bool(message.parsed.needs_location)
+                model_needs_location = bool(message.parsed.needs_location)
+                needs_location = _requires_user_location(original_message)
                 routing_tier = _routing_tier_from_confidence(confidence)
             else:
                 # Fallback to heuristic if model refused or parsing failed
@@ -366,12 +509,15 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 intent=intent_label,
                 confidence=confidence,
                 routing_tier=routing_tier,
+                model_needs_location=model_needs_location,
+                enforced_needs_location=needs_location,
                 mode="llm",
                 duration_ms=elapsed,
             )
             return {
                 "intent": intent_label,
                 "intent_confidence": confidence,
+                "is_followup": is_followup,
                 "routing_tier": routing_tier,
                 "needs_location": needs_location,
             }
@@ -406,6 +552,8 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
         elif any(term in text_lower for term in (
             "quán", "nhà hàng", "restaurant", "hotel", "homestay",
             "cà phê", "cafe", "tìm", "find", "search", "gần", "nearby",
+            "trẻ em", "trẻ nhỏ", "gia đình", "children", "kids", "family",
+            "ghé đâu", "đi đâu", "where should",
         )):
             intent_label = "restaurant_search"
             confidence = 0.7
@@ -424,8 +572,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
             confidence = 0.4
 
     routing_tier = _routing_tier_from_confidence(confidence)
-    # Let LLM decide needs_location from message context (no hardcode)
-    needs_location = False  # Default for heuristic fallback; LLM path sets this properly
+    needs_location = _requires_user_location(message)
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(
@@ -441,6 +588,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
     return {
         "intent": intent_label,
         "intent_confidence": confidence,
+        "is_followup": bool(history),
         "routing_tier": routing_tier,
         "needs_location": needs_location,
     }
@@ -454,12 +602,11 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
 async def supervisor_node(state: AgentState) -> dict[str, Any]:
     """Decide the next graph step based on routing tier and intent.
 
-    Acts as the confidence-ladder dispatcher:
+    Acts as the intent dispatcher:
     - If guardrails blocked → signal END (response_text already set)
-    - strict tier + cultural_query/food_culture → route to rag_agent
-    - strict tier + restaurant_search/navigation → route to maps_agent
-    - soft tier → route to LLM tool-calling loop (rag_agent with supervisor)
-    - fallback tier → route to conversational for safe handling
+    - cultural_query/food_culture → route to rag_agent
+    - restaurant_search/navigation → route to maps_agent
+    - unknown → route to conversational for safe handling
     - conversational intent → route to conversational node
 
     Reads:
@@ -509,19 +656,13 @@ async def supervisor_node(state: AgentState) -> dict[str, Any]:
         )
         return {"routing_tier": routing_tier, "next_node": "conversational"}
 
-    # --- Confidence-ladder routing ---
-    if routing_tier == "strict":
-        if intent in ("cultural_query", "food_culture"):
-            next_node = "rag_agent"
-        elif intent in ("restaurant_search", "navigation"):
-            next_node = "maps_agent"
-        else:
-            next_node = "rag_agent"
-    elif routing_tier == "soft":
-        # Soft tier uses LLM tool-calling via rag_agent (supervisor pattern)
+    # Confidence controls observability and fallback handling, not which
+    # specialist owns an already-classified domain intent.
+    if intent in ("cultural_query", "food_culture"):
         next_node = "rag_agent"
+    elif intent in ("restaurant_search", "navigation"):
+        next_node = "maps_agent"
     else:
-        # Fallback tier — route to conversational for safe handling
         next_node = "conversational"
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
@@ -619,12 +760,52 @@ async def conversational_node(state: AgentState) -> dict[str, Any]:
                 history=history,
                 language=language,
             )
-            completion = await client.chat.completions.create(
-                model=services.model,
-                messages=messages,
-                max_completion_tokens=512,
-            )
-            content = completion.choices[0].message.content or ""
+            writer = None
+            try:
+                from langgraph.config import get_stream_writer
+                writer = get_stream_writer()
+            except Exception:
+                writer = None
+
+            if writer is not None:
+                stream = await client.chat.completions.create(
+                    model=services.model,
+                    messages=messages,
+                    max_completion_tokens=512,
+                    stream=True,
+                )
+                content_parts: list[str] = []
+                pending = ""
+                suggestions_marker = "[SUGGESTIONS]"
+                marker_seen = False
+                async for chunk in stream:
+                    token = chunk.choices[0].delta.content or ""
+                    if token:
+                        content_parts.append(token)
+                        if marker_seen:
+                            continue
+                        pending += token
+                        if suggestions_marker in pending:
+                            visible, _ = pending.split(suggestions_marker, 1)
+                            if visible:
+                                writer({"type": "token", "content": visible})
+                            pending = ""
+                            marker_seen = True
+                            continue
+                        safe_length = max(0, len(pending) - len(suggestions_marker) + 1)
+                        if safe_length:
+                            writer({"type": "token", "content": pending[:safe_length]})
+                            pending = pending[safe_length:]
+                if pending and not marker_seen:
+                    writer({"type": "token", "content": pending})
+                content = "".join(content_parts)
+            else:
+                completion = await client.chat.completions.create(
+                    model=services.model,
+                    messages=messages,
+                    max_completion_tokens=512,
+                )
+                content = completion.choices[0].message.content or ""
             msg_text, suggestions = _extract_suggestions(content)
             if not msg_text:
                 msg_text = _clarify_message(language)
@@ -708,7 +889,10 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
     # Skip document-grounding for responses that are not RAG document answers.
     # Place/map answers are grounded by provider place data, not citations.
     intent = state.get("intent")
-    if intent in ("blocked", "off_topic", "conversational", "clarification", "restaurant_search", "navigation"):
+    if intent in (
+        "blocked", "off_topic", "conversational", "clarification",
+        "restaurant_search", "navigation", "place_comparison",
+    ):
         flags["output_grounding"] = {
             "verdict": "skipped",
             "reason": f"intent_{intent}",
@@ -1366,10 +1550,10 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
     configurable = config.get("configurable", {}) if config else {}
     user_location = configurable.get("user_location") or state.get("user_location")
     budget_filter = configurable.get("budget_filter") or state.get("budget_filter")
-    if "accessibility_required" in configurable:
-        accessibility_required = configurable["accessibility_required"]
-    else:
-        accessibility_required = state.get("accessibility_required", True)
+    accessibility_required = bool(
+        configurable.get("accessibility_required", state.get("accessibility_required", False))
+        or _requests_accessibility(message)
+    )
 
     logger.info(
         "graph.node_enter",
@@ -1377,6 +1561,9 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
         session_id=session_id,
         mode="place_recommendation",
     )
+
+    if _is_place_comparison_followup(message, state):
+        return _compare_previous_places(state)
 
     # Location consent: use interrupt() pattern per LangGraph docs
     # Frontend will detect interrupt, request geolocation, and resume with Command(resume=user_location)
@@ -1484,6 +1671,16 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
         return {
             "places": places_dicts,
             "response_text": chat_response.message,
+            "intent": chat_response.intent or state.get("intent") or "restaurant_search",
+            "last_places": places_dicts,
+            "last_place_query": message,
+            "last_place_included_type": (
+                "cafe"
+                if any(term in message.lower() for term in ("cà phê", "cafe", "coffee", "quán cf"))
+                else None
+            ),
+            "last_place_accessibility_required": accessibility_required,
+            "last_place_user_location": user_location,
         }
 
     except Exception as exc:

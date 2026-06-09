@@ -10,7 +10,7 @@
     "localeLabel": "Language",
     "localeSwitcherLabel": "Select language",
     "copyright": "© {year} Ham Ninh AI Guide. Preserving heritage, supporting sustainable tourism.",
-    "tagline": "Built for the community — responsible AI for Ham Ninh fishing village, Phu Quoc."
+    "tagline": "Built for the community — local context, clear sources, and useful travel support."
   },
   "Auth": {
     "common": {
@@ -83,7 +83,7 @@
     "hero": {
       "eyebrow": "Sustainable tourism for Ham Ninh fishing village",
       "title": "Ham Ninh AI Guide — Preserve Heritage. Support Tourism. Fairness for Fishermen.",
-      "description": "A multi-agent AI concept combining cultural-preservation RAG and ensemble re-ranking to support local livelihoods in Ham Ninh fishing village, Phu Quoc.",
+      "description": "A production-oriented AI travel guide combining grounded cultural answers, place search, clear evidence, and fair local recommendations for Ham Ninh fishing village, Phu Quoc.",
       "ctaExplore": "Explore now",
       "ctaArchitecture": "View architecture",
       "trustBadges": [
@@ -125,8 +125,8 @@
     },
     "solution": {
       "eyebrow": "Solution",
-      "heading": "A multi-agent system connecting culture, maps, and algorithmic fairness",
-      "body": "The landing page introduces the target architecture: RAG for local knowledge, a Maps Agent for place data, and an Ensemble Re-ranker for responsible ranking.",
+      "heading": "A guided assistant connecting culture, places, and local context",
+      "body": "The product experience focuses on useful travel outcomes: grounded cultural answers, place discovery, transparent recommendation evidence, and recoverable agent progress.",
       "pillars": [
         {
           "title": "RAG Agent — Local Guide",
@@ -137,117 +137,8 @@
           "description": "Planned to connect with Places API for places, routes, and accessibility context."
         },
         {
-          "title": "Ensemble Re-ranker — Fairness Engine",
-          "description": "Combines 3 pre-defined rule-based decision trees via bagging, plus 2 correction stumps, to balance quality, distance, and local_factor — no training required."
-        }
-      ]
-    },
-    "responsibleAI": {
-      "eyebrow": "Responsible AI",
-      "heading": "Five control axes from data to user experience",
-      "body": "Each axis maps to a metric or verification mechanism that reduces risk as chat and map functionality arrive in later slices.",
-      "axes": [
-        {
-          "id": "reliability",
-          "title": "Reliability",
-          "description": "Cultural answers should stay grounded in retrieved sources and cite them.",
-          "metric": "Faithfulness target ≥ 0.85"
-        },
-        {
-          "id": "fairness",
-          "title": "Bias & fairness",
-          "description": "Place ranking considers local_factor to support local businesses.",
-          "metric": "Local business top-5 ≥ 40%"
-        },
-        {
-          "id": "robustness",
-          "title": "Robustness",
-          "description": "Guardrails, topic filters, and fallbacks reduce dependence on a single failure point.",
-          "metric": "Circuit breaker triggers correctly"
-        },
-        {
-          "id": "socialImpact",
-          "title": "Social impact",
-          "description": "Prioritizes small vendors, elders, and accessibility needs.",
-          "metric": "Local metadata coverage ≥ 80%"
-        },
-        {
-          "id": "explainability",
-          "title": "Explainability",
-          "description": "Reasoning logs, citations, and score breakdowns help users understand recommendations.",
-          "metric": "Goal: 100% traced responses"
-        }
-      ]
-    },
-    "algorithmShowcase": {
-      "eyebrow": "Algorithm",
-      "heading": "Ensemble re-ranking turns place signals into a fairer order",
-      "body": "Shows how 3 pre-defined rule-based decision trees are combined via bagging and correction stumps into a final explainable score — no training required.",
-      "chart": {
-        "title": "Illustrative contribution to Final Score",
-        "ariaLabel": "Bar chart showing example contributions of local factor, rating, and distance to the final score.",
-        "description": "The values below are interface explanation data, not live Places API results.",
-        "bars": [
-          {
-            "key": "tree1_locality",
-            "label": "Tree 1: Locality-first",
-            "value": 0.78,
-            "description": "First decision tree scores based on how strongly a place supports local community and livelihoods."
-          },
-          {
-            "key": "tree2_proximity",
-            "label": "Tree 2: Proximity-first",
-            "value": 0.65,
-            "description": "Second decision tree prioritizes places near the user's location or planned route."
-          },
-          {
-            "key": "tree3_quality",
-            "label": "Tree 3: Quality-first",
-            "value": 0.58,
-            "description": "Third decision tree evaluates quality from ratings and visitor feedback."
-          },
-          {
-            "key": "s_bag",
-            "label": "Bagging: Average of 3 trees",
-            "value": 0.67,
-            "description": "Combines all 3 trees via bagging to reduce variance and increase stability."
-          },
-          {
-            "key": "delta1_fairness",
-            "label": "Fairness adjustment (penalty for chains)",
-            "value": -0.045,
-            "description": "Penalty applied to chain businesses (η × -0.15) to reduce their ranking advantage and support small local vendors."
-          },
-          {
-            "key": "delta2_access",
-            "label": "Accessibility adjustment (+3%)",
-            "value": 0.03,
-            "description": "Bonus for places with high accessibility, supporting visitors with disabilities."
-          },
-          {
-            "key": "final_score",
-            "label": "Final score",
-            "value": 0.75,
-            "description": "The final ensemble result — combining bagged tree scores with fairness and accessibility adjustments."
-          }
-        ]
-      },
-      "steps": [
-        {
-          "title": "Decision Tree",
-          "description": "Pre-defined thresholds over rating, distance, and local_factor — each tree applies a simple priority rule."
-        },
-        {
-          "title": "Bagging: Average of 3 trees",
-          "description": "Averages all 3 hand-written trees via simple mean to stabilize scores and reduce single-tree variance."
-        },
-        {
-          "title": "Correction stumps: fairness + accessibility",
-          "description": "Applies 2 expert-defined corrections: fairness penalty for chain businesses, bonus for accessibility features."
-        },
-        {
-          "title": "Final score: clip and rank",
-          "description": "Clips the result to [0,1] and assigns a 1-based rank — fully explainable, no training needed."
+          "title": "Fairness Re-ranker — Local Balance",
+          "description": "Uses deterministic, auditable scoring signals to balance relevance, quality, proximity, accessibility, and local representation."
         }
       ]
     },
@@ -277,8 +168,8 @@
           "description": "Place and routing data source in later slices."
         },
         {
-          "name": "Pre-defined Ensemble",
-          "description": "Hand-written decision trees with bagging and correction stumps for explainable re-ranking — no ML training."
+          "name": "Deterministic fairness ranking",
+          "description": "Auditable scoring and balancing for local, relevant, accessible place recommendations."
         },
         {
           "name": "RAGAS",
@@ -408,7 +299,7 @@
     "overview": {
       "eyebrow": "System Design",
       "heading": "Multi-agent AI assistant for Ham Ninh fishing village",
-      "body": "The architecture combines Retrieval-Augmented Generation for cultural knowledge, Google Places API for location intelligence, ensemble re-ranking for fairness, and LangGraph-based agent orchestration — all served through a bilingual Next.js frontend with full observability.",
+      "body": "The architecture combines Retrieval-Augmented Generation for cultural knowledge, place and route tooling, deterministic fairness re-ranking, and LangGraph-based agent orchestration — all served through a bilingual Next.js frontend with full observability.",
       "cards": [
         {
           "title": "Data Flow",
@@ -454,22 +345,22 @@
         }
       ]
     },
-    "ensembleReranker": {
-      "eyebrow": "Fairness Engine",
-      "heading": "Ensemble Re-ranking — Fair and explainable scoring",
-      "body": "Three pre-defined rule-based decision trees (Locality-first, Proximity-first, Quality-first) are combined via bagging. Two correction stumps apply fairness penalties for chains and accessibility bonuses. The local_factor ensures ≥40% local businesses appear in the top-5 results.",
+    "fairnessReranking": {
+      "eyebrow": "Fairness Re-ranking",
+      "heading": "Deterministic scoring for local, useful recommendations",
+      "body": "Provider results are treated as candidates, then filtered and ranked with auditable signals: relevance, proximity, quality, geo-locality, popularity damping, accessibility, and provider health. The UI exposes receipts and explanations, not internal policy axes.",
       "cards": [
         {
-          "title": "Decision Trees",
-          "description": "Locality-first, Proximity-first, and Quality-first trees score places using hand-written rules — no training required."
+          "title": "Candidate suitability",
+          "description": "Places that do not match the user's travel intent are filtered before ranking instead of being shown as raw provider dumps."
         },
         {
-          "title": "Correction Stumps",
-          "description": "Fairness penalty reduces chain business rankings; accessibility bonus rewards places with disability-friendly features."
+          "title": "Auditable scoring",
+          "description": "The score breakdown explains practical signals such as relevance, distance, quality, locality, and accessibility."
         },
         {
-          "title": "Fairness Constraint",
-          "description": "The local_factor boosts local businesses so at least 40% of top-5 results are community-run establishments."
+          "title": "Fairness audit",
+          "description": "Each recommendation run records candidate counts, local representation, metadata gaps, provider status, and fallback warnings."
         }
       ]
     },

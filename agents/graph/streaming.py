@@ -1,7 +1,8 @@
 """Streaming adapter for LangGraph StateGraph events to SSE markers.
 
 Maps LangGraph's astream() output (updates + custom modes) to the frontend's
-expected SSE markers: [STATUS], [PLACES], [CITATIONS], [SUGGESTIONS], [DONE], [ERROR].
+expected SSE markers: [STATUS], [MESSAGE], [PLACES], [CITATIONS], [SUGGESTIONS],
+[DONE], [ERROR].
 """
 
 from __future__ import annotations
@@ -15,6 +16,11 @@ import structlog
 from agents.graph.state import AgentState, NodeTimeoutError
 
 logger = structlog.get_logger(__name__)
+
+
+def _message_event(content: Any) -> str:
+    """Encode a completed assistant message without pretending it is a token."""
+    return f"[MESSAGE] {str(content)}"
 
 
 class StreamingAdapter:
@@ -40,8 +46,8 @@ class StreamingAdapter:
                 stream_mode=['updates', 'custom'], version='v2')
 
         Yields:
-            SSE marker strings: [STATUS], [PLACES], [CITATIONS], [SUGGESTIONS],
-            [INTERRUPT], response text, or [ERROR] messages.
+            SSE marker strings: [STATUS], [MESSAGE], [PLACES], [CITATIONS],
+            [SUGGESTIONS], [INTERRUPT], real token text, or [ERROR] messages.
         """
         try:
             async for raw_chunk in graph_stream:
@@ -75,10 +81,12 @@ class StreamingAdapter:
                 node_name=exc.node_name,
                 timeout_seconds=exc.timeout_seconds,
             )
+            yield "[STATUS] failed-recoverable"
             yield f"[ERROR] Node '{exc.node_name}' timed out. Please try again."
         except Exception as exc:
             error_type = type(exc).__name__
             logger.error("graph.execution_error", error_type=error_type, error=str(exc))
+            yield "[STATUS] failed-recoverable"
             yield f"[ERROR] {error_type}"
 
     def _normalize_chunk(self, raw_chunk: Any) -> tuple[str | None, dict[str, Any]]:
@@ -126,41 +134,35 @@ class StreamingAdapter:
 
         if node_name == "input_guardrails":
             if state_update.get("guardrail_blocked"):
-                yield "[STATUS] blocked"
+                yield "[STATUS] failed-terminal"
             else:
-                yield "[STATUS] validating"
+                yield "[STATUS] planning"
 
         elif node_name == "intent_router":
-            intent = state_update.get("intent", "unknown")
-            confidence = state_update.get("intent_confidence")
-            if confidence is not None:
-                yield f"[STATUS] routing:{intent}:{confidence:.2f}"
-            else:
-                yield f"[STATUS] routing:{intent}"
+            yield "[STATUS] planning"
 
         elif node_name == "supervisor":
-            next_node = state_update.get("next_node", "unknown")
-            yield f"[STATUS] dispatching:{next_node}"
+            yield "[STATUS] planning"
                 
         elif node_name == "conversational":
             response_text = state_update.get("response_text")
-            if response_text:
+            if response_text and not self._response_text_emitted:
                 self._response_text_emitted = True
-                yield response_text
+                yield _message_event(response_text)
                 
         elif node_name == "rag_agent":
-            yield "[STATUS] processing:rag"
+            yield "[STATUS] gathering:knowledge"
             response_text = state_update.get("response_text")
-            if response_text:
+            if response_text and not self._response_text_emitted:
                 self._response_text_emitted = True
-                yield response_text
+                yield _message_event(response_text)
             
         elif node_name == "maps_agent":
-            yield "[STATUS] processing:maps"
+            yield "[STATUS] gathering:places"
             response_text = state_update.get("response_text")
-            if response_text:
+            if response_text and not self._response_text_emitted:
                 self._response_text_emitted = True
-                yield response_text
+                yield _message_event(response_text)
 
         elif node_name == "output_guardrails":
             yield "[STATUS] verifying"
@@ -212,7 +214,7 @@ class StreamingAdapter:
         (e.g., geolocation), then resume the graph.
         """
         if data:
-            # Emit interrupt event with the interrupt payload
+            yield "[STATUS] waiting_for_user_input"
             yield f"[INTERRUPT] {json.dumps(data, ensure_ascii=False)}"
 
     async def _emit_final_markers(self) -> AsyncGenerator[str, None]:
@@ -224,7 +226,7 @@ class StreamingAdapter:
             response_text = state.get("response_text")
             if response_text:
                 self._response_text_emitted = True
-                yield response_text
+                yield _message_event(response_text)
         
         # Places
         places = state.get("places")

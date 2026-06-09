@@ -570,7 +570,7 @@ async def chat_stream(
                     history=parsed_history,
                     user_location=stream_user_loc,
                     budget_filter=budget,
-                    accessibility_required=accessibility if accessibility is not None else True,
+                    accessibility_required=accessibility if accessibility is not None else False,
                 ):
                     yield _sse_payload(sse_marker)
 

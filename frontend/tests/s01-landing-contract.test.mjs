@@ -13,8 +13,6 @@ const requiredFiles = [
   'src/components/landing/hero-section.tsx',
   'src/components/landing/problem-section.tsx',
   'src/components/landing/solution-section.tsx',
-  'src/components/landing/responsible-ai-section.tsx',
-  'src/components/landing/algorithm-showcase.tsx',
   'src/components/landing/tech-stack-section.tsx',
   'src/components/landing/demo-cta-section.tsx',
   'messages/vi.json',
@@ -64,8 +62,6 @@ const expectedLandingComponents = [
   'HeroSection',
   'ProblemSection',
   'SolutionSection',
-  'ResponsibleAiSection',
-  'AlgorithmShowcase',
   'TechStackSection',
   'DemoCtaSection'
 ];
@@ -79,8 +75,6 @@ const expectedSectionIds = [
   'hero',
   'problem',
   'solution',
-  'responsible-ai',
-  'algorithm-showcase',
   'tech-stack',
   'demo'
 ];
@@ -90,8 +84,6 @@ const landingComponentSource = [
   'src/components/landing/hero-section.tsx',
   'src/components/landing/problem-section.tsx',
   'src/components/landing/solution-section.tsx',
-  'src/components/landing/responsible-ai-section.tsx',
-  'src/components/landing/algorithm-showcase.tsx',
   'src/components/landing/tech-stack-section.tsx',
   'src/components/landing/demo-cta-section.tsx'
 ]
@@ -110,8 +102,6 @@ const requiredLandingSections = [
   'hero',
   'problem',
   'solution',
-  'responsibleAI',
-  'algorithmShowcase',
   'techStack',
   'demo'
 ];
@@ -145,7 +135,7 @@ const landingMessages = Object.fromEntries(
 
 for (const [locale, landing] of Object.entries(landingMessages)) {
   assert.ok(landing && typeof landing === 'object' && !Array.isArray(landing), `${locale} Landing must be an object`);
-  assert.deepEqual(Object.keys(landing).sort(), requiredLandingSections.toSorted(), `${locale} Landing must expose exactly the seven required sections`);
+  assert.deepEqual(Object.keys(landing).sort(), requiredLandingSections.toSorted(), `${locale} Landing must expose exactly the required user-facing sections`);
 
   for (const key of ['hero.title', 'hero.description', 'hero.ctaExplore', 'hero.ctaArchitecture']) {
     const value = getPath(landing, key);
@@ -153,24 +143,6 @@ for (const [locale, landing] of Object.entries(landingMessages)) {
     assert.ok(value.length > 0, `${locale} Landing.${key} must not be empty`);
   }
 
-  const axes = getPath(landing, 'responsibleAI.axes');
-  assert.ok(Array.isArray(axes), `${locale} Landing.responsibleAI.axes must be an array`);
-  assert.equal(axes.length, 5, `${locale} Landing.responsibleAI.axes must include the five Responsible AI axes`);
-  assert.deepEqual(
-    axes.map((axis) => axis.id),
-    ['reliability', 'fairness', 'robustness', 'socialImpact', 'explainability'],
-    `${locale} Landing.responsibleAI.axes must preserve the required axis IDs`
-  );
-
-  const bars = getPath(landing, 'algorithmShowcase.chart.bars');
-  assert.ok(Array.isArray(bars), `${locale} Landing.algorithmShowcase.chart.bars must be an array`);
-  assert.ok(bars.length >= 3, `${locale} Landing.algorithmShowcase.chart.bars must describe algorithm bar data`);
-  for (const bar of bars) {
-    assert.equal(typeof bar.key, 'string', `${locale} algorithm bar key must be a string`);
-    assert.equal(typeof bar.label, 'string', `${locale} algorithm bar label must be a string`);
-    assert.equal(typeof bar.description, 'string', `${locale} algorithm bar description must be accessible copy`);
-    assert.equal(typeof bar.value, 'number', `${locale} algorithm bar value must be numeric`);
-  }
 }
 
 assert.deepEqual(
