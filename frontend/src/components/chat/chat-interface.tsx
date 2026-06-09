@@ -343,7 +343,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
         if (streamFailed) {
           try {
-            if (/\boff_topic\b|\binput_blocked\b/i.test(streamErrorMessage)) {
+            if (streamErrorMessage.includes("off_topic") || streamErrorMessage.includes("input_blocked")) {
               renderGuardrailResponse(streamErrorMessage);
             } else {
               await renderPostFallback();
@@ -357,7 +357,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : translations.error;
-        if (/\boff_topic\b|\binput_blocked\b/i.test(message)) {
+        if (message.includes("off_topic") || message.includes("input_blocked")) {
           renderGuardrailResponse(message);
           setLoading(false);
           return;

@@ -9,7 +9,6 @@ All return values are float. Null fields use documented defaults.
 from __future__ import annotations
 
 import math
-import re
 from typing import Any
 
 from app.models.places import DEFAULT_SEARCH_RADIUS_METERS, HAM_NINH_CENTER, PlaceCandidate
@@ -294,14 +293,15 @@ class FeatureExtractor:
         if best_concept_score > 0.0:
             score = min(1.0, best_concept_score)
         else:
-            # 2. Token overlap fallback
-            query_tokens = set(re.split(r"[^a-zA-Z0-9]+", query_lower)) - {""}
+            cleaned_query = "".join(c if c.isalnum() else " " for c in query_lower)
+            query_tokens = set(cleaned_query.split())
             if not query_tokens:
                 score = 0.0
             else:
                 type_tokens: set[str] = set()
                 for t in candidate.types:
-                    type_tokens.update(re.split(r"[_\W]+", t.lower()))
+                    cleaned_type = "".join(c if c.isalnum() else " " for c in t.lower())
+                    type_tokens.update(cleaned_type.split())
                 type_tokens.discard("")
 
                 intersection = query_tokens & type_tokens
