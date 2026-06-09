@@ -17,6 +17,10 @@ const places = await readFile(
   new URL("../src/components/chat/place-results-panel.tsx", import.meta.url),
   "utf8",
 ).catch(() => "");
+const chatLayout = await readFile(
+  new URL("../src/components/chat/chat-interface.module.css", import.meta.url),
+  "utf8",
+).catch(() => "");
 
 assert.match(
   page,
@@ -32,22 +36,26 @@ assert.match(chat, /setSidebarCollapsed\(\(current\) => !current\)/);
 assert.match(chat, /setPlacesPanelOpen\(\(current\) => !current\)/);
 assert.match(
   chat,
-  /lg:grid-cols-\[240px_minmax\(0,1fr\)_360px\]/,
+  /import styles from "\.\/chat-interface\.module\.css";/,
+  "chat should use a CSS module for stateful desktop columns",
 );
 assert.match(
   chat,
-  /lg:grid-cols-\[minmax\(0,1fr\)_360px\]/,
-  "chat should support a collapsed desktop sidebar while sources stay open",
+  /data-sidebar-open=\{!sidebarCollapsed\}/,
 );
 assert.match(
   chat,
-  /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/,
-  "chat should support a closed desktop sources panel while sidebar stays open",
+  /data-panel-open=\{showDesktopPlaces\}/,
 );
 assert.match(
-  chat,
-  /lg:grid-cols-\[minmax\(0,1fr\)\]/,
-  "chat should support both desktop panels being closed",
+  chatLayout,
+  /\[data-sidebar-open="false"\]\[data-panel-open="true"\][^{]*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+360px/s,
+  "collapsed sidebar with an open sources panel should keep the panel in the right desktop column",
+);
+assert.match(
+  chatLayout,
+  /\[data-sidebar-open="true"\]\[data-panel-open="true"\][^{]*\{[^}]*grid-template-columns:\s*240px\s+minmax\(0,\s*1fr\)\s+360px/s,
+  "open sidebar and sources panel should render three desktop columns",
 );
 assert.match(chat, /desktopOpen=\{!sidebarCollapsed\}/);
 assert.match(chat, /onDesktopToggle=\{\(\) => setSidebarCollapsed\(\(current\) => !current\)\}/);

@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  type UIEvent,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { ChatSidebar } from "./chat-sidebar";
 import { PlaceResultsPanel } from "./place-results-panel";
+import styles from "./chat-interface.module.css";
 import { sendChat, streamChat, type ChatHistoryTurn, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
 import { AUTH_CHANGED_EVENT, getUser } from "@/lib/auth-store";
 import {
@@ -476,15 +483,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       : sourceCount > 0
         ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
         : "";
-  const showDesktopSidebar = !sidebarCollapsed;
   const showDesktopPlaces = hasEvidencePanel && placesPanelOpen;
-  const desktopGridClass = showDesktopSidebar
-    ? showDesktopPlaces
-      ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
-      : "lg:grid-cols-[240px_minmax(0,1fr)]"
-    : showDesktopPlaces
-      ? "lg:grid-cols-[minmax(0,1fr)_360px]"
-      : "lg:grid-cols-[minmax(0,1fr)]";
   const sidebarToggleLabel = sidebarCollapsed
     ? language === "vi" ? "Mở sidebar" : "Open sidebar"
     : language === "vi" ? "Đóng sidebar" : "Close sidebar";
@@ -604,7 +603,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   return (
     <div className="h-[calc(100dvh-4rem)] min-h-[36rem] overflow-hidden bg-white text-[#37352f]">
       <div
-        className={`grid h-full min-h-0 ${desktopGridClass}`}
+        className={styles.chatLayout}
+        data-sidebar-open={!sidebarCollapsed}
+        data-panel-open={showDesktopPlaces}
+        data-testid="chat-layout"
       >
         <ChatSidebar
           locale={locale}
@@ -620,7 +622,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onDesktopToggle={() => setSidebarCollapsed((current) => !current)}
         />
 
-        <main className="relative flex min-h-0 min-w-0 flex-col bg-white">
+        <main
+          className="relative flex min-h-0 min-w-0 flex-col bg-white"
+          data-testid="chat-main"
+        >
       <div className="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-[#e9e9e7] bg-white px-3 lg:px-4">
         <button
           type="button"
@@ -628,6 +633,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onClick={() => setSidebarCollapsed((current) => !current)}
           aria-label={sidebarToggleLabel}
           aria-pressed={!sidebarCollapsed}
+          data-testid="sidebar-toggle"
         >
           {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
           <span className="hidden sm:inline">

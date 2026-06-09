@@ -95,6 +95,7 @@ export function PlaceResultsPanel({
         <aside
           className="hidden h-full min-h-0 w-[360px] shrink-0 flex-col border-l border-[#e9e9e7] bg-white lg:flex"
           aria-label={translations.placeResultsHeading}
+          data-testid="desktop-evidence-panel"
         >
           <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[#e9e9e7] px-5">
             <BadgeCheck className="size-4 text-[#2eaadc]" />
