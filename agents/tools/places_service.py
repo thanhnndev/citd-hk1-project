@@ -207,9 +207,10 @@ class GooglePlacesService:
             "textQuery": request.query,
             "maxResultCount": request.max_result_count,
         }
-        # Optional location restriction (restricts results to the circle instead of biasing)
+        # Text Search (New) accepts a circular location bias for soft ranking.
+        # Nearby Search still uses locationRestriction below.
         if request.location_bias:
-            body["locationRestriction"] = {
+            body["locationBias"] = {
                 "circle": {
                     "center": {
                         "latitude": request.location_bias.lat,
