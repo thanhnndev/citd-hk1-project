@@ -207,9 +207,9 @@ class GooglePlacesService:
             "textQuery": request.query,
             "maxResultCount": request.max_result_count,
         }
-        # Optional location bias
+        # Optional location restriction (restricts results to the circle instead of biasing)
         if request.location_bias:
-            body["locationBias"] = {
+            body["locationRestriction"] = {
                 "circle": {
                     "center": {
                         "latitude": request.location_bias.lat,

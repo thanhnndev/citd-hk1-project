@@ -23,6 +23,29 @@ def _message_event(content: Any) -> str:
     return f"[MESSAGE] {str(content)}"
 
 
+def _format_timeout_error(node_name: str, timeout_seconds: float) -> str:
+    err_data = {
+        "type": "timeout",
+        "retryable": True,
+        "message_vi": f"Yêu cầu xử lý tại '{node_name}' bị quá thời gian. Bạn có thể thử lại.",
+        "message_en": f"Node '{node_name}' timed out. Please try again.",
+        "next_action": "retry",
+    }
+    return f"[ERROR] {json.dumps(err_data, ensure_ascii=False)}"
+
+
+def _format_generic_error(exc: Exception) -> str:
+    error_type = type(exc).__name__
+    err_data = {
+        "type": error_type,
+        "retryable": True,
+        "message_vi": "Đã xảy ra lỗi hệ thống trong quá trình xử lý. Vui lòng thử lại.",
+        "message_en": f"A system error ({error_type}) occurred. Please try again.",
+        "next_action": "retry",
+    }
+    return f"[ERROR] {json.dumps(err_data, ensure_ascii=False)}"
+
+
 class StreamingAdapter:
     """Adapts LangGraph stream events to SSE marker strings.
 
@@ -82,12 +105,12 @@ class StreamingAdapter:
                 timeout_seconds=exc.timeout_seconds,
             )
             yield "[STATUS] failed-recoverable"
-            yield f"[ERROR] Node '{exc.node_name}' timed out. Please try again."
+            yield _format_timeout_error(exc.node_name, exc.timeout_seconds)
         except Exception as exc:
             error_type = type(exc).__name__
             logger.error("graph.execution_error", error_type=error_type, error=str(exc))
             yield "[STATUS] failed-recoverable"
-            yield f"[ERROR] {error_type}"
+            yield _format_generic_error(exc)
 
     def _normalize_chunk(self, raw_chunk: Any) -> tuple[str | None, dict[str, Any]]:
         """Normalize LangGraph stream chunks across documented shapes.
@@ -339,4 +362,4 @@ async def stream_graph_to_sse(
             error=str(exc),
             session_id=state.get("session_id"),
         )
-        yield f"[ERROR] {error_type}"
+        yield _format_generic_error(exc)

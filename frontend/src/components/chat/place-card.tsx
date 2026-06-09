@@ -123,6 +123,11 @@ export function PlaceCard({ place, rank, variant = "default", translations }: Pl
                 <CategoryIcon className="size-3" />
                 {categoryLabel}
               </span>
+              {place.score_breakdown?.gate_tier === "low" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-50 border border-red-200 px-2 py-1 text-[0.68rem] font-semibold text-red-700">
+                  ⚠️ {isVi ? "Chưa đủ dữ liệu, cần người dùng kiểm tra lại" : "Insufficient data, please verify"}
+                </span>
+              )}
             </div>
             <h4 className="mt-2 line-clamp-2 text-base font-semibold leading-snug text-[#123436]" title={place.display_name}>
               {place.display_name}

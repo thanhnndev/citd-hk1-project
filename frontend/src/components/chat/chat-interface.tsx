@@ -223,7 +223,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       setLoading(true);
       setIsNearBottom(true);
 
-      const requestLocation = userLocation;
+      // Only send userLocation if the query text explicitly asks for nearby/proximity recommendations
+      const locationKeywords = /(gần đây|gần tôi|gần nhất|ở gần|near me|nearby|nearest|around here|close to)/i;
+      const requestLocation = locationKeywords.test(messageText) ? userLocation : null;
 
       const requestHistory: ChatHistoryTurn[] = messages
         .filter((message): message is Message & { content: string } => Boolean(message.content) && (message.role === "user" || message.role === "assistant"))
@@ -709,34 +711,60 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             />
           ))}
 
-          {error && (
-            <div className="flex gap-3 animate-slideUp">
-              <div
-                className="mt-1 grid size-8 shrink-0 place-items-center rounded-full bg-[#fffaf0] text-[#0b5f63] ring-1 ring-[#0b5f63]/15 shadow-sm"
-                aria-hidden="true"
-              >
-                <AlertCircle className="size-4" />
-              </div>
-              <div className="min-w-0 max-w-[86%] items-start md:max-w-[74%]">
-                <div className="mb-1 flex items-center gap-2 text-[0.72rem] text-[#b45a5a]">
-                  <span className="font-semibold">{language === "vi" ? "Lỗi kết nối" : "Connection error"}</span>
-                </div>
-                <div className="group relative rounded-[1.45rem] rounded-tl-md border border-destructive/20 bg-white/85 px-4 py-3 shadow-lg shadow-destructive/5">
-                  <p className="text-sm text-destructive">{error}</p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3 rounded-full border-destructive/20 text-destructive hover:bg-destructive/5"
-                  onClick={handleRetry}
-                  disabled={loading}
+          {error && (() => {
+            let errorTitle = language === "vi" ? "Lỗi kết nối" : "Connection error";
+            let errorMessage = error;
+            let showRetry = true;
+
+            try {
+              if (error.trim().startsWith("{") && error.trim().endsWith("}")) {
+                const parsed = JSON.parse(error);
+                errorMessage = language === "vi" ? parsed.message_vi : parsed.message_en;
+                showRetry = !!parsed.retryable;
+                
+                if (parsed.type === "timeout") {
+                  errorTitle = language === "vi" ? "Yêu cầu quá hạn" : "Request Timeout";
+                } else if (parsed.type === "provider_unavailable") {
+                  errorTitle = language === "vi" ? "Dịch vụ tạm thời không khả dụng" : "Service Unavailable";
+                } else {
+                  errorTitle = language === "vi" ? "Lỗi hệ thống" : "System Error";
+                }
+              }
+            } catch (e) {
+              // Not a JSON error, fallback to raw error string
+            }
+
+            return (
+              <div className="flex gap-3 animate-slideUp">
+                <div
+                  className="mt-1 grid size-8 shrink-0 place-items-center rounded-full bg-[#fffaf0] text-[#0b5f63] ring-1 ring-[#0b5f63]/15 shadow-sm"
+                  aria-hidden="true"
                 >
-                  <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                  {translations.retry}
-                </Button>
+                  <AlertCircle className="size-4" />
+                </div>
+                <div className="min-w-0 max-w-[86%] items-start md:max-w-[74%]">
+                  <div className="mb-1 flex items-center gap-2 text-[0.72rem] text-[#b45a5a]">
+                    <span className="font-semibold">{errorTitle}</span>
+                  </div>
+                  <div className="group relative rounded-[1.45rem] rounded-tl-md border border-destructive/20 bg-white/85 px-4 py-3 shadow-lg shadow-destructive/5">
+                    <p className="text-sm text-destructive">{errorMessage}</p>
+                  </div>
+                  {showRetry && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 rounded-full border-destructive/20 text-destructive hover:bg-destructive/5"
+                      onClick={handleRetry}
+                      disabled={loading}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                      {translations.retry}
+                    </Button>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {pendingLocationResolve && (
             <div className="my-4 rounded-xl border border-amber-200/50 bg-amber-50/50 p-4 backdrop-blur-md dark:border-amber-900/30 dark:bg-amber-950/20">

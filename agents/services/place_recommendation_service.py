@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from app.models.places import (
     DEFAULT_SEARCH_RADIUS_METERS,
     HAM_NINH_CENTER,
+    MAX_DISTANCE_FROM_CENTER_METERS,
     FairnessAudit,
     FairnessWarningType,
     PlaceAuditEvent,
@@ -299,6 +300,16 @@ class PlaceRecommendationService:
         # This is not intent routing: the LLM already chose search_places.
         # Here we protect end-user quality by suppressing provider candidates
         # that are places data but not useful travel recommendations.
+
+        # Geographic boundary filter: hard-remove candidates outside Ham Ninh area
+        pre_geo_count = len(candidates)
+        candidates, geo_filtered = _apply_geographic_boundary_filter(candidates)
+        if geo_filtered > 0:
+            logger.info(
+                "geographic_boundary_filter",
+                extra={"removed": geo_filtered, "remaining": len(candidates)},
+            )
+
         pre_filter_count = len(candidates)
         candidates, filtered_count = _apply_preference_filters(candidates, request)
         frame = _build_recommendation_frame(request.query)
@@ -533,10 +544,10 @@ def _reranked_results(
     request: PlaceSearchRequest | None = None,
     language: str = "vi",
 ) -> list[PlaceResult]:
-    """Run candidates through FeatureExtractor → FairnessReranker pipeline."""
+    frame = _build_recommendation_frame(query)
     extractor = FeatureExtractor()
     feature_dicts = [
-        extractor.extract(candidate, query, user_location=request.user_location if request else None)
+        extractor.extract(candidate, query, user_location=request.user_location if request else None, frame=frame)
         for candidate in candidates
     ]
 
@@ -1161,13 +1172,19 @@ def _build_place_explanation(
         route_summary = "route " + ", ".join(parts) if parts else "route metadata limited"
 
     suitability = _evaluate_candidate_suitability(candidate, frame) if frame is not None else None
-    primary_reason = _make_place_specific_reason(
-        candidate=candidate,
-        detail_highlights=detail_highlights,
-        fallback=fallback,
-        language=language,
-        frame=frame,
-    )
+    if getattr(breakdown, "gate_tier", None) == "low":
+        if language == "vi":
+            primary_reason = f"Chưa đủ dữ liệu về {candidate.display_name}, cần người dùng kiểm tra thêm thông tin chi tiết."
+        else:
+            primary_reason = f"Insufficient data for {candidate.display_name}, user verification of details is recommended."
+    else:
+        primary_reason = _make_place_specific_reason(
+            candidate=candidate,
+            detail_highlights=detail_highlights,
+            fallback=fallback,
+            language=language,
+            frame=frame,
+        )
     primary_reason = _redact_text(primary_reason)
 
     score_factors: dict[str, float | int | str | None] = {
@@ -1212,6 +1229,50 @@ def _preference_flags(
     if filtered_count > 0:
         parts.append(f"filtered_count={filtered_count}")
     return " ".join(parts) if parts else ""
+
+
+def _apply_geographic_boundary_filter(
+    candidates: list["PlaceCandidate"],
+) -> tuple[list["PlaceCandidate"], int]:
+    """Hard-remove candidates beyond MAX_DISTANCE_FROM_CENTER_METERS from Ham Ninh center.
+
+    Google Places API locationBias is a hint, not a restriction — the provider
+    may return places hundreds of kilometres away when it finds them textually
+    relevant. This filter enforces the product boundary: only places within the
+    Ham Ninh / Phú Quốc area are eligible for recommendation.
+
+    Returns (filtered_candidates, count_of_removed).
+    """
+    if not candidates:
+        return candidates, 0
+
+    from agents.ranking.feature_extractor import haversine
+
+    kept: list[PlaceCandidate] = []
+    removed = 0
+    for candidate in candidates:
+        if candidate.location is None:
+            # No location metadata — keep (benefit of the doubt)
+            kept.append(candidate)
+            continue
+        dist = haversine(
+            HAM_NINH_CENTER.lat, HAM_NINH_CENTER.lng,
+            candidate.location.lat, candidate.location.lng,
+        )
+        if dist <= MAX_DISTANCE_FROM_CENTER_METERS:
+            kept.append(candidate)
+        else:
+            removed += 1
+            logger.debug(
+                "geographic_boundary_rejected",
+                extra={
+                    "place_id": candidate.place_id,
+                    "display_name": candidate.display_name,
+                    "distance_m": round(dist),
+                },
+            )
+
+    return kept, removed
 
 
 def _apply_preference_filters(

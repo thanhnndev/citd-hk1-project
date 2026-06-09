@@ -751,7 +751,8 @@ class HamNinhGraph:
                 timeout_seconds=exc.timeout_seconds,
             )
             yield "[STATUS] failed-recoverable"
-            yield f"[ERROR] Node '{exc.node_name}' timed out. Please try again."
+            from agents.graph.streaming import _format_timeout_error
+            yield _format_timeout_error(exc.node_name, exc.timeout_seconds)
 
         except Exception as exc:
             error_type = type(exc).__name__
@@ -762,7 +763,8 @@ class HamNinhGraph:
                 error=str(exc),
             )
             yield "[STATUS] failed-recoverable"
-            yield f"[ERROR] {error_type}"
+            from agents.graph.streaming import _format_generic_error
+            yield _format_generic_error(exc)
 
 
 # ---------------------------------------------------------------------------

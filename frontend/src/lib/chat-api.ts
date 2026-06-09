@@ -31,6 +31,7 @@ export interface ScoreBreakdown {
   popularity_damping: number;
   weights?: Record<string, number>;
   gate_passed?: boolean;
+  gate_tier?: string | null;
   final_score: number;
   rank: number;
 }

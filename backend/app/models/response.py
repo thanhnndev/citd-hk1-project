@@ -20,6 +20,7 @@ class ScoreBreakdown(BaseModel):
     popularity_damping: float = Field(description="Applied popularity damping penalty.")
     weights: dict[str, float] = Field(description="Weights applied to each component.")
     gate_passed: bool = Field(description="Whether the place passed the relevance/quality gate.")
+    gate_tier: str | None = Field(default=None, description="Tier level for the candidate: 'high' (gate passed) or 'low' (gate failed).")
     final_score: float = Field(description="Clipped final score, bounded to [0, 1].")
     rank: int = Field(description="1-based rank after stable sort by final_score descending.")
 

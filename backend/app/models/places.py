@@ -13,6 +13,7 @@ from app.models.request import LatLng
 HAM_NINH_CENTER = LatLng(lat=10.1835208, lng=104.0496843)
 DEFAULT_SEARCH_RADIUS_METERS = 5_000
 MAX_SEARCH_RADIUS_METERS = 50_000
+MAX_DISTANCE_FROM_CENTER_METERS = 8_000  # Hard geographic boundary — candidates beyond this are filtered out
 
 
 class PlaceToolStatus(StrEnum):
