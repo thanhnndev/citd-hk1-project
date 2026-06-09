@@ -16,6 +16,8 @@ interface PlaceResultsPanelProps {
   placesOpen: boolean;
   sourcesOpen: boolean;
   onMobileClose: () => void;
+  onTogglePlaces: () => void;
+  onToggleSources: () => void;
   desktopOpen: boolean;
   onDesktopClose: () => void;
 }
@@ -28,6 +30,8 @@ export function PlaceResultsPanel({
   placesOpen,
   sourcesOpen,
   onMobileClose,
+  onTogglePlaces,
+  onToggleSources,
   desktopOpen,
   onDesktopClose,
 }: PlaceResultsPanelProps) {
@@ -106,7 +110,7 @@ export function PlaceResultsPanel({
               <X className="size-4" />
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">{cards}</div>
+          {content}
         </aside>
       )}
 

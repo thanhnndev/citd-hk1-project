@@ -74,6 +74,9 @@ interface ChatInterfaceProps {
   };
 }
 
+type UserLocation = { lat: number; lng: number };
+type PendingLocationResult = UserLocation | { denied: true };
+
 const SOURCE_LABELS = {
   vi: { one: "nguồn", many: "nguồn", searching: "đang xử lý", inputHint: "Enter để gửi • Shift+Enter xuống dòng", scroll: "Xuống cuối", retrying: "Đang thử lại..." },
   en: { one: "source", many: "sources", searching: "working", inputHint: "Enter to send • Shift+Enter for newline", scroll: "Jump to latest", retrying: "Retrying..." },
@@ -128,6 +131,13 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [placesOpen, setPlacesOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [placesPanelOpen, setPlacesPanelOpen] = useState(true);
+  const [sourcesPanelOpen, setSourcesPanelOpen] = useState(true);
+  const [budgetFilter, setBudgetFilter] = useState<string | null>(null);
+  const [accessibilityRequired, setAccessibilityRequired] = useState(false);
+  const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
+  const [pendingLocationResolve, setPendingLocationResolve] = useState<
+    ((location: PendingLocationResult) => void) | null
+  >(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -466,9 +476,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       : sourceCount > 0
         ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
         : "";
-  const hasPlaces = latestPlaces.length > 0;
   const showDesktopSidebar = !sidebarCollapsed;
-  const showDesktopPlaces = hasPlaces && placesPanelOpen;
+  const showDesktopPlaces = hasEvidencePanel && placesPanelOpen;
   const desktopGridClass = showDesktopSidebar
     ? showDesktopPlaces
       ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
@@ -628,7 +637,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           </span>
         </button>
 
-        {hasPlaces && (
+        {hasEvidencePanel && (
           <button
             type="button"
             className="inline-flex items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb]"
@@ -785,7 +794,9 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                   const parsed = JSON.parse(errStr);
                   return parsed.type === "connection_offline" || parsed.retryable === false;
                 }
-              } catch {}
+              } catch {
+                // The error is plain text rather than a structured payload.
+              }
               return false;
             };
 
@@ -793,12 +804,17 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             let errorTitle = language === "vi" ? "Lỗi kết nối" : "Connection error";
             let errorMessage = error;
             let showRetry = true;
-            let parsedDetails: any = null;
-
             try {
               if (error.trim().startsWith("{") && error.trim().endsWith("}")) {
-                parsedDetails = JSON.parse(error);
-                errorMessage = language === "vi" ? parsedDetails.message_vi : parsedDetails.message_en;
+                const parsedDetails = JSON.parse(error) as {
+                  message_vi?: string;
+                  message_en?: string;
+                  retryable?: boolean;
+                  type?: string;
+                };
+                errorMessage =
+                  (language === "vi" ? parsedDetails.message_vi : parsedDetails.message_en) ??
+                  error;
                 showRetry = !!parsedDetails.retryable;
                 
                 if (parsedDetails.type === "timeout") {
@@ -811,7 +827,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                   errorTitle = language === "vi" ? "Lỗi hệ thống" : "System Error";
                 }
               }
-            } catch (e) {
+            } catch {
               // Not a JSON error
             }
 
@@ -1048,7 +1064,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               >
                 <Menu className="size-4" />
               </button>
-              {hasPlaces && (
+              {hasEvidencePanel && (
                 <button
                   type="button"
                   className="mr-1 rounded-md p-1 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
@@ -1161,7 +1177,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       </footer>
         </main>
 
-        {hasPlaces && (
+        {hasEvidencePanel && (
           <PlaceResultsPanel
             places={latestPlaces}
             citations={latestCitations}
@@ -1170,6 +1186,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             placesOpen={placesPanelOpen}
             sourcesOpen={sourcesPanelOpen}
             onMobileClose={() => setPlacesOpen(false)}
+            onTogglePlaces={() => setPlacesPanelOpen((open) => !open)}
+            onToggleSources={() => setSourcesPanelOpen((open) => !open)}
             desktopOpen={placesPanelOpen}
             onDesktopClose={() => setPlacesPanelOpen(false)}
           />
