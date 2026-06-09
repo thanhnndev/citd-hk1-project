@@ -483,7 +483,7 @@ class TestMapsAgent:
             "message": "places near me",
             "language": "en",
             "user_location": {"lat": 10.776, "lng": 106.700},
-            "needs_location": False,
+            "needs_location": True,
         }
         result = await maps_agent_node(state)
 
@@ -560,12 +560,12 @@ class TestMapsAgent:
 
     def test_location_policy_distinguishes_user_position_from_landmark_proximity(self):
         """GPS is required for 'near me', not for 'near the beach'."""
-        from agents.graph.nodes import _requires_user_location
+        from agents.graph.nodes import requires_user_location_heuristic
 
-        assert _requires_user_location("Có homestay gần biển không?") is False
-        assert _requires_user_location("Có homestay gần tôi không?") is True
-        assert _requires_user_location("Find a homestay near the beach") is False
-        assert _requires_user_location("Find a homestay near me") is True
+        assert requires_user_location_heuristic("Có homestay gần biển không?") is False
+        assert requires_user_location_heuristic("Có homestay gần tôi không?") is True
+        assert requires_user_location_heuristic("Find a homestay near the beach") is False
+        assert requires_user_location_heuristic("Find a homestay near me") is True
 
     def test_new_turn_state_clears_checkpointed_outputs(self):
         """Every user turn starts without prior response artifacts or routing."""

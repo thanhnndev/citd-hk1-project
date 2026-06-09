@@ -223,9 +223,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       setLoading(true);
       setIsNearBottom(true);
 
-      // Only send userLocation if the query text explicitly asks for nearby/proximity recommendations
-      const locationKeywords = /(gần đây|gần tôi|gần nhất|ở gần|near me|nearby|nearest|around here|close to)/i;
-      const requestLocation = locationKeywords.test(messageText) ? userLocation : null;
+      const requestLocation = userLocation;
 
       const requestHistory: ChatHistoryTurn[] = messages
         .filter((message): message is Message & { content: string } => Boolean(message.content) && (message.role === "user" || message.role === "assistant"))

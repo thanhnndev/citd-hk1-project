@@ -136,28 +136,16 @@ def _routing_tier_from_confidence(confidence: float) -> str:
     return "fallback"
 
 
-_USER_LOCATION_PATTERNS = (
-    r"\bgần\s+(tôi|mình|đây)\b",
-    r"\bquanh\s+(tôi|mình|đây)\b",
-    r"\btừ\s+vị\s+trí\s+(của\s+)?(tôi|mình)\b",
-    r"\bvị\s+trí\s+hiện\s+tại\b",
-    r"\bnear\s+me\b",
-    r"\bnearby\b",
-    r"\baround\s+here\b",
-    r"\bfrom\s+my\s+(current\s+)?location\b",
-    r"\bclosest\s+to\s+me\b",
-)
-
-
-def _requires_user_location(message: str) -> bool:
-    """Return true only when the request depends on the user's current GPS.
-
-    Location permission is a deterministic product boundary. The model may
-    classify intent, but it must not turn object-relative phrases such as
-    "near the beach" into a request for sensitive browser geolocation.
-    """
-    normalized = " ".join((message or "").strip().lower().split())
-    return any(re.search(pattern, normalized) for pattern in _USER_LOCATION_PATTERNS)
+def requires_user_location_heuristic(message: str) -> bool:
+    """Determine if a message requires location using simple substring search (no regex)."""
+    text_lower = " ".join((message or "").strip().lower().split())
+    # Substring search to avoid regex library and match rules simply when LLM is unavailable:
+    keywords = [
+        "gần tôi", "gần mình", "gần đây", "quanh đây", "quanh tôi", "quanh mình",
+        "vị trí của tôi", "vị trí hiện tại", "near me", "nearby", "around here",
+        "my location", "closest to me", "địa điểm gần", "quán gần"
+    ]
+    return any(keyword in text_lower for keyword in keywords)
 
 
 def _requests_accessibility(message: str) -> bool:
@@ -495,7 +483,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 confidence = float(message.parsed.confidence)
                 is_followup = bool(message.parsed.is_followup)
                 model_needs_location = bool(message.parsed.needs_location)
-                needs_location = _requires_user_location(original_message)
+                needs_location = model_needs_location
                 routing_tier = _routing_tier_from_confidence(confidence)
             else:
                 # Fallback to heuristic if model refused or parsing failed
@@ -572,7 +560,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
             confidence = 0.4
 
     routing_tier = _routing_tier_from_confidence(confidence)
-    needs_location = _requires_user_location(message)
+    needs_location = requires_user_location_heuristic(message)
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(
@@ -1549,6 +1537,8 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
     # falling back to AgentState for backward compatibility.
     configurable = config.get("configurable", {}) if config else {}
     user_location = configurable.get("user_location") or state.get("user_location")
+    if not needs_location:
+        user_location = None
     budget_filter = configurable.get("budget_filter") or state.get("budget_filter")
     accessibility_required = bool(
         configurable.get("accessibility_required", state.get("accessibility_required", False))
