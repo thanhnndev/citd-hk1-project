@@ -80,6 +80,98 @@
     }
   },
   "Landing": {
+    "homepage": {
+      "hero": {
+        "eyebrow": "AI Travel Assistant",
+        "titleStart": "Explore Ham Ninh",
+        "titleHighlight": "more intelligently",
+        "titleEnd": "with AI",
+        "description": "Plan a personalized visit, learn local culture, and get trustworthy suggestions from an AI assistant grounded in Ham Ninh fishing village knowledge.",
+        "exampleLabel": "Online now",
+        "exampleQuestion": "Example: What seafood is Ham Ninh famous for?",
+        "suggestions": [
+          "Try Ham Ninh crab",
+          "Watch sunrise at the pier",
+          "Explore the fishing village"
+        ],
+        "primaryCta": "Start chatting",
+        "secondaryCta": "View AI architecture",
+        "freeNote": "Free · Source-aware · Bilingual support",
+        "realtimeLabel": "Updated",
+        "realtimeValue": "Context aware",
+        "placesValue": "20+",
+        "placesLabel": "Discovery spots",
+        "trustLabel": "Clear sources"
+      },
+      "stats": [
+        {
+          "label": "Food",
+          "value": "20+ places"
+        },
+        {
+          "label": "Experiences",
+          "value": "15+ ideas"
+        },
+        {
+          "label": "Knowledge",
+          "value": "Citation RAG"
+        },
+        {
+          "label": "Status",
+          "value": "24/7 support"
+        }
+      ],
+      "benefits": {
+        "heading": "Why choose Ham Ninh Guide AI?",
+        "items": [
+          {
+            "title": "Smart consultation",
+            "description": "The assistant understands natural questions and combines cultural and place data to suggest relevant next steps."
+          },
+          {
+            "title": "Local knowledge",
+            "description": "Explore food, history, and village life through information with clear reference sources."
+          },
+          {
+            "title": "Instant responses",
+            "description": "Get quick answers in Vietnamese or English with a convenient experience across devices."
+          }
+        ]
+      },
+      "steps": {
+        "heading": "Just 3 simple steps",
+        "items": [
+          {
+            "title": "Ask a question",
+            "description": "Tell the AI what you want to learn or explore in Ham Ninh."
+          },
+          {
+            "title": "AI analyzes",
+            "description": "The system retrieves knowledge and place data that match your intent."
+          },
+          {
+            "title": "Keep exploring",
+            "description": "View sources, open the map, and ask follow-up questions to complete your journey."
+          }
+        ]
+      },
+      "cta": {
+        "heading": "Ready to explore Ham Ninh?",
+        "description": "Let the AI assistant accompany you as you discover the beauty, culture, and daily life of Ham Ninh fishing village.",
+        "button": "Get started"
+      },
+      "footer": {
+        "brand": "HN | Ham Ninh",
+        "description": "An AI-powered platform for exploring Ham Ninh fishing village with responsible design and local knowledge.",
+        "quickLinks": "Quick links",
+        "support": "Support",
+        "privacy": "Privacy Policy",
+        "terms": "Terms of Service",
+        "contact": "Contact support",
+        "copyright": "© 2026 Ham Ninh AI Guide. Preserving heritage and supporting sustainable travel.",
+        "disclaimer": "AI can make mistakes. Please check important travel information."
+      }
+    },
     "hero": {
       "eyebrow": "Sustainable tourism for Ham Ninh fishing village",
       "title": "Ham Ninh AI Guide — Preserve Heritage. Support Tourism. Fairness for Fishermen.",

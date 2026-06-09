@@ -24,6 +24,8 @@ interface ChatSidebarProps {
   onSelectConversation: (conversationId: string) => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
+  desktopOpen: boolean;
+  onDesktopToggle: () => void;
 }
 
 export function ChatSidebar({
@@ -36,6 +38,8 @@ export function ChatSidebar({
   onSelectConversation,
   mobileOpen,
   onMobileClose,
+  desktopOpen,
+  onDesktopToggle,
 }: ChatSidebarProps) {
   const isVi = locale !== "en";
   const categories = isVi
@@ -76,6 +80,14 @@ export function ChatSidebar({
             className="ml-auto rounded-md p-1 text-[#787774] hover:bg-black/5 lg:hidden"
             onClick={onMobileClose}
             aria-label={isVi ? "Đóng menu" : "Close menu"}
+          >
+            <X className="size-4" />
+          </button>
+          <button
+            type="button"
+            className="ml-auto hidden rounded-md p-1 text-[#787774] hover:bg-black/5 lg:inline-flex"
+            onClick={onDesktopToggle}
+            aria-label={isVi ? "Đóng sidebar" : "Close sidebar"}
           >
             <X className="size-4" />
           </button>
@@ -172,9 +184,11 @@ export function ChatSidebar({
 
   return (
     <>
-      <aside className="hidden h-full min-h-0 w-60 shrink-0 border-r border-[#e9e9e7] bg-[#f7f7f5] lg:block">
-        {content}
-      </aside>
+      {desktopOpen && (
+        <aside className="hidden h-full min-h-0 w-60 shrink-0 border-r border-[#e9e9e7] bg-[#f7f7f5] lg:block">
+          {content}
+        </aside>
+      )}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Chat navigation">
           <button
