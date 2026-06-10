@@ -379,6 +379,8 @@ class HamNinhGraph:
             "history": history or [],
             "messages": [{"role": "user", "content": message}],
             "tool_calls": [],
+            "tool_call_allowed": True,
+            "tool_call_reason": None,
             "citations": [],
             "places": [],
             "suggestions": [],

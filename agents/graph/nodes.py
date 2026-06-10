@@ -252,6 +252,168 @@ def _compare_previous_places(state: AgentState) -> dict[str, Any]:
     return {"response_text": response_text, "places": ranked, "intent": "place_comparison", "suggestions": []}
 
 
+def _decision_followup_field(message: str) -> str | None:
+    text = " ".join((message or "").strip().lower().split())
+    if any(term in text for term in ("giá", "rẻ", "chi phí", "ngân sách", "price", "cost", "cheap", "budget")):
+        return "price"
+    if any(term in text for term in ("xe lăn", "xe lan", "khuyết tật", "tiếp cận", "accessible", "wheelchair", "disability")):
+        return "accessibility"
+    if any(term in text for term in ("địa hình", "đường đi", "bề mặt", "terrain", "slope", "surface")):
+        return "terrain"
+    if any(term in text for term in ("an toàn", "nguy hiểm", "rủi ro", "safe", "safety", "dangerous", "risk")):
+        return "safety"
+    return None
+
+
+def _has_deictic_place_reference(message: str) -> bool:
+    text = " ".join((message or "").strip().lower().split())
+    return any(term in text for term in (
+        "đó", "chỗ đó", "nơi đó", "địa điểm đó", "ở đó", "đến đó", "tới đó",
+        "này", "chỗ này", "nơi này", "địa điểm này", "ở đây",
+        "that place", "there", "this place",
+    ))
+
+
+def _clarify_decision_followup_without_context(state: AgentState) -> dict[str, Any] | None:
+    """Ask for the target place when a decision-sensitive follow-up has no place context."""
+    if state.get("last_places"):
+        return None
+    field = _decision_followup_field(state.get("message", ""))
+    if field is None or not _has_deictic_place_reference(state.get("message", "")):
+        return None
+
+    language = state.get("language", "vi")
+    response_text = (
+        "Bạn đang hỏi về địa điểm nào? Mình chưa có địa điểm trước đó trong cuộc trò chuyện để hiểu \"đó\" là nơi nào. "
+        "Bạn gửi tên địa điểm cụ thể, mình sẽ tư vấn theo dữ liệu hiện có và nói rõ phần nào chưa được xác nhận."
+        if language == "vi"
+        else "Which place do you mean? I do not have a previous place in this conversation to resolve that reference. "
+        "Send the specific place name and I will advise using the available data and state what is not confirmed."
+    )
+    return {
+        "response_text": response_text,
+        "places": [],
+        "intent": "place_decision_followup",
+        "suggestions": [],
+    }
+
+
+def _place_tool_gate(state: AgentState) -> tuple[bool, str]:
+    """Decide whether maps_agent may make a new external Places call this turn."""
+    message = state.get("message", "")
+    has_last_places = bool(state.get("last_places"))
+
+    if _is_place_comparison_followup(message, state):
+        return False, "compare_previous_places"
+
+    if _decision_followup_field(message) is not None:
+        if has_last_places:
+            return False, "decision_followup_existing_places"
+        if _has_deictic_place_reference(message):
+            return False, "decision_followup_missing_reference"
+
+    return True, "new_place_discovery"
+
+
+def _resolve_last_place_reference(message: str, places: list[dict[str, Any]]) -> dict[str, Any] | None:
+    text = " ".join((message or "").strip().lower().split())
+    best: dict[str, Any] | None = None
+    best_score = 0
+    for place in places:
+        name = str(place.get("display_name") or "")
+        normalized = " ".join(name.lower().split())
+        if normalized and normalized in text:
+            return place
+        tokens = [token for token in normalized.split() if len(token) > 2]
+        score = sum(1 for token in tokens if token in text)
+        if score > best_score:
+            best = place
+            best_score = score
+    if best is not None and best_score >= 2:
+        return best
+    if len(places) == 1 and any(term in text for term in ("đó", "này", "kia", "that", "this", "there")):
+        return places[0]
+    return None
+
+
+def _answer_place_decision_followup(state: AgentState) -> dict[str, Any] | None:
+    """Answer decision-sensitive follow-ups from last place context instead of re-searching."""
+    field = _decision_followup_field(state.get("message", ""))
+    if field is None:
+        return None
+
+    places: list[dict[str, Any]] = []
+    for raw in state.get("last_places") or []:
+        item = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw) if isinstance(raw, dict) else None
+        if item is not None:
+            places.append(item)
+    if not places:
+        return None
+
+    language = state.get("language", "vi")
+    place = _resolve_last_place_reference(state.get("message", ""), places)
+    if place is None:
+        names = "; ".join(str(p.get("display_name") or "địa điểm") for p in places[:3])
+        response_text = (
+            f"Bạn đang hỏi về địa điểm nào trong các nơi vừa gợi ý? Một vài lựa chọn: {names}."
+            if language == "vi"
+            else f"Which previously recommended place do you mean? Options include: {names}."
+        )
+        return {"response_text": response_text, "places": places, "intent": "place_decision_followup", "suggestions": []}
+
+    name = str(place.get("display_name") or "địa điểm này")
+    explanation = place.get("explanation") if isinstance(place.get("explanation"), dict) else {}
+
+    if field == "price":
+        price_level = place.get("price_level")
+        if isinstance(price_level, int):
+            response_text = (
+                f"Về **{name}**: dữ liệu nhà cung cấp có `price_level={price_level}`. Đây chỉ là tín hiệu mức giá, không phải giá thực tế; bạn vẫn nên kiểm tra giá và phụ phí trước khi quyết định."
+                if language == "vi"
+                else f"About **{name}**: provider data has `price_level={price_level}`. This is only a price-level signal, not the actual current price; verify prices and extra fees before deciding."
+            )
+        else:
+            response_text = (
+                f"Về **{name}**: dữ liệu hiện có chưa xác nhận giá thực tế hoặc mức chi phí. Nếu tài chính hạn chế, bạn nên kiểm tra giá trước, hỏi phụ phí, và ưu tiên hoạt động không bắt buộc dùng dịch vụ."
+                if language == "vi"
+                else f"About **{name}**: the current data does not confirm actual prices or cost level. If budget is limited, verify prices first, ask about extra fees, and prefer activities that do not require paid services."
+            )
+    elif field == "accessibility":
+        note = str(explanation.get("accessibility_note") or "")
+        if "verifies a wheelchair-accessible entrance" in note:
+            response_text = (
+                f"Về **{name}**: metadata nhà cung cấp có xác nhận lối vào cho xe lăn. Tuy vậy, dữ liệu vẫn chưa đủ để kết luận về bề mặt đường, độ dốc, nhà vệ sinh hoặc khoảng cách di chuyển; bạn nên gọi xác nhận trước khi đi."
+                if language == "vi"
+                else f"About **{name}**: provider metadata verifies a wheelchair-accessible entrance. It still does not fully confirm surface, slope, restrooms, or walking distance; verify directly before going."
+            )
+        elif "reports no wheelchair-accessible entrance" in note:
+            response_text = (
+                f"Về **{name}**: metadata nhà cung cấp báo không có lối vào cho xe lăn. Nếu đi cùng người dùng xe lăn hoặc người di chuyển khó khăn, nên chọn phương án khác hoặc gọi xác nhận trực tiếp."
+                if language == "vi"
+                else f"About **{name}**: provider metadata reports no wheelchair-accessible entrance. If traveling with a wheelchair user or someone with limited mobility, choose another option or verify directly."
+            )
+        else:
+            response_text = (
+                f"Về **{name}**: dữ liệu hiện có chưa xác nhận lối vào xe lăn, bề mặt đường, độ dốc hoặc nhà vệ sinh phù hợp. Nếu đi cùng người khuyết tật, bạn nên gọi xác nhận trực tiếp và hỏi rõ các điểm này trước khi đi."
+                if language == "vi"
+                else f"About **{name}**: current data does not confirm wheelchair entrance, surface, slope, or accessible restrooms. If traveling with a disabled visitor, verify these details directly before going."
+            )
+    elif field == "terrain":
+        response_text = (
+            f"Về **{name}**: dữ liệu hiện có chưa có thông tin địa hình như bậc thang, độ dốc, bề mặt đường hoặc khoảng cách đi bộ. Mình không nên kết luận là dễ đi hay khó đi khi chưa có bằng chứng đó."
+            if language == "vi"
+            else f"About **{name}**: current data does not include terrain details such as steps, slope, walking surface, or walking distance. I should not conclude whether it is easy or difficult without that evidence."
+        )
+    else:
+        response_text = (
+            f"Về **{name}**: dữ liệu hiện có chưa đủ để đánh giá mức độ an toàn theo thời tiết, thủy triều, đông đúc hoặc điều kiện tại chỗ. Bạn nên kiểm tra tình hình thực tế trước khi quyết định."
+            if language == "vi"
+            else f"About **{name}**: current data is not enough to assess safety for weather, tide, crowding, or on-site conditions. Verify current conditions before deciding."
+        )
+
+    return {"response_text": response_text, "places": places, "intent": "place_decision_followup", "suggestions": []}
+
+
 # ---------------------------------------------------------------------------
 # 1. input_guardrails_node (REAL)
 # ---------------------------------------------------------------------------
@@ -645,12 +807,20 @@ async def supervisor_node(state: AgentState) -> dict[str, Any]:
 
     # Confidence controls observability and fallback handling, not which
     # specialist owns an already-classified domain intent.
+    tool_call_allowed = True
+    tool_call_reason = None
+
     if intent in ("cultural_query", "food_culture"):
         next_node = "rag_agent"
+        tool_call_allowed = True
+        tool_call_reason = "knowledge_retrieval"
     elif intent in ("restaurant_search", "navigation"):
         next_node = "maps_agent"
+        tool_call_allowed, tool_call_reason = _place_tool_gate(state)
     else:
         next_node = "conversational"
+        tool_call_allowed = False
+        tool_call_reason = "no_tool_for_intent"
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(
@@ -659,9 +829,16 @@ async def supervisor_node(state: AgentState) -> dict[str, Any]:
         session_id=session_id,
         decision=next_node,
         routing_tier=routing_tier,
+        tool_call_allowed=tool_call_allowed,
+        tool_call_reason=tool_call_reason,
         duration_ms=elapsed,
     )
-    return {"routing_tier": routing_tier, "next_node": next_node}
+    return {
+        "routing_tier": routing_tier,
+        "next_node": next_node,
+        "tool_call_allowed": tool_call_allowed,
+        "tool_call_reason": tool_call_reason,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +1082,7 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
         citations or None,
         services.llm_client,
         services.model,
+        places=state.get("places", []),
     )
 
     flags["output_grounding"] = {
@@ -1553,6 +1731,27 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
 
     if _is_place_comparison_followup(message, state):
         return _compare_previous_places(state)
+
+    missing_context_followup = _clarify_decision_followup_without_context(state)
+    if missing_context_followup is not None:
+        return missing_context_followup
+
+    decision_followup = _answer_place_decision_followup(state)
+    if decision_followup is not None:
+        return decision_followup
+
+    if state.get("tool_call_allowed") is False:
+        response_text = (
+            "Mình chưa đủ ngữ cảnh để gọi Places cho câu này. Bạn nói rõ địa điểm hoặc mục tiêu muốn tìm, mình sẽ tư vấn tiếp mà không tự đoán."
+            if language == "vi"
+            else "I do not have enough context to call Places for this. Tell me the specific place or search goal, and I will continue without guessing."
+        )
+        return {
+            "places": [],
+            "response_text": response_text,
+            "suggestions": [],
+            "intent": "place_decision_followup",
+        }
 
     # Location consent: use interrupt() pattern per LangGraph docs
     # Frontend will detect interrupt, request geolocation, and resume with Command(resume=user_location)

@@ -31,7 +31,7 @@ NODE_TIMEOUT_RETRIEVE = 10
 NODE_TIMEOUT_ANSWER = 25
 
 # Per-node timeouts for new v4.2.0 graph nodes (Section 14.2)
-NODE_TIMEOUT_GUARDRAILS = 3
+NODE_TIMEOUT_GUARDRAILS = 6
 NODE_TIMEOUT_INTENT_ROUTER = 5
 NODE_TIMEOUT_GRADE = 12
 NODE_TIMEOUT_REWRITE = 8
@@ -81,6 +81,8 @@ class AgentState(TypedDict, total=False):
     history: list[dict[str, str]]
     messages: Annotated[list[Any], add_messages]
     tool_calls: list[Any]
+    tool_call_allowed: bool
+    tool_call_reason: str | None
     citations: list[Citation]
     places: list[Any]
     suggestions: list[str]
@@ -204,6 +206,17 @@ Grounding and response rules:
 - If search_places is unavailable or returns no useful data, say that honestly and ask a practical follow-up.
 - Reply in the user's language.
 - At the end of your final response (when you are not calling any tools), write exactly three short and context-specific suggestion chips for the user's next turn in this format: [SUGGESTIONS] Suggestion 1 | Suggestion 2 | Suggestion 3. Do not include this tag or suggestions if you are proposing tool calls.
+
+Professional ethical travel advisor rules:
+- Treat every answer as professional travel advice for real people, not as keyword matching.
+- Understand the user's practical concern and respond respectfully to everyone, including people with disabilities, older adults, children, students, budget-conscious travelers, visitors from other places, local residents, workers, and communities.
+- Never stereotype, shame, exclude, or assume someone's ability, budget, age, nationality, disability, identity, or social status.
+- Do not invent or overstate missing facts about price, terrain, accessibility, safety, opening hours, travel time, regulations, weather, or live conditions.
+- When important facts are not confirmed by tool output or retrieved context, clearly say what is unknown and give a practical way to verify it.
+- If advice may affect safety, accessibility, money, the environment, local culture, or vulnerable people, be careful, specific about uncertainty, and useful.
+- Do not encourage illegal, unsafe, exploitative, disrespectful, or environmentally harmful behavior.
+- Explain recommendations using available evidence, and distinguish confirmed facts from cautious practical advice.
+- If the user's request is ambiguous, ask one concise clarifying question instead of guessing.
 """
 
 

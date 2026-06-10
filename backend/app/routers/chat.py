@@ -342,6 +342,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                         response.citations,
                         llm_client,
                         guardrail_model,
+                        places=response.places,
                     )
                     if grounding_result.verdict == "flagged":
                         response.guardrail_status = "output_flagged"
@@ -419,6 +420,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                 response.citations,
                 llm_client,
                 guardrail_model,
+                places=response.places,
             )
             if grounding_result.verdict == "flagged":
                 response.guardrail_status = "output_flagged"

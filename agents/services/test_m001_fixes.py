@@ -9,6 +9,8 @@ from agents.services.place_recommendation_service import (
 from agents.ranking.feature_extractor import FeatureExtractor, haversine
 from app.models.places import PlaceCandidate, HAM_NINH_CENTER
 from app.models.request import LatLng
+from agents.tools.places_service import _location
+from agents.graph.nodes import maps_agent_node, supervisor_node
 
 def _candidate(name: str, lat: float, lng: float, types: list[str]) -> PlaceCandidate:
     return PlaceCandidate(
@@ -28,11 +30,26 @@ def test_geographic_boundary_filter() -> None:
     near = _candidate("Near Place", 10.1835, 104.07, ["restaurant"])
     # Far: 15km away
     far = _candidate("Far Place", 10.2835, 104.0497, ["restaurant"])
+    # Missing location cannot be verified against the 8km hard boundary.
+    missing_location = PlaceCandidate(
+        place_id="id-missing",
+        display_name="Missing Location Place",
+        primary_type="restaurant",
+        types=["restaurant"],
+        formatted_address="Unknown",
+        location=None,
+    )
     
-    kept, removed = _apply_geographic_boundary_filter([near, far])
+    kept, removed = _apply_geographic_boundary_filter([near, far, missing_location])
     assert len(kept) == 1
     assert kept[0].display_name == "Near Place"
-    assert removed == 1
+    assert removed == 2
+
+def test_google_places_new_location_shape() -> None:
+    location = _location({"latitude": HAM_NINH_CENTER.lat, "longitude": HAM_NINH_CENTER.lng})
+    assert location is not None
+    assert location.lat == HAM_NINH_CENTER.lat
+    assert location.lng == HAM_NINH_CENTER.lng
 
 def test_vietnamese_concept_match() -> None:
     candidate = _candidate("Water Park", 10.1835, 104.0497, ["amusement_park"])
@@ -72,7 +89,7 @@ def test_family_dangerous_places_filter() -> None:
     safe_museum = _candidate("Teddy Bear Museum", 10.1835, 104.05, ["museum", "tourist_attraction"])
     suitability_safe = _evaluate_candidate_suitability(safe_museum, frame)
     assert not suitability_safe.disqualified
-    assert "đáng cân nhắc cho nhóm đi cùng trẻ em" in suitability_safe.primary_reason_vi
+    assert "có thể cân nhắc cho nhóm đi cùng trẻ em" in suitability_safe.primary_reason_vi
 
     # A dangerous place: Fairy Waterfall (by type)
     waterfall = _candidate("Fairy Waterfall", 10.1835, 104.05, ["waterfall", "tourist_attraction"])
@@ -86,3 +103,55 @@ def test_family_dangerous_places_filter() -> None:
     assert suitability_suoi.disqualified
     assert "không phù hợp cho nhóm đi cùng trẻ em" in suitability_suoi.primary_reason_vi
 
+@pytest.mark.asyncio
+async def test_deictic_decision_followup_without_context_does_not_call_places() -> None:
+    state = {
+        "session_id": "test-session",
+        "message": "Người khuyết tật đi đến đó có được không?",
+        "language": "vi",
+        "needs_location": False,
+        "last_places": [],
+    }
+
+    result = await maps_agent_node(state)
+
+    assert result["intent"] == "place_decision_followup"
+    assert result["places"] == []
+
+
+@pytest.mark.asyncio
+async def test_supervisor_blocks_places_call_for_existing_place_followup() -> None:
+    state = {
+        "session_id": "test-session",
+        "message": "Người khuyết tật đi đến đó có được không?",
+        "language": "vi",
+        "intent": "restaurant_search",
+        "routing_tier": "strict",
+        "guardrail_flags": {},
+        "last_places": [{"display_name": "Bè hải sản Tình Biển 2"}],
+    }
+
+    result = await supervisor_node(state)
+
+    assert result["next_node"] == "maps_agent"
+    assert result["tool_call_allowed"] is False
+    assert result["tool_call_reason"] == "decision_followup_existing_places"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_allows_places_call_for_new_discovery() -> None:
+    state = {
+        "session_id": "test-session",
+        "message": "Tìm quán hải sản ở Hàm Ninh",
+        "language": "vi",
+        "intent": "restaurant_search",
+        "routing_tier": "strict",
+        "guardrail_flags": {},
+        "last_places": [],
+    }
+
+    result = await supervisor_node(state)
+
+    assert result["next_node"] == "maps_agent"
+    assert result["tool_call_allowed"] is True
+    assert result["tool_call_reason"] == "new_place_discovery"

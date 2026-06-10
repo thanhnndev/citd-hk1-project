@@ -142,6 +142,7 @@ SCOPE:
 - Local attractions, restaurants, seafood places, hotels, culture, history, trip planning
 - Directions, maps, distance, or "near me / nearby / gần đây" local recommendations
 - Weather in Ham Ninh or Phu Quoc
+- Professional and ethical travel advice related to Ham Ninh or Phu Quoc, including visitor safety, accessibility, budget-sensitive travel, respectful conduct toward local residents, environmental impact, responsible tourism, uncertainty about source/tool data, and practical risk-aware recommendations.
 
 OUT OF SCOPE:
 - Explicit questions about OTHER cities/provinces/countries without relation to Ham Ninh/Phu Quoc
@@ -151,6 +152,8 @@ OUT OF SCOPE:
 
 Decision rules:
 - Return in_scope for local/deictic tourism requests such as "near me", "nearby", "gần đây", "gần tôi", even if Ham Ninh/Phu Quoc is not named.
+- Return in_scope for ethical travel advice questions when they are plausibly about Ham Ninh/Phu Quoc travel, even if they ask about disability, age, budget limits, safety, weather risk, environmental harm, local community impact, or why a recommendation is appropriate.
+- Do not reject professional tourism advice questions merely because they involve sensitive real-world concerns. The assistant should answer carefully or ask for missing travel context.
 - Return uncertain when the query is too short or missing context but could be travel/food/place related.
 - Return out_of_scope only when the request is clearly outside the assistant domain.
 
@@ -162,6 +165,9 @@ Examples:
 - "Quán ăn ngon ở Sài Gòn" → out_of_scope, other_location_tourism, high confidence
 - "Quán ăn ngon" → uncertain, ambiguous, medium confidence
 - "Làng chài Hàm Ninh có gì đặc biệt?" → in_scope, ham_ninh_tourism, high confidence
+- "Người khuyết tật đi đến đó được không?" → in_scope or uncertain depending on context, ham_ninh_tourism/ambiguous, do not reject
+- "Tôi là sinh viên, tài chính hạn chế thì nên đi đâu ở Hàm Ninh?" → in_scope, ham_ninh_tourism, high confidence
+- "Có nên mua san hô/vỏ ốc làm quà không?" → in_scope if travel-related, ham_ninh_tourism/phu_quoc_tourism, high confidence
 
 Validate the user's query and return the structured decision."""
 

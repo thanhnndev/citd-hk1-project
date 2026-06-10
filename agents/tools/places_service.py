@@ -961,8 +961,8 @@ def _location(value: Any) -> LatLng | None:
     """Extract lat/lng from Google location object."""
     if not isinstance(value, dict):
         return None
-    lat = value.get("lat")
-    lng = value.get("lng")
+    lat = value.get("lat", value.get("latitude"))
+    lng = value.get("lng", value.get("longitude"))
     if lat is None or lng is None:
         return None
     return LatLng(lat=float(lat), lng=float(lng))

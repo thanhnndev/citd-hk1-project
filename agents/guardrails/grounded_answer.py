@@ -221,8 +221,14 @@ def _topic_hint(query: str, language: str) -> str:
 
 def _final_sentence(language: str) -> str:
     if language == "vi":
-        return "Tóm lại, câu trả lời được rút ra từ các nguồn đã tìm thấy; bạn có thể hỏi tiếp để đào sâu một ý cụ thể."
-    return "In short, the answer is grounded in the retrieved sources; you can ask a follow-up to explore any specific point."
+        return (
+            "Tóm lại, câu trả lời được rút ra từ các nguồn đã tìm thấy. "
+            "Nếu quyết định còn phụ thuộc vào giá, khả năng tiếp cận, địa hình, thời tiết hoặc mức độ an toàn, bạn nên kiểm tra thực tế vì nguồn hiện có có thể chưa xác nhận đủ."
+        )
+    return (
+        "In short, the answer is grounded in the retrieved sources. "
+        "If the decision depends on price, accessibility, terrain, weather, or safety, check current conditions because the available sources may not confirm enough."
+    )
 
 def _compact_evidence(results: list[RAGChunk], max_items: int = 5) -> list[tuple[int, str, str]]:
     seen: set[str] = set()
@@ -269,12 +275,12 @@ def compose_answer_en(query: str, results: list[RAGChunk]) -> str:
 
 _NO_EVIDENCE_VI = (
     "Hiện tại nguồn dữ liệu chưa có thông tin đầy đủ "
-    "để trả lời câu hỏi này."
+    "để trả lời câu hỏi này. Mình sẽ không tự đoán các thông tin như giá, khả năng tiếp cận, địa hình, giờ mở cửa hoặc mức độ an toàn nếu chưa có dữ liệu xác nhận."
 )
 
 _NO_EVIDENCE_EN = (
     "Currently, our data sources do not have sufficient information "
-    "to answer this question."
+    "to answer this question. I will not guess details such as price, accessibility, terrain, opening hours, or safety level without supporting data."
 )
 
 _NO_EVIDENCE_BY_LANG = {

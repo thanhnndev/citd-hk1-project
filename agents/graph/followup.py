@@ -187,6 +187,14 @@ def _requested_followup_field(text: str) -> str | None:
         return "reviews"
     if any(term in text for term in ("giờ", "mở cửa", "open", "hours")):
         return "hours"
+    if any(term in text for term in ("giá", "rẻ", "chi phí", "ngân sách", "price", "cost", "cheap", "budget")):
+        return "price"
+    if any(term in text for term in ("xe lăn", "xe lan", "khuyết tật", "tiếp cận", "accessible", "wheelchair", "disability")):
+        return "accessibility"
+    if any(term in text for term in ("địa hình", "duong di", "đường đi", "bề mặt", "terrain", "slope", "surface")):
+        return "terrain"
+    if any(term in text for term in ("an toàn", "nguy hiểm", "rủi ro", "safe", "safety", "dangerous", "risk")):
+        return "safety"
     if any(term in text for term in ("đường", "bản đồ", "map", "route", "direction", "chỉ đường")):
         return "directions"
     if any(term in text for term in ("vì sao", "tại sao", "xếp hạng", "score", "điểm")):
@@ -357,7 +365,7 @@ def _build_followup_context(response: ChatResponse) -> FollowUpContext:
     place_ids = [p.place_id for p in response.places[:10]]
     place_names = [p.display_name for p in response.places[:10]]
     place_ratings = [float(p.rating or 0.0) for p in response.places[:10]]
-    place_price_levels = [int(p.price_level or 0) for p in response.places[:10]]
+    place_price_levels = [int(p.price_level) if p.price_level is not None else -1 for p in response.places[:10]]
     place_reviews = [p.reviews[:3] for p in response.places[:10]]
     place_hours = [p.current_opening_hours or p.regular_opening_hours or {} for p in response.places[:10]]
     citation_sources = [c.source for c in response.citations[:5]]
@@ -426,11 +434,31 @@ def compose_followup_answer(
                 status = "đang mở cửa" if open_now else "hiện không mở cửa"
                 return f"{name} {status}, nhưng mình chưa có lịch giờ chi tiết." if language == "vi" else f"{name} is {'open now' if open_now else 'not open now'}, but I do not have detailed hours."
             return f"Về {name}: mình đã gợi ý địa điểm này trước đó, nhưng chưa có giờ mở cửa chi tiết." if language == "vi" else f"About {name}: I recommended it earlier, but I do not have detailed opening hours."
+        if resolution.field == "price":
+            if place.price_level is not None and place.price_level >= 0:
+                if language == "vi":
+                    return f"Về {name}: dữ liệu nhà cung cấp có price_level={place.price_level}. Đây chỉ là tín hiệu mức giá, không phải giá thực tế; bạn vẫn nên kiểm tra giá trước khi dùng dịch vụ."
+                return f"About {name}: provider data has price_level={place.price_level}. This is only a price-level signal, not the actual current price; verify before using the service."
+            if language == "vi":
+                return f"Về {name}: dữ liệu hiện có chưa xác nhận giá thực tế hoặc mức chi phí. Nếu tài chính hạn chế, bạn nên kiểm tra giá trước, hỏi có phụ phí không, và ưu tiên hoạt động không bắt buộc dùng dịch vụ."
+            return f"About {name}: the current data does not confirm actual prices or cost level. If budget is limited, verify prices first, ask about extra fees, and prefer activities that do not require paid services."
+        if resolution.field == "accessibility":
+            if language == "vi":
+                return f"Về {name}: dữ liệu hiện có trong ngữ cảnh theo dõi chưa đủ để xác nhận lối vào xe lăn, bề mặt đường, độ dốc hoặc nhà vệ sinh phù hợp. Nếu đi cùng người khuyết tật, bạn nên gọi xác nhận trực tiếp và hỏi rõ các điểm này trước khi đi."
+            return f"About {name}: the current follow-up context is not enough to confirm wheelchair entrance, surface, slope, or accessible restrooms. If traveling with a disabled visitor, verify these details directly before going."
+        if resolution.field == "terrain":
+            if language == "vi":
+                return f"Về {name}: dữ liệu hiện có chưa có thông tin địa hình như bậc thang, độ dốc, bề mặt đường hoặc khoảng cách đi bộ. Mình không nên kết luận là dễ đi hay khó đi khi chưa có bằng chứng đó."
+            return f"About {name}: the current data does not include terrain details such as steps, slope, walking surface, or walking distance. I should not conclude whether it is easy or difficult without that evidence."
+        if resolution.field == "safety":
+            if language == "vi":
+                return f"Về {name}: dữ liệu hiện có chưa đủ để đánh giá mức độ an toàn theo thời tiết, thủy triều, đông đúc hoặc điều kiện tại chỗ. Bạn nên kiểm tra tình hình thực tế trước khi quyết định."
+            return f"About {name}: the current data is not enough to assess safety for weather, tide, crowding, or on-site conditions. Verify current conditions before deciding."
         if language == "vi":
             return f"Về {name}: bạn muốn xem review, giờ mở cửa, đường đi hay lý do xếp hạng?"
         return f"About {name}: do you want reviews, opening hours, directions, or ranking reasons?"
 
-    if resolution.decision == "clarification_needed" and resolution.field in {"reviews", "hours", "directions", "score"}:
+    if resolution.decision == "clarification_needed" and resolution.field in {"reviews", "hours", "directions", "score", "price", "accessibility", "terrain", "safety"}:
         names = ", ".join(context.place_display_names[:3])
         if language == "vi":
             return f"Bạn muốn hỏi {resolution.field} của địa điểm nào? Một vài lựa chọn: {names}."
@@ -493,7 +521,9 @@ def compose_followup_answer(
         min_price = 999
         best_indices = []
         for i, p in enumerate(context.place_price_levels):
-            val = p if p > 0 else 2
+            if p < 0:
+                continue
+            val = p
             if val < min_price:
                 min_price = val
                 best_indices = [i]
@@ -507,6 +537,9 @@ def compose_followup_answer(
             if language == "vi":
                 return f"Trong các địa điểm đã gợi ý, nơi có chi phí tiết kiệm nhất là {joined_names} ({price_desc})."
             return f"Among the recommended places, the most budget-friendly is {joined_names}."
+        if language == "vi":
+            return "Trong các địa điểm đã gợi ý, dữ liệu hiện có chưa đủ price_level để kết luận nơi nào rẻ nhất. Bạn nên mở từng thẻ hoặc hỏi trực tiếp giá trước khi quyết định."
+        return "Among the recommended places, the current data does not provide enough price_level evidence to identify the cheapest option. Open each card or verify prices directly before deciding."
 
     # General recommendation follow-up
     if context.intent == PLACE_RECOMMENDATION_INTENT and any(

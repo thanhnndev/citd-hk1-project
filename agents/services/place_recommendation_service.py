@@ -1024,11 +1024,11 @@ def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: Recommenda
             primary_reason_en=f"{candidate.display_name} looks more like a {role_en} than a direct fit for this request.",
             disqualified=True,
         )
-    reason_vi = f"{candidate.display_name} phù hợp như một {role_vi} cho mục tiêu chuyến đi."
-    reason_en = f"{candidate.display_name} fits as a {role_en} for this travel goal."
+    reason_vi = f"{candidate.display_name} được giữ lại vì metadata nhà cung cấp cho thấy vai trò chính là {role_vi}."
+    reason_en = f"{candidate.display_name} is kept because provider metadata shows it functions as a {role_en}."
     if frame.audience == "family":
-        reason_vi = f"{candidate.display_name} đáng cân nhắc cho nhóm đi cùng trẻ em vì vai trò chính là {role_vi}, không phải dịch vụ/cửa hàng ngoài mục đích tham quan."
-        reason_en = f"{candidate.display_name} is worth considering for a group with children because it functions as a {role_en}, not an unrelated shop or service."
+        reason_vi = f"{candidate.display_name} có thể cân nhắc cho nhóm đi cùng trẻ em vì metadata cho thấy vai trò chính là {role_vi}, không phải dịch vụ/cửa hàng ngoài mục đích tham quan."
+        reason_en = f"{candidate.display_name} can be considered for a group with children because provider metadata shows it functions as a {role_en}, not an unrelated shop or service."
     return CandidateSuitability(role=role, score=score, primary_reason_vi=reason_vi, primary_reason_en=reason_en)
 
 def _apply_product_quality_filters(candidates: list[PlaceCandidate], frame: RecommendationFrame) -> tuple[list[PlaceCandidate], int]:
@@ -1185,7 +1185,7 @@ def _build_place_explanation(
         accessibility_note = f"accessibility score {accessibility_score:.2f}"
         evidence.append("accessibility_score")
     else:
-        accessibility_note = "accessibility options available"
+        accessibility_note = "partial accessibility metadata available; not enough to confirm a wheelchair-accessible entrance"
         evidence.append("accessibility_options")
 
     route_summary = "route metadata unavailable"
@@ -1281,8 +1281,16 @@ def _apply_geographic_boundary_filter(
     removed = 0
     for candidate in candidates:
         if candidate.location is None:
-            # No location metadata — keep (benefit of the doubt)
-            kept.append(candidate)
+            # A hard geographic boundary cannot be verified without coordinates.
+            removed += 1
+            logger.debug(
+                "geographic_boundary_rejected",
+                extra={
+                    "place_id": candidate.place_id,
+                    "display_name": candidate.display_name,
+                    "reason": "missing_location",
+                },
+            )
             continue
         dist = haversine(
             HAM_NINH_CENTER.lat, HAM_NINH_CENTER.lng,
@@ -1415,6 +1423,12 @@ def _cultural_preface(language_code: str) -> str:
     return _HAM_NINH_CULTURAL_PREFACE_VI
 
 
+def _provider_limits_note(language_code: str) -> str:
+    if language_code == "en":
+        return " Provider data can miss price, accessibility, terrain, or safety details, so check the card and current conditions before deciding."
+    return " Dữ liệu nhà cung cấp có thể thiếu giá, khả năng tiếp cận, địa hình hoặc mức độ an toàn, nên hãy mở thẻ và kiểm tra điều kiện thực tế trước khi quyết định."
+
+
 def _message_for_status(
     status: PlaceToolStatus,
     *,
@@ -1435,26 +1449,26 @@ def _message_for_status(
             if language_code == "en":
                 if top_names:
                     joined = "; ".join(top_names)
-                    return f"For this trip goal, I would start with these easier options: {joined}. I kept the list short so you can compare quickly; open the cards for map and practical details."
-                return "I found a few possible stops for this trip goal. Open the cards to compare map and practical details."
+                    return f"For this trip goal, I found these related provider results to compare first: {joined}. I kept the list short so you can inspect the cards for map and practical details." + _provider_limits_note(language_code)
+                return "I found a few related provider results for this trip goal. Open the cards to compare map and practical details." + _provider_limits_note(language_code)
             if top_names:
                 joined = "; ".join(top_names)
-                return f"Với mục tiêu chuyến đi này, mình ưu tiên vài điểm dễ cân nhắc trước: {joined}. Mình rút gọn danh sách để bạn so sánh nhanh; mở từng thẻ để xem bản đồ và chi tiết thực tế."
-            return "Mình tìm được vài điểm có thể cân nhắc cho mục tiêu chuyến đi này. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+                return f"Với mục tiêu chuyến đi này, mình tìm được vài kết quả liên quan từ nhà cung cấp để bạn so sánh trước: {joined}. Mình rút gọn danh sách để bạn kiểm tra nhanh; mở từng thẻ để xem bản đồ và chi tiết thực tế." + _provider_limits_note(language_code)
+            return "Mình tìm được vài kết quả liên quan từ nhà cung cấp cho mục tiêu chuyến đi này. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế." + _provider_limits_note(language_code)
         if language_code == "en":
             if top_names:
                 joined = "; ".join(top_names)
-                base = f"I found {result_count} relevant places around Ham Ninh. Start with: {joined}. Open the cards for map and practical details."
+                base = f"I found {result_count} related places around Ham Ninh from provider results. Compare: {joined}. Open the cards for map and practical details."
             else:
-                base = f"I found {result_count} relevant places around Ham Ninh. Open the cards for map and practical details."
+                base = f"I found {result_count} related places around Ham Ninh from provider results. Open the cards for map and practical details."
         elif top_names:
             joined = "; ".join(top_names)
-            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Nên bắt đầu với: {joined}. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+            base = f"Mình tìm được {result_count} địa điểm liên quan quanh Hàm Ninh từ dữ liệu nhà cung cấp. Bạn có thể so sánh: {joined}. Mở từng thẻ để xem bản đồ và chi tiết thực tế."
         else:
-            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+            base = f"Mình tìm được {result_count} địa điểm liên quan quanh Hàm Ninh từ dữ liệu nhà cung cấp. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
         if is_commercial:
-            return _cultural_preface(language_code) + base
-        return base
+            return _cultural_preface(language_code) + base + _provider_limits_note(language_code)
+        return base + _provider_limits_note(language_code)
     if status == PlaceToolStatus.EMPTY:
         return "Mình chưa tìm thấy địa điểm phù hợp quanh Hàm Ninh cho yêu cầu này. Bạn thử nói rõ loại địa điểm, ngân sách hoặc khu vực gần đâu nhé."
     if status == PlaceToolStatus.CREDENTIALS_BLOCKED:
