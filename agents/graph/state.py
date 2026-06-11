@@ -14,13 +14,8 @@ NODE_TIMEOUT_LLM = 25
 NODE_TIMEOUT_TOOL = 30
 
 
-class NodeTimeoutError(Exception):
-    """Raised when a graph node exceeds its execution budget."""
 
-    def __init__(self, node_name: str, timeout_seconds: int) -> None:
-        self.node_name = node_name
-        self.timeout_seconds = timeout_seconds
-        super().__init__(f"Node '{node_name}' timed out after {timeout_seconds}s")
+
 
 
 AgentRunStatus = Literal[

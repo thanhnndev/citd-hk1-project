@@ -30,7 +30,9 @@ def test_graph_has_only_required_nodes():
         "knowledge",
         "places",
         "output_guardrails",
+        "__error_handler__output_guardrails",
     }
+
 
 
 def test_new_turn_resets_turn_scoped_outputs():
@@ -223,6 +225,35 @@ async def test_langfuse_turn_builds_root_trace_and_langgraph_callback():
             "state": {
                 "response_text": "Câu trả lời",
                 "current_step": "completed",
-            },
-        }
-    )
+                },
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_output_guardrails_soft_timeout():
+    from langgraph.errors import NodeError, NodeTimeoutError
+    from agents.graph.ham_ninh_graph import output_guardrails_error_handler
+    
+    state = {
+        "session_id": "test_session",
+        "response_text": "Generated answer",
+        "guardrail_flags": {},
+    }
+    
+    # Create a NodeTimeoutError and wrap it in NodeError
+    timeout_exc = NodeTimeoutError(node="output_guardrails", elapsed=1.5, kind="run", run_timeout=1.0)
+    node_error = NodeError(node="output_guardrails", error=timeout_exc)
+
+    
+    # Call the error handler
+    result = output_guardrails_error_handler(state, node_error)
+    
+    # Check that it did not raise an error, but returned a degraded state update
+    assert "guardrail_flags" in result
+    assert result["guardrail_flags"]["output_grounding"]["verdict"] == "degraded"
+    assert result["guardrail_flags"]["output_grounding"]["reason"] == "timeout"
+    assert "messages" in result
+    assert result["messages"][0]["content"] == "Generated answer"
+
+

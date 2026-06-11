@@ -10,7 +10,7 @@ import pytest
 from agents.graph.streaming import (
     StreamingAdapter,
 )
-from agents.graph.state import NodeTimeoutError
+from langgraph.errors import NodeTimeoutError
 
 
 class FakeCitation:
@@ -307,7 +307,7 @@ async def test_adapter_handles_node_timeout_error(adapter):
                 "rag_agent": {}
             }
         }
-        raise NodeTimeoutError("rag_agent", 15)
+        raise NodeTimeoutError(node="rag_agent", elapsed=15.0, kind="run", run_timeout=15.0)
     
     events = await _collect_events(adapter.adapt_stream(fake_stream()))
     error_events = [e for e in events if e.startswith("[ERROR]")]

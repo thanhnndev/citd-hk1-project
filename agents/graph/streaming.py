@@ -13,7 +13,7 @@ from typing import Any
 
 import structlog
 
-from agents.graph.state import NodeTimeoutError
+from langgraph.errors import NodeTimeoutError
 
 logger = structlog.get_logger(__name__)
 
@@ -101,11 +101,11 @@ class StreamingAdapter:
         except NodeTimeoutError as exc:
             logger.error(
                 "graph.node_timeout",
-                node_name=exc.node_name,
-                timeout_seconds=exc.timeout_seconds,
+                node_name=exc.node,
+                timeout_seconds=exc.run_timeout or exc.idle_timeout or 0.0,
             )
             yield "[STATUS] failed-recoverable"
-            yield _format_timeout_error(exc.node_name, exc.timeout_seconds)
+            yield _format_timeout_error(exc.node, exc.run_timeout or exc.idle_timeout or 0.0)
         except Exception as exc:
             error_type = type(exc).__name__
             logger.error("graph.execution_error", error_type=error_type, error=str(exc))

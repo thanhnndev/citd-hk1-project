@@ -28,28 +28,45 @@ from agents.graph.state import (
     NODE_TIMEOUT_LLM,
     NODE_TIMEOUT_ROUTER,
     NODE_TIMEOUT_TOOL,
-    NodeTimeoutError,
 )
+from langgraph.errors import NodeError, NodeTimeoutError
 from agents.graph.tracing import trace_graph_turn
 
 logger = structlog.get_logger(__name__)
 
 
-def _with_timeout(node, name: str, seconds: int):
-    """Apply one deterministic timeout policy to a graph node."""
-    accepts_config = len(inspect.signature(node).parameters) >= 2
+TIMEOUTS = {
+    "input_guardrails": NODE_TIMEOUT_GUARDRAILS,
+    "intent_router": NODE_TIMEOUT_ROUTER,
+    "conversational": NODE_TIMEOUT_LLM,
+    "knowledge": NODE_TIMEOUT_LLM,
+    "places": NODE_TIMEOUT_TOOL,
+    "output_guardrails": NODE_TIMEOUT_GUARDRAILS,
+}
 
-    async def wrapped(
-        state: AgentState,
-        config: RunnableConfig | None = None,
-    ) -> dict[str, Any]:
-        try:
-            call = node(state, config) if accepts_config else node(state)
-            return await asyncio.wait_for(call, timeout=seconds)
-        except asyncio.TimeoutError as exc:
-            raise NodeTimeoutError(name, seconds) from exc
 
-    return wrapped
+def output_guardrails_error_handler(state: AgentState, error: NodeError) -> dict[str, Any]:
+    """Gracefully degrade output grounding verification when it times out."""
+    if isinstance(error.error, NodeTimeoutError):
+        logger.warning(
+            "graph.node_soft_timeout",
+            node=error.node,
+            timeout_seconds=error.error.run_timeout,
+            session_id=state.get("session_id", ""),
+        )
+        flags = dict(state.get("guardrail_flags") or {})
+        flags["output_grounding"] = {
+            "verdict": "degraded",
+            "reason": "timeout",
+            "severity": "medium",
+            "details": f"Node '{error.node}' timed out after {error.error.run_timeout}s",
+        }
+        update: dict[str, Any] = {"guardrail_flags": flags}
+        response_text = state.get("response_text", "")
+        if response_text:
+            update["messages"] = [{"role": "assistant", "content": response_text}]
+        return update
+    raise error.error
 
 
 @dataclass
@@ -86,27 +103,34 @@ class HamNinhGraph:
         builder = StateGraph(AgentState)
         builder.add_node(
             "input_guardrails",
-            _with_timeout(input_guardrails_node, "input_guardrails", NODE_TIMEOUT_GUARDRAILS),
+            input_guardrails_node,
+            timeout=NODE_TIMEOUT_GUARDRAILS,
         )
         builder.add_node(
             "intent_router",
-            _with_timeout(intent_router_node, "intent_router", NODE_TIMEOUT_ROUTER),
+            intent_router_node,
+            timeout=NODE_TIMEOUT_ROUTER,
         )
         builder.add_node(
             "conversational",
-            _with_timeout(conversational_node, "conversational", NODE_TIMEOUT_LLM),
+            conversational_node,
+            timeout=NODE_TIMEOUT_LLM,
         )
         builder.add_node(
             "knowledge",
-            _with_timeout(rag_agent_node, "knowledge", NODE_TIMEOUT_LLM),
+            rag_agent_node,
+            timeout=NODE_TIMEOUT_LLM,
         )
         builder.add_node(
             "places",
-            _with_timeout(maps_agent_node, "places", NODE_TIMEOUT_TOOL),
+            maps_agent_node,
+            timeout=NODE_TIMEOUT_TOOL,
         )
         builder.add_node(
             "output_guardrails",
-            _with_timeout(output_guardrails_node, "output_guardrails", NODE_TIMEOUT_GUARDRAILS),
+            output_guardrails_node,
+            timeout=NODE_TIMEOUT_GUARDRAILS,
+            error_handler=output_guardrails_error_handler,
         )
 
         builder.add_edge(START, "input_guardrails")

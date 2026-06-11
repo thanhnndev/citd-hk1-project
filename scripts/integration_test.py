@@ -1255,7 +1255,7 @@ def test_langfuse_trace_topology(
 
 
 def test_per_node_timeout_audit() -> TestResult:
-    """Test 10: Per-node timeout audit — verify TimeoutPolicy covers all nodes."""
+    """Test 10: Per-node timeout audit — verify TimeoutPolicy covers all nodes using native LangGraph settings."""
     t0 = time.perf_counter()
 
     print("  🔧 Per-node timeout audit: reading ham_ninh_graph.py")
@@ -1275,49 +1275,58 @@ def test_per_node_timeout_audit() -> TestResult:
 
     checks = []
 
-    # Check 1: nodes are wrapped by the shared timeout helper
-    has_timeout_policy = "def _with_timeout" in source
-    checks.append(("Shared timeout wrapper exists", has_timeout_policy))
+    # Check 1: TIMEOUTS dictionary exists
+    has_timeouts_dict = "TIMEOUTS =" in source
+    checks.append(("TIMEOUTS dictionary exists", has_timeouts_dict))
 
-    # Check 2: all workflow nodes are registered with timeout wrappers
+    # Check 2: all workflow nodes are registered with timeout configurations in TIMEOUTS
     expected_nodes = [
         "input_guardrails", "intent_router", "conversational",
         "knowledge", "places", "output_guardrails",
     ]
 
-    # Look for node names as keys in the timeouts dict
-    nodes_with_timeouts = []
-    nodes_missing = []
+    nodes_in_timeouts = []
+    nodes_missing_timeouts = []
     for node in expected_nodes:
-        # Match pattern: "node_name": NODE_TIMEOUT_* or "node_name": <number>
         pattern = rf'"{node}"\s*:'
         if re.search(pattern, source):
-            nodes_with_timeouts.append(node)
+            nodes_in_timeouts.append(node)
         else:
-            nodes_missing.append(node)
+            nodes_missing_timeouts.append(node)
 
-    all_nodes_covered = len(nodes_missing) == 0
+    all_nodes_covered = len(nodes_missing_timeouts) == 0
     checks.append(
-        (f"All 6 nodes have timeout entries ({len(nodes_with_timeouts)}/6)", all_nodes_covered)
+        (f"All 6 nodes have timeout dict entries ({len(nodes_in_timeouts)}/6)", all_nodes_covered)
     )
-    if nodes_missing:
-        checks.append((f"Missing timeouts: {', '.join(nodes_missing)}", False))
+    if nodes_missing_timeouts:
+        checks.append((f"Missing in TIMEOUTS dict: {', '.join(nodes_missing_timeouts)}", False))
 
-    # Check 3: _wrap_with_timeout function exists
-    has_wrapper = "def _wrap_with_timeout" in source
-    checks.append(("_wrap_with_timeout function exists", has_wrapper))
+    # Check 3: each node is registered with a native timeout= parameter
+    nodes_with_native_timeout = []
+    nodes_missing_native_timeout = []
+    for node in expected_nodes:
+        # Match pattern: add_node( "node_name", ..., timeout=
+        # Since it can span multiple lines: add_node\(\s*"{node}",[\s\S]*?timeout=
+        pattern = rf'add_node\(\s*"{node}",[\s\S]*?timeout='
+        if re.search(pattern, source):
+            nodes_with_native_timeout.append(node)
+        else:
+            nodes_missing_native_timeout.append(node)
 
-    # Check 4: _wrap_with_timeout is used in graph building
-    uses_wrapper = "_wrap_with_timeout(" in source
-    checks.append(("_wrap_with_timeout is called in _build_graph", uses_wrapper))
+    all_native_timeouts = len(nodes_missing_native_timeout) == 0
+    checks.append(
+        (f"All 6 nodes have native timeout parameter in add_node ({len(nodes_with_native_timeout)}/6)", all_native_timeouts)
+    )
+    if nodes_missing_native_timeout:
+        checks.append((f"Missing native timeout= parameter: {', '.join(nodes_missing_native_timeout)}", False))
 
-    # Check 5: asyncio.wait_for is used in the wrapper
-    has_wait_for = "asyncio.wait_for" in source
-    checks.append(("asyncio.wait_for used for timeout enforcement", has_wait_for))
+    # Check 4: output_guardrails node has error_handler= configured
+    has_error_handler = re.search(r'add_node\(\s*"output_guardrails",[\s\S]*?error_handler=', source) is not None
+    checks.append(("output_guardrails uses error_handler for soft-timeout", has_error_handler))
 
     passed = all(ok for _, ok in checks)
     details_lines = [f"{'✅' if ok else '❌'} {desc}" for desc, ok in checks]
-    details_lines.append(f"Nodes with timeouts: {', '.join(nodes_with_timeouts)}")
+    details_lines.append(f"Nodes with timeouts: {', '.join(nodes_in_timeouts)}")
 
     return TestResult(
         name="Per-Node Timeout Audit",
@@ -1325,6 +1334,7 @@ def test_per_node_timeout_audit() -> TestResult:
         details="\n".join(details_lines),
         duration_ms=elapsed,
     )
+
 
 
 def test_places_degradation(base_url: str) -> TestResult:
