@@ -23,6 +23,7 @@ type GooglePlaceMapProps = Readonly<{
   unavailableLabel: string;
   emptyLabel: string;
   selectPlaceLabel: string;
+  apiKey: string;
 }>;
 
 export function GooglePlaceMap({
@@ -33,18 +34,18 @@ export function GooglePlaceMap({
   unavailableLabel,
   emptyLabel,
   selectPlaceLabel,
+  apiKey,
 }: GooglePlaceMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
-  const markersRef = useRef<google.maps.Marker[]>([]);
+  const markersRef = useRef<any[]>([]);
   const [mapError, setMapError] = useState<string | null>(null);
   const [isSdkLoaded, setIsSdkLoaded] = useState(false);
   
-  // Use Google Maps JS API Key (exposes to browser safely via NEXT_PUBLIC prefix)
-  const token = process.env.NEXT_PUBLIC_GOOGLE_MAPS_JS_API_KEY;
+  const token = apiKey;
   const pinnedPlaces = useMemo(() => places.filter(hasLocation), [places]);
 
-  // Load Google Maps JS SDK dynamically
+  // Load Google Maps JS SDK dynamically with async loading + callback
   useEffect(() => {
     if (!token) return;
 
@@ -56,24 +57,25 @@ export function GooglePlaceMap({
     const scriptId = "google-maps-sdk";
     let script = document.getElementById(scriptId) as HTMLScriptElement;
     
-    const handleLoad = () => setIsSdkLoaded(true);
-    const handleError = () => setMapError("map-unavailable");
+    const handleCallback = () => {
+      setIsSdkLoaded(true);
+    };
+    (window as any).initGoogleMapCallback = handleCallback;
 
     if (!script) {
       script = document.createElement("script");
       script.id = scriptId;
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${token}`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${token}&loading=async&callback=initGoogleMapCallback`;
       script.async = true;
       script.defer = true;
       document.head.appendChild(script);
     }
 
-    script.addEventListener("load", handleLoad);
-    script.addEventListener("error", handleError);
-
     return () => {
-      script.removeEventListener("load", handleLoad);
-      script.removeEventListener("error", handleError);
+      // Keep global callback clean if unmounted before loading
+      if (document.getElementById(scriptId) && !(window as any).google?.maps) {
+        delete (window as any).initGoogleMapCallback;
+      }
     };
   }, [token]);
 
@@ -81,94 +83,125 @@ export function GooglePlaceMap({
   useEffect(() => {
     if (!isSdkLoaded || !containerRef.current || !token || pinnedPlaces.length === 0 || mapRef.current) return;
 
-    try {
-      mapRef.current = new google.maps.Map(containerRef.current, {
-        center: HAM_NINH_CENTER,
-        zoom: 12,
-        mapTypeControl: false,
-        streetViewControl: false,
-        fullscreenControl: false,
-        zoomControl: true,
-        // Premium minimalist styles (remove Google Maps default POI clutter)
-        styles: [
-          {
-            featureType: "poi",
-            elementType: "labels",
-            stylers: [{ visibility: "off" }],
-          },
-          {
-            featureType: "transit",
-            elementType: "labels",
-            stylers: [{ visibility: "off" }],
-          },
-        ],
-      });
-    } catch {
-      setMapError("map-unavailable");
+    let active = true;
+
+    async function initMap() {
+      try {
+        const { Map } = await google.maps.importLibrary("maps") as google.maps.MapsLibrary;
+        if (!active || !containerRef.current) return;
+
+        mapRef.current = new Map(containerRef.current, {
+          center: HAM_NINH_CENTER,
+          zoom: 12,
+          mapId: "DEMO_MAP_ID", // Required for AdvancedMarkerElement to work
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
+          zoomControl: true,
+          // Custom styles for clean, non-cluttered map
+          styles: [
+            {
+              featureType: "poi",
+              elementType: "labels",
+              stylers: [{ visibility: "off" }],
+            },
+            {
+              featureType: "transit",
+              elementType: "labels",
+              stylers: [{ visibility: "off" }],
+            },
+          ],
+        });
+      } catch {
+        if (active) {
+          setMapError("map-unavailable");
+        }
+      }
     }
 
+    void initMap();
+
     return () => {
-      markersRef.current.forEach((marker) => marker.setMap(null));
+      active = false;
+      markersRef.current.forEach((marker) => {
+        marker.map = null;
+      });
       markersRef.current = [];
       mapRef.current = null;
     };
   }, [isSdkLoaded, pinnedPlaces.length, token]);
 
-  // Update Markers and Fit Bounds
+  // Update Markers and Fit Bounds using AdvancedMarkerElement
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isSdkLoaded) return;
 
-    // Clear existing markers
-    markersRef.current.forEach((marker) => marker.setMap(null));
+    let active = true;
 
-    // Place custom styled pins
-    markersRef.current = pinnedPlaces.map((place, index) => {
-      const isSelected = selectedPlaceId === place.place_id;
+    async function updateMarkers() {
+      try {
+        const { AdvancedMarkerElement } = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
+        const currentMap = mapRef.current;
+        if (!active || !currentMap) return;
 
-      const marker = new google.maps.Marker({
-        position: { lat: place.location.lat, lng: place.location.lng },
-        map,
-        title: `${selectPlaceLabel}: ${place.display_name}`,
-        label: {
-          text: String(index + 1),
-          color: isSelected ? "#ffffff" : "#1e293b",
-          fontWeight: "bold",
-          fontSize: "13px",
-        },
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 18,
-          // Match primary theme color (teal) when selected, and secondary color (orange) when idle
-          fillColor: isSelected ? "#0d767d" : "#f59e0b",
-          fillOpacity: 1,
-          strokeColor: isSelected ? "#f59e0b" : "#ffffff",
-          strokeWeight: 2,
-          labelOrigin: new google.maps.Point(0, 0),
-        },
-      });
-
-      marker.addListener("click", () => {
-        onMarkerSelect(place.place_id);
-      });
-
-      return marker;
-    });
-
-    // Fit bounds dynamically to frame all recommended pins
-    if (pinnedPlaces.length > 0) {
-      const bounds = new google.maps.LatLngBounds();
-      pinnedPlaces.forEach((place) => bounds.extend({ lat: place.location.lat, lng: place.location.lng }));
-      map.fitBounds(bounds);
-
-      // Prevent zooming in too close if there is only a single result
-      if (pinnedPlaces.length === 1) {
-        const listener = google.maps.event.addListener(map, "idle", () => {
-          if (map.getZoom()! > 14) map.setZoom(14);
-          google.maps.event.removeListener(listener);
+        // Clear existing markers
+        markersRef.current.forEach((marker) => {
+          marker.map = null;
         });
+        markersRef.current = [];
+
+        // Place custom HTML styled markers
+        markersRef.current = pinnedPlaces.map((place, index) => {
+          const isSelected = selectedPlaceId === place.place_id;
+
+          // Custom styled HTML element for the marker
+          const pinElement = document.createElement("div");
+          pinElement.className = [
+            "grid size-9 place-items-center rounded-full border-2 text-sm font-bold shadow-md transition-all duration-300 hover:scale-110 cursor-pointer",
+            isSelected
+              ? "bg-[#0d767d] border-[#f59e0b] text-white ring-4 ring-[#0d767d]/30 scale-110 z-10"
+              : "bg-[#f59e0b] border-white text-[#1e293b] hover:bg-[#d97706]"
+          ].join(" ");
+          pinElement.textContent = String(index + 1);
+
+          const marker = new AdvancedMarkerElement({
+            map: currentMap,
+            position: { lat: place.location.lat, lng: place.location.lng },
+            content: pinElement,
+            title: `${selectPlaceLabel}: ${place.display_name}`,
+          });
+
+          marker.addListener("click", () => {
+            onMarkerSelect(place.place_id);
+          });
+
+          return marker;
+        });
+
+        // Fit bounds
+        if (pinnedPlaces.length > 0) {
+          const bounds = new google.maps.LatLngBounds();
+          pinnedPlaces.forEach((place) => bounds.extend({ lat: place.location.lat, lng: place.location.lng }));
+          currentMap.fitBounds(bounds);
+
+          // Prevent excessive zoom for single marker
+          if (pinnedPlaces.length === 1) {
+            const listener = google.maps.event.addListener(currentMap, "idle", () => {
+              if (currentMap.getZoom()! > 14) currentMap.setZoom(14);
+              google.maps.event.removeListener(listener);
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load map markers:", err);
       }
     }
+
+    void updateMarkers();
+
+    return () => {
+      active = false;
+    };
   }, [isSdkLoaded, onMarkerSelect, pinnedPlaces, selectPlaceLabel, selectedPlaceId]);
 
   if (!token) {

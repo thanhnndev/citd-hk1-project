@@ -48,6 +48,7 @@ type MapProofTranslations = Readonly<{
 type PlaceProofMapProps = Readonly<{
   locale: string;
   translations: MapProofTranslations;
+  apiKey: string;
 }>;
 
 type RequestState = "idle" | "loading" | "ready" | "error";
@@ -70,7 +71,7 @@ function normalizePercent(value: number | null | undefined) {
   return Math.round(Math.max(0, Math.min(1, value)) * 100);
 }
 
-export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
+export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapProps) {
   const language = locale === "en" ? "en" : "vi";
   const [query, setQuery] = useState(translations.defaultQuery);
   const [response, setResponse] = useState<ChatResponse | null>(null);
@@ -179,6 +180,7 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
                 unavailableLabel={translations.mapUnavailable}
                 emptyLabel={translations.noPins}
                 selectPlaceLabel={translations.selectPlace}
+                apiKey={apiKey}
               />
               <CardContent className="p-5">
                 <div className="grid gap-3 sm:grid-cols-2">
