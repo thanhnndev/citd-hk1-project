@@ -119,7 +119,7 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-6">
         <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr] lg:items-end">
           <div className="space-y-5">
-            <Badge className="w-fit bg-primary/10 text-primary shadow-none">/api/chat proof</Badge>
+            <Badge className="w-fit bg-primary/10 text-primary shadow-none">{locale === "vi" ? "Bản đồ tương tác" : "Interactive Map"}</Badge>
             <div className="space-y-3">
               <h1 className="max-w-3xl text-4xl font-semibold tracking-tight md:text-6xl">{translations.title}</h1>
               <p className="max-w-2xl text-base leading-7 text-muted-foreground md:text-lg">{translations.intro}</p>
