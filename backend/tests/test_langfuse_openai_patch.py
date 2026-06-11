@@ -199,6 +199,19 @@ class TestIntegrationWithNodeServices:
         # All node functions that use services.llm_client will now
         # automatically use the patched client for tracing
 
+    def test_llm_answer_service_reuses_instrumented_client(self):
+        """RAG answer generation must stay inside the same trace context."""
+        from agents.services.llm_answer_service import LLMAnswerService
+
+        instrumented_client = MagicMock()
+        service = LLMAnswerService(
+            client=instrumented_client,
+            model="gpt-4o-mini",
+        )
+
+        assert service._client is instrumented_client
+        assert service.model == "gpt-4o-mini"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -30,6 +30,7 @@ from agents.graph.state import (
     NODE_TIMEOUT_TOOL,
     NodeTimeoutError,
 )
+from agents.graph.tracing import trace_graph_turn
 
 logger = structlog.get_logger(__name__)
 
@@ -185,11 +186,21 @@ class HamNinhGraph:
         }
 
     @staticmethod
-    def _config(session_id: str, **values: Any) -> dict[str, Any]:
-        return {"configurable": {"thread_id": session_id, **values}}
+    def _config(
+        session_id: str,
+        trace_config: dict[str, Any] | None = None,
+        **values: Any,
+    ) -> dict[str, Any]:
+        return {
+            **(trace_config or {}),
+            "configurable": {"thread_id": session_id, **values},
+        }
 
     @staticmethod
-    def _result(state: dict[str, Any]) -> GraphResult:
+    def _result(
+        state: dict[str, Any],
+        langfuse_trace_id: str | None = None,
+    ) -> GraphResult:
         interrupts = state.get("__interrupt__") or ()
         if interrupts:
             payload = getattr(interrupts[0], "value", interrupts[0])
@@ -199,6 +210,7 @@ class HamNinhGraph:
                 guardrail_flags=state.get("guardrail_flags", {}),
                 interrupted=True,
                 interrupt=payload if isinstance(payload, dict) else {"message": str(payload)},
+                langfuse_trace_id=langfuse_trace_id,
             )
         return GraphResult(
             response_text=state.get("response_text", ""),
@@ -209,6 +221,7 @@ class HamNinhGraph:
             guardrail_flags=state.get("guardrail_flags", {}),
             blocked=bool(state.get("blocked")),
             reasoning_log=state.get("reasoning_log"),
+            langfuse_trace_id=langfuse_trace_id,
         )
 
     async def answer(
@@ -231,20 +244,36 @@ class HamNinhGraph:
             budget_filter=budget_filter,
             accessibility_required=accessibility_required,
         )
-        config = self._config(
-            session_id,
-            user_location=user_location,
-            budget_filter=budget_filter,
-            accessibility_required=accessibility_required,
-        )
-        return self._result(await self.graph.ainvoke(state, config))
+        async with trace_graph_turn(
+            langfuse_client=self._langfuse_client,
+            session_id=session_id,
+            operation="answer",
+            input_data=state,
+        ) as trace:
+            config = self._config(
+                session_id,
+                trace.config,
+                user_location=user_location,
+                budget_filter=budget_filter,
+                accessibility_required=accessibility_required,
+            )
+            final_state = await self.graph.ainvoke(state, config)
+            trace.finish(final_state)
+            return self._result(final_state, trace.trace_id)
 
     async def resume(self, *, session_id: str, resume_value: dict[str, Any]) -> GraphResult:
-        state = await self.graph.ainvoke(
-            Command(resume=resume_value),
-            self._config(session_id),
-        )
-        return self._result(state)
+        async with trace_graph_turn(
+            langfuse_client=self._langfuse_client,
+            session_id=session_id,
+            operation="resume",
+            input_data={"resume": resume_value},
+        ) as trace:
+            state = await self.graph.ainvoke(
+                Command(resume=resume_value),
+                self._config(session_id, trace.config),
+            )
+            trace.finish(state)
+            return self._result(state, trace.trace_id)
 
     async def stream_sse(
         self,
@@ -268,26 +297,35 @@ class HamNinhGraph:
             budget_filter=budget_filter,
             accessibility_required=accessibility_required,
         )
-        config = self._config(
-            session_id,
-            user_location=user_location,
-            budget_filter=budget_filter,
-            accessibility_required=accessibility_required,
-        )
-        adapter = StreamingAdapter()
-        async for marker in adapter.adapt_stream(
-            self.graph.astream(state, config, stream_mode=["updates", "custom"])
-        ):
-            yield marker
+        async with trace_graph_turn(
+            langfuse_client=self._langfuse_client,
+            session_id=session_id,
+            operation="stream",
+            input_data=state,
+        ) as trace:
+            config = self._config(
+                session_id,
+                trace.config,
+                user_location=user_location,
+                budget_filter=budget_filter,
+                accessibility_required=accessibility_required,
+            )
+            adapter = StreamingAdapter()
+            async for marker in adapter.adapt_stream(
+                self.graph.astream(state, config, stream_mode=["updates", "custom"])
+            ):
+                yield marker
 
-        snapshot = self.graph.get_state(config)
-        for task in getattr(snapshot, "tasks", ()) or ():
-            for item in getattr(task, "interrupts", ()) or ():
-                payload = getattr(item, "value", None)
-                if isinstance(payload, dict):
-                    yield "[STATUS] waiting_for_user_input"
-                    yield f"[INTERRUPT] {json.dumps(payload, ensure_ascii=False)}"
-                    return
+            snapshot = self.graph.get_state(config)
+            final_state = dict(getattr(snapshot, "values", {}) or {})
+            trace.finish(final_state)
+            for task in getattr(snapshot, "tasks", ()) or ():
+                for item in getattr(task, "interrupts", ()) or ():
+                    payload = getattr(item, "value", None)
+                    if isinstance(payload, dict):
+                        yield "[STATUS] waiting_for_user_input"
+                        yield f"[INTERRUPT] {json.dumps(payload, ensure_ascii=False)}"
+                        return
 
 
 async def create_ham_ninh_graph(

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncGenerator
-from typing import List
+from typing import Any, List
 
 import openai
 import structlog
@@ -117,10 +117,14 @@ class LLMAnswerService:
         )
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        client: Any | None = None,
+        model: str | None = None,
+    ) -> None:
         settings = get_settings()
-        self._client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model: str = settings.OPENAI_CHAT_MODEL
+        self._client = client or openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.model = model or settings.OPENAI_CHAT_MODEL
 
     async def answer(
         self,

@@ -32,6 +32,7 @@ flowchart TD
 - `places_node.py`: place search, comparison follow-ups, and location interrupt.
 - `output_node.py`: final grounding verification.
 - `streaming.py`: LangGraph update/custom events to the existing SSE contract.
+- `tracing.py`: one Langfuse root trace per user turn.
 
 ## State Rules
 
@@ -41,6 +42,19 @@ grounded place candidate set remain available for follow-up questions.
 
 Place comparisons reuse the previous candidate set. A new provider search is
 not made for comparative follow-ups.
+
+## Langfuse Tracing
+
+Each `answer`, `stream`, or `resume` execution creates one
+`ham-ninh-request` trace. The Langfuse callback is passed through LangGraph's
+`RunnableConfig`, so graph nodes and state updates appear as child
+observations.
+
+Answer generation, routing, and groundedness checks remain separate child
+generations because they are separate model calls. They share the same root
+trace for the user turn. The root input contains the initial state; its output
+contains the final response and complete final state. The API response exposes
+that root ID as `langfuse_trace_id`.
 
 ## Failure Rules
 

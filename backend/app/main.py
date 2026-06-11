@@ -235,7 +235,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.bm25_vectorizer = bm25
             app.state.qdrant_service = qdrant_service
             app.state.embedding_service = embedding_service
-            app.state.llm_service = LLMAnswerService()
         except Exception as exc:
             logger.warning("hybrid.init_failed", error=str(exc))
 
@@ -271,10 +270,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             retriever=app.state.hybrid_retriever or app.state.retriever,
             places_service=app.state.place_recommendation_service,
             cohere_reranker=cohere_reranker,
-            llm_answer_service=app.state.llm_service or LLMAnswerService(),
+            llm_answer_service=LLMAnswerService(
+                client=openai_client,
+                model="gpt-4o-mini",
+            ),
             semantic_cache=app.state.semantic_cache,
             embedding_service=app.state.embedding_service,
         )
+        app.state.llm_service = node_services.llm_answer_service
 
         # Create HamNinhGraph with AsyncPostgresSaver if DATABASE_URL is available
         dsn = os.environ.get("DATABASE_URL")
