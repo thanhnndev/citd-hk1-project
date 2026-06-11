@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
 import { ExternalLink, Loader2, Navigation, Search, ShieldAlert, Star } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -78,6 +78,7 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
   const [requestState, setRequestState] = useState<RequestState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sessionId] = useState(() => crypto.randomUUID());
+  const inFlightRef = useRef(false);
 
   const places = response?.places ?? [];
   const selectedPlace = places.find((place) => place.place_id === selectedPlaceId) ?? places[0] ?? null;
@@ -85,7 +86,8 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
 
   const runSearch = useCallback(async (nextQuery: string) => {
     const prompt = nextQuery.trim();
-    if (!prompt) return;
+    if (!prompt || inFlightRef.current) return;
+    inFlightRef.current = true;
     setRequestState("loading");
     setErrorMessage(null);
 
@@ -99,6 +101,8 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
       setSelectedPlaceId(null);
       setErrorMessage(error instanceof Error ? error.message : translations.error);
       setRequestState("error");
+    } finally {
+      inFlightRef.current = false;
     }
   }, [language, sessionId, translations.error]);
 
