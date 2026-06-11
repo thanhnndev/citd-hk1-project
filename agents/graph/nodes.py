@@ -37,6 +37,7 @@ import hashlib
 import inspect
 import math
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -133,6 +134,69 @@ def _routing_tier_from_confidence(confidence: float) -> str:
     if confidence >= 0.45:
         return "soft"
     return "fallback"
+
+
+def _fold_text(message: str) -> str:
+    """Normalize user text for coarse routing decisions without brittle regexes."""
+    text = unicodedata.normalize("NFKD", message or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(text.lower().split())
+
+
+def _is_specific_place_discovery_request(message: str) -> bool:
+    """Return true when the user asks for concrete venues or itinerary options."""
+    text = _fold_text(message)
+    discovery_terms = (
+        "tim", "goi y", "de xuat", "recommend", "suggest", "find",
+        "o dau", "cho nao", "dia diem nao", "quan nao", "ghe dau",
+    )
+    concrete_place_terms = (
+        "quan", "nha hang", "cafe", "ca phe", "hai san", "homestay",
+        "khach san", "dia diem", "choi", "tham quan", "lich trinh",
+    )
+    return (
+        any(term in text for term in discovery_terms)
+        and any(term in text for term in concrete_place_terms)
+    )
+
+
+def _is_responsible_advice_request(message: str) -> bool:
+    """Return true for ethical/suitability advice where blind Places search is weak."""
+    text = _fold_text(message)
+    audience_or_risk_terms = (
+        "nguoi khuyet tat", "xe lan", "tiep can", "accessibility", "accessible",
+        "wheelchair", "disabled", "nguoi gia", "nguoi lon tuoi", "elderly",
+        "tre em", "children", "kids", "gia dinh", "family", "sinh vien",
+        "ngan sach", "budget", "gia re", "an toan", "safety", "nguy hiem",
+        "risk", "dangerous", "dia hinh", "terrain", "moi truong",
+        "environment", "ton trong", "dia phuong", "local community",
+    )
+    advice_terms = (
+        "co nen", "nen", "phu hop", "duoc khong", "co duoc khong",
+        "luu y", "canh bao", "rui ro", "nguy hiem", "an toan",
+        "dia hinh", "tiep can", "kiem tra", "chac chan khong",
+    )
+    return (
+        any(term in text for term in audience_or_risk_terms)
+        and any(term in text for term in advice_terms)
+    )
+
+
+def _should_route_responsible_advice_to_rag(message: str) -> bool:
+    """Prefer RAG/advice for vulnerable-group suitability unless it is a service search."""
+    if not _is_responsible_advice_request(message):
+        return False
+
+    text = _fold_text(message)
+    service_search_terms = (
+        "quan", "nha hang", "cafe", "ca phe", "homestay", "khach san",
+    )
+    if _is_specific_place_discovery_request(message) and any(
+        term in text for term in service_search_terms
+    ):
+        return False
+
+    return True
 
 
 def requires_user_location_heuristic(message: str) -> bool:
@@ -667,8 +731,11 @@ Classify the user's message into one of these intents:
 - cultural_query: questions about culture, history, fishing life, local food background
 - food_culture: specifically about food traditions, recipes, local specialties
 - restaurant_search: finding restaurants, cafes, hotels, places, directions, maps
-  Also use this for requests asking where to go with children/family, because
-  concrete venue suitability must be checked against provider place data.
+  Use this for explicit venue discovery such as finding restaurants, cafes,
+  hotels, attractions, or routes.
+  Do not use this for suitability, risk, budget, accessibility, family,
+  elderly, disability, terrain, safety, or responsible-travel advice unless
+  the user clearly asks to find concrete venues.
 - navigation: asking for directions, routes, maps
 - conversational: greetings, thanks, capability questions, simple acknowledgments
 - unknown: anything that does not fit the above
@@ -919,7 +986,14 @@ async def supervisor_node(state: AgentState) -> dict[str, Any]:
     tool_call_allowed = True
     tool_call_reason = None
 
-    if intent in ("cultural_query", "food_culture"):
+    if (
+        intent in ("restaurant_search", "navigation", "unknown")
+        and _should_route_responsible_advice_to_rag(state.get("message", ""))
+    ):
+        next_node = "rag_agent"
+        tool_call_allowed = True
+        tool_call_reason = "responsible_travel_advice"
+    elif intent in ("cultural_query", "food_culture"):
         next_node = "rag_agent"
         tool_call_allowed = True
         tool_call_reason = "knowledge_retrieval"

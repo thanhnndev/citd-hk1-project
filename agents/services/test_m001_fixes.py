@@ -207,3 +207,41 @@ async def test_supervisor_allows_places_call_for_new_discovery() -> None:
     assert result["next_node"] == "maps_agent"
     assert result["tool_call_allowed"] is True
     assert result["tool_call_reason"] == "new_place_discovery"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_routes_vulnerable_group_advice_to_rag() -> None:
+    state = {
+        "session_id": "test-session",
+        "message": "Nguoi di xe lan co nen den lang chai Ham Ninh khong?",
+        "language": "vi",
+        "intent": "restaurant_search",
+        "routing_tier": "strict",
+        "guardrail_flags": {},
+        "last_places": [],
+    }
+
+    result = await supervisor_node(state)
+
+    assert result["next_node"] == "rag_agent"
+    assert result["tool_call_allowed"] is True
+    assert result["tool_call_reason"] == "responsible_travel_advice"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_keeps_specific_service_search_on_maps() -> None:
+    state = {
+        "session_id": "test-session",
+        "message": "Goi y quan ca phe phu hop cho sinh vien ngan sach thap o Ham Ninh",
+        "language": "vi",
+        "intent": "restaurant_search",
+        "routing_tier": "strict",
+        "guardrail_flags": {},
+        "last_places": [],
+    }
+
+    result = await supervisor_node(state)
+
+    assert result["next_node"] == "maps_agent"
+    assert result["tool_call_allowed"] is True
+    assert result["tool_call_reason"] == "new_place_discovery"
