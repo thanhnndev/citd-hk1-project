@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from agents.graph.streaming import (
     StreamingAdapter,
-    stream_graph_to_sse,
-    emit_token,
-    emit_status,
-    emit_custom,
 )
 from agents.graph.state import NodeTimeoutError
 
@@ -118,7 +114,7 @@ async def test_adapter_maps_conversational_response(adapter):
 
 
 @pytest.mark.asyncio
-async def test_adapter_maps_rag_agent(adapter):
+async def test_adapter_maps_knowledge_node(adapter):
     """RAG work is exposed as evidence gathering."""
     async def fake_stream():
         yield {
@@ -133,7 +129,7 @@ async def test_adapter_maps_rag_agent(adapter):
 
 
 @pytest.mark.asyncio
-async def test_adapter_maps_maps_agent(adapter):
+async def test_adapter_maps_places_node(adapter):
     """Place lookup is exposed as place gathering."""
     async def fake_stream():
         yield {
@@ -392,66 +388,6 @@ async def test_adapter_handles_dict_places_and_citations(adapter):
     
     places_data = json.loads(places_events[0].replace("[PLACES] ", ""))
     assert places_data[0]["name"] == "Beach"
-
-
-@pytest.mark.asyncio
-async def test_stream_graph_to_sse_convenience_function(mock_graph):
-    """stream_graph_to_sse wraps adapter for convenient graph streaming."""
-    async def fake_astream(*args, **kwargs):
-        yield {
-            "type": "updates",
-            "data": {
-                "conversational": {"response_text": "Test response"}
-            }
-        }
-    
-    mock_graph.astream = fake_astream
-    
-    state = {"session_id": "test", "message": "hello"}
-    config = {"configurable": {"thread_id": "test"}}
-    
-    events = await _collect_events(stream_graph_to_sse(mock_graph, state, config))
-    assert "[MESSAGE] Test response" in events
-
-
-@pytest.mark.asyncio
-async def test_stream_graph_to_sse_handles_graph_failure(mock_graph):
-    """stream_graph_to_sse yields [ERROR] on graph execution failure."""
-    async def failing_astream(*args, **kwargs):
-        raise RuntimeError("Graph crashed")
-        yield  # Make it an async generator
-    
-    mock_graph.astream = failing_astream
-    
-    state = {"session_id": "test", "message": "hello"}
-    config = {"configurable": {"thread_id": "test"}}
-    
-    events = await _collect_events(stream_graph_to_sse(mock_graph, state, config))
-    error_events = [e for e in events if e.startswith("[ERROR]")]
-    assert len(error_events) == 1
-    assert "RuntimeError" in error_events[0]
-
-
-def test_emit_token_helper():
-    """emit_token writes token event to writer."""
-    writer = MagicMock()
-    emit_token(writer, "Hello")
-    writer.assert_called_once_with({"type": "token", "content": "Hello"})
-
-
-def test_emit_status_helper():
-    """emit_status writes status event to writer."""
-    writer = MagicMock()
-    emit_status(writer, "thinking")
-    writer.assert_called_once_with({"type": "status", "content": "thinking"})
-
-
-def test_emit_custom_helper():
-    """emit_custom writes arbitrary custom event to writer."""
-    writer = MagicMock()
-    data = {"type": "debug", "level": "info"}
-    emit_custom(writer, data)
-    writer.assert_called_once_with(data)
 
 
 @pytest.mark.asyncio

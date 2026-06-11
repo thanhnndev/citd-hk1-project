@@ -13,7 +13,7 @@ from typing import Any
 
 import structlog
 
-from agents.graph.state import AgentState, NodeTimeoutError
+from agents.graph.state import NodeTimeoutError
 
 logger = structlog.get_logger(__name__)
 
@@ -284,79 +284,3 @@ class StreamingAdapter:
         reasoning_log = state.get("reasoning_log")
         if reasoning_log:
             yield f"[REASONING] {reasoning_log}"
-
-
-# ---------------------------------------------------------------------------
-# Custom stream event helpers for use inside node functions
-# ---------------------------------------------------------------------------
-
-
-def emit_token(writer: Any, content: str) -> None:
-    """Emit a token event via LangGraph's custom stream channel.
-
-    Usage inside a node:
-        from langgraph.config import get_stream_writer
-        writer = get_stream_writer()
-        emit_token(writer, "Hello")
-    """
-    writer({"type": "token", "content": content})
-
-
-def emit_status(writer: Any, content: str) -> None:
-    """Emit a status event via LangGraph's custom stream channel.
-
-    Usage inside a node:
-        from langgraph.config import get_stream_writer
-        writer = get_stream_writer()
-        emit_status(writer, "routing")
-    """
-    writer({"type": "status", "content": content})
-
-
-def emit_custom(writer: Any, data: dict[str, Any]) -> None:
-    """Emit an arbitrary custom event via LangGraph's custom stream channel.
-
-    The data dict is passed through as-is to the frontend.
-    """
-    writer(data)
-
-
-async def stream_graph_to_sse(
-    graph: Any,
-    state: AgentState,
-    config: dict[str, Any],
-) -> AsyncGenerator[str, None]:
-    """Convenience function: stream a graph and adapt to SSE markers.
-
-    Args:
-        graph: LangGraph CompiledStateGraph instance
-        state: Initial AgentState
-        config: LangGraph config dict (includes thread_id, etc.)
-
-    Yields:
-        SSE marker strings ready for the chat.py SSE wrapper.
-    """
-    adapter = StreamingAdapter()
-
-    try:
-        # Stream with updates + custom modes for full observability
-        graph_stream = graph.astream(
-            state,
-            config,
-            stream_mode=["updates", "custom"],
-            version="v2",
-        )
-
-        async for event in adapter.adapt_stream(graph_stream):
-            yield event
-
-    except Exception as exc:
-        # Catch-all for graph execution failures
-        error_type = type(exc).__name__
-        logger.error(
-            "graph.stream_failed",
-            error_type=error_type,
-            error=str(exc),
-            session_id=state.get("session_id"),
-        )
-        yield _format_generic_error(exc)

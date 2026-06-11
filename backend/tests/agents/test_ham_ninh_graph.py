@@ -11,6 +11,7 @@ from agents.graph.nodes import (
     configure_services,
     intent_router_node,
     maps_agent_node,
+    rag_agent_node,
     requires_user_location_heuristic,
 )
 
@@ -111,3 +112,37 @@ async def test_comparison_reuses_previous_candidates():
     })
     service.recommend.assert_not_awaited()
     assert result["places"][0]["place_id"] == "near"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_without_evidence_is_transparent():
+    configure_services(NodeServices(retriever=None, llm_answer_service=None))
+
+    result = await rag_agent_node({
+        "session_id": "no-evidence",
+        "message": "Kể về một tập tục chưa có trong dữ liệu",
+        "language": "vi",
+    })
+
+    assert result["citations"] == []
+    assert "chưa có thông tin cụ thể" in result["response_text"]
+    assert result["tool_receipts"][0]["result_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_same_langgraph_thread_id():
+    graph = HamNinhGraph(checkpointer=InMemorySaver())
+    graph.graph = MagicMock()
+    graph.graph.ainvoke = AsyncMock(return_value={
+        "response_text": "resumed",
+        "intent": "restaurant_search",
+    })
+
+    result = await graph.resume(
+        session_id="thread-123",
+        resume_value={"lat": 10.0, "lng": 103.0},
+    )
+
+    config = graph.graph.ainvoke.call_args.args[1]
+    assert config["configurable"]["thread_id"] == "thread-123"
+    assert result.response_text == "resumed"
