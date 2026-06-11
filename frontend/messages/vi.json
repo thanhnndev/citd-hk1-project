@@ -382,8 +382,8 @@
     "coordinates": "Tọa độ",
     "unknown": "Chưa rõ",
     "responseNote": "Ghi chú của trợ lý",
-    "missingMapToken": "Chưa cấu hình Goong map tiles. Kết quả vẫn hiển thị dạng thẻ cho đến khi thiết lập NEXT_PUBLIC_GOONG_MAPTILES_KEY.",
-    "mapUnavailable": "Bản đồ Goong chưa khởi tạo được. Thẻ kết quả và chi tiết địa điểm vẫn khả dụng.",
+    "missingMapToken": "Chưa cấu hình Google Maps API key. Kết quả vẫn hiển thị dạng thẻ cho đến khi thiết lập NEXT_PUBLIC_GOOGLE_MAPS_JS_API_KEY.",
+    "mapUnavailable": "Bản đồ Google Maps chưa khởi tạo được. Thẻ kết quả và chi tiết địa điểm vẫn khả dụng.",
     "noPins": "Không thể vẽ ghim bản đồ vì các kết quả này chưa có tọa độ hợp lệ."
   },
   "Architecture": {

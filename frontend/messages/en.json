@@ -382,8 +382,8 @@
     "coordinates": "Coordinates",
     "unknown": "Unknown",
     "responseNote": "Assistant note",
-    "missingMapToken": "Goong map tiles are not configured. Results remain available as cards until NEXT_PUBLIC_GOONG_MAPTILES_KEY is set.",
-    "mapUnavailable": "The Goong map could not initialize. Result cards and place details are still available.",
+    "missingMapToken": "Google Maps API key is not configured. Results remain available as cards until NEXT_PUBLIC_GOOGLE_MAPS_JS_API_KEY is set.",
+    "mapUnavailable": "Google Map could not initialize. Result cards and details remain available.",
     "noPins": "No map pins can be drawn because these results do not include usable coordinates."
   },
   "Architecture": {
