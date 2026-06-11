@@ -1,35 +1,4 @@
-"""Node functions for the HamNinhGraph LangGraph StateGraph (v4.2.0).
-
-Provides 9 node functions (8 real + 1 stub) that form the
-graph topology.  Each node is an ``async def`` that accepts an ``AgentState``
-dict and returns a partial state-update dict — the standard LangGraph node
-contract.
-
-Real nodes:
-    - input_guardrails_node  — prompt injection + topic gate
-    - intent_router_node     — LLM structured-output intent classification
-    - supervisor_node        — confidence-ladder routing decision
-    - conversational_node    — direct / clarification / LLM conversational
-    - output_guardrails_node — grounding verification
-    - rag_agent_node         — hybrid retrieval + Cohere rerank + LLM answer
-    - grade_documents_node   — LLM structured-output relevance grading
-    - maps_agent_node        — PlaceRecommendationService with fairness ranking
-
-Stub nodes (passthrough, wired for expansion):
-    - rewrite_query_stub_node
-
-Dependency injection
---------------------
-LLM-dependent nodes (intent_router, conversational) read from a module-level
-``NodeServices`` singleton via ``get_services()``.  The graph assembler (T02)
-calls ``configure_services(services)`` before compiling the graph.  When no
-services are configured, nodes degrade gracefully to heuristic paths.
-
-Emits structured log events:
-    - ``graph.node_enter`` — node execution started
-    - ``graph.node_exit``  — node execution completed (with duration_ms)
-    - ``graph.node_error`` — node raised an unexpected exception
-"""
+"""Node implementations for the Ham Ninh LangGraph."""
 
 from __future__ import annotations
 
@@ -46,11 +15,7 @@ from langchain_core.runnables import RunnableConfig
 
 from agents.graph.state import (
     AgentState,
-    GradeDocuments,
-    RewriteQuery,
     RouterOutput,
-    NODE_TIMEOUT_GUARDRAILS,
-    NODE_TIMEOUT_INTENT_ROUTER,
 )
 from agents.guardrails.input_guardrails import block_injection, reject_off_topic
 from agents.guardrails.output_guardrails import verify_grounding
@@ -119,20 +84,6 @@ def get_services() -> NodeServices:
 def _hash_query(message: str) -> str:
     """Return a short SHA-256 hex digest (no raw text in logs)."""
     return hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
-
-
-def _routing_tier_from_confidence(confidence: float) -> str:
-    """Map a confidence float to a routing tier label.
-
-    ≥ 0.75  → strict  (direct to RAG or Maps agent)
-    0.45–0.75 → soft  (supervisor with tool-calling)
-    < 0.45  → fallback (semantic-router embedding similarity)
-    """
-    if confidence >= 0.75:
-        return "strict"
-    if confidence >= 0.45:
-        return "soft"
-    return "fallback"
 
 
 def requires_user_location_heuristic(message: str) -> bool:
@@ -407,23 +358,6 @@ def _clarify_decision_followup_without_context(state: AgentState) -> dict[str, A
     }
 
 
-def _place_tool_gate(state: AgentState) -> tuple[bool, str]:
-    """Decide whether maps_agent may make a new external Places call this turn."""
-    message = state.get("message", "")
-    has_last_places = bool(state.get("last_places"))
-
-    if _is_place_comparison_followup(message, state):
-        return False, "compare_previous_places"
-
-    if _decision_followup_field(message) is not None:
-        if has_last_places:
-            return False, "decision_followup_existing_places"
-        if _has_deictic_place_reference(message):
-            return False, "decision_followup_missing_reference"
-
-    return True, "new_place_discovery"
-
-
 def _resolve_last_place_reference(message: str, places: list[dict[str, Any]]) -> dict[str, Any] | None:
     text = " ".join((message or "").strip().lower().split())
     best: dict[str, Any] | None = None
@@ -579,6 +513,8 @@ async def input_guardrails_node(state: AgentState) -> dict[str, Any]:
             "guardrail_flags": flags,
             "response_text": blocked_msg,
             "intent": "blocked",
+            "blocked": True,
+            "run_status": "failed-terminal",
         }
 
     # --- Off-topic check ---
@@ -612,6 +548,8 @@ async def input_guardrails_node(state: AgentState) -> dict[str, Any]:
             "guardrail_flags": flags,
             "response_text": off_topic_msg,
             "intent": "off_topic",
+            "blocked": True,
+            "run_status": "failed-terminal",
         }
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
@@ -700,7 +638,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
     Reads:
         - ``state["message"]``, ``state["history"]``, ``state["language"]``
     Writes:
-        - ``intent``, ``intent_confidence``, ``routing_tier``, ``needs_location``
+        - ``intent``, ``intent_confidence``, ``needs_location``
     """
     t0 = time.perf_counter()
     message = state.get("message", "")
@@ -721,8 +659,8 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
             "intent": "restaurant_search",
             "intent_confidence": 1.0,
             "is_followup": True,
-            "routing_tier": "strict",
             "needs_location": False,
+            "current_step": "places",
         }
 
     services = get_services()
@@ -754,7 +692,6 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 is_followup = bool(message.parsed.is_followup)
                 model_needs_location = bool(message.parsed.needs_location)
                 needs_location = _resolve_needs_location(original_message, model_needs_location)
-                routing_tier = _routing_tier_from_confidence(confidence)
             else:
                 # Fallback to heuristic if model refused or parsing failed
                 raise ValueError(f"LLM refused or failed to parse: {message.refusal}")
@@ -766,7 +703,6 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 session_id=session_id,
                 intent=intent_label,
                 confidence=confidence,
-                routing_tier=routing_tier,
                 model_needs_location=model_needs_location,
                 enforced_needs_location=needs_location,
                 mode="llm",
@@ -776,8 +712,14 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 "intent": intent_label,
                 "intent_confidence": confidence,
                 "is_followup": is_followup,
-                "routing_tier": routing_tier,
                 "needs_location": needs_location,
+                "current_step": (
+                    "knowledge"
+                    if intent_label in {"cultural_query", "food_culture"}
+                    else "places"
+                    if intent_label in {"restaurant_search", "navigation"}
+                    else "conversational"
+                ),
             }
 
         except Exception as exc:
@@ -829,7 +771,6 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
             intent_label = "unknown"
             confidence = 0.4
 
-    routing_tier = _routing_tier_from_confidence(confidence)
     needs_location = requires_user_location_heuristic(message)
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
@@ -839,7 +780,6 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
         session_id=session_id,
         intent=intent_label,
         confidence=confidence,
-        routing_tier=routing_tier,
         mode="heuristic",
         duration_ms=elapsed,
     )
@@ -847,111 +787,19 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
         "intent": intent_label,
         "intent_confidence": confidence,
         "is_followup": bool(history),
-        "routing_tier": routing_tier,
         "needs_location": needs_location,
+        "current_step": (
+            "knowledge"
+            if intent_label in {"cultural_query", "food_culture"}
+            else "places"
+            if intent_label in {"restaurant_search", "navigation"}
+            else "conversational"
+        ),
     }
 
 
 # ---------------------------------------------------------------------------
-# 3. supervisor_node (REAL)
-# ---------------------------------------------------------------------------
-
-
-async def supervisor_node(state: AgentState) -> dict[str, Any]:
-    """Decide the next graph step based on routing tier and intent.
-
-    Acts as the intent dispatcher:
-    - If guardrails blocked → signal END (response_text already set)
-    - cultural_query/food_culture → route to rag_agent
-    - restaurant_search/navigation → route to maps_agent
-    - unknown → route to conversational for safe handling
-    - conversational intent → route to conversational node
-
-    Reads:
-        - ``intent``, ``routing_tier``, ``guardrail_flags``, ``needs_location``
-    Writes:
-        - ``routing_tier`` (confirmed/adjusted), ``next_node`` hint for the
-          conditional edge function in the graph assembler (T02)
-    """
-    t0 = time.perf_counter()
-    session_id = state.get("session_id", "")
-    intent = state.get("intent")
-    routing_tier = state.get("routing_tier", "soft")
-    flags = state.get("guardrail_flags", {})
-
-    logger.info(
-        "graph.node_enter",
-        node="supervisor",
-        session_id=session_id,
-        intent=intent,
-        routing_tier=routing_tier,
-    )
-
-    # --- Guardrail-blocked short-circuit ---
-    injection = flags.get("injection", {})
-    off_topic = flags.get("off_topic", {})
-    if injection.get("verdict") == "blocked" or off_topic.get("verdict") == "blocked":
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="supervisor",
-            session_id=session_id,
-            decision="end_guardrail_blocked",
-            duration_ms=elapsed,
-        )
-        blocked_intent = "blocked" if injection.get("verdict") == "blocked" else "off_topic"
-        return {"routing_tier": routing_tier, "next_node": "output_guardrails", "intent": blocked_intent}
-
-    # --- Conversational intent → direct to conversational node ---
-    if intent == "conversational":
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="supervisor",
-            session_id=session_id,
-            decision="conversational",
-            duration_ms=elapsed,
-        )
-        return {"routing_tier": routing_tier, "next_node": "conversational"}
-
-    # Confidence controls observability and fallback handling, not which
-    # specialist owns an already-classified domain intent.
-    tool_call_allowed = True
-    tool_call_reason = None
-
-    if intent in ("cultural_query", "food_culture"):
-        next_node = "rag_agent"
-        tool_call_allowed = True
-        tool_call_reason = "knowledge_retrieval"
-    elif intent in ("restaurant_search", "navigation"):
-        next_node = "maps_agent"
-        tool_call_allowed, tool_call_reason = _place_tool_gate(state)
-    else:
-        next_node = "conversational"
-        tool_call_allowed = False
-        tool_call_reason = "no_tool_for_intent"
-
-    elapsed = round((time.perf_counter() - t0) * 1000, 3)
-    logger.info(
-        "graph.node_exit",
-        node="supervisor",
-        session_id=session_id,
-        decision=next_node,
-        routing_tier=routing_tier,
-        tool_call_allowed=tool_call_allowed,
-        tool_call_reason=tool_call_reason,
-        duration_ms=elapsed,
-    )
-    return {
-        "routing_tier": routing_tier,
-        "next_node": next_node,
-        "tool_call_allowed": tool_call_allowed,
-        "tool_call_reason": tool_call_reason,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 4. conversational_node (REAL)
+# 3. conversational_node
 # ---------------------------------------------------------------------------
 
 
@@ -1266,7 +1114,7 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
           ``knowledge_response_ready``
     """
     t0 = time.perf_counter()
-    message = state.get("rewritten_query") or state.get("message", "")
+    message = state.get("message", "")
     language = state.get("language", "vi")
     session_id = state.get("session_id", "")
 
@@ -1326,7 +1174,13 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
                         "knowledge_chunks": cached_chunks,
                         "citations": cached_citations,
                         "response_text": cached_response,
-                        "knowledge_response_ready": True,
+                        "run_status": "gathering",
+                        "current_step": "knowledge",
+                        "tool_receipts": [{
+                            "tool": "semantic_cache",
+                            "status": "hit",
+                            "result_count": len(cached_chunks),
+                        }],
                     }
         except Exception as exc:
             logger.warning(
@@ -1508,318 +1362,18 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
         "knowledge_chunks": chunks,
         "citations": citations,
         "response_text": response_text,
-        "knowledge_response_ready": True,
+        "run_status": "gathering",
+        "current_step": "knowledge",
+        "tool_receipts": [{
+            "tool": "knowledge_retriever",
+            "status": mode,
+            "result_count": len(chunks),
+        }],
     }
 
 
 # ---------------------------------------------------------------------------
-# 7. grade_documents_node (REAL — LLM structured-output relevance grading)
-# ---------------------------------------------------------------------------
-
-_GRADE_DOCUMENTS_SYSTEM_PROMPT = """\
-You are a document relevance grader for the Ham Ninh tourism assistant.
-Given a retrieved document chunk and the user's question, determine whether \
-the chunk contains information relevant to answering the question.
-
-Respond with 'yes' if the chunk is relevant, 'no' if it is not.
-Be lenient: if the chunk is even partially related to the question, mark it relevant.
-"""
-
-
-async def grade_documents_node(state: AgentState) -> dict[str, Any]:
-    """Grade chunk relevance via LLM structured output for self-corrective RAG.
-
-    For each retrieved chunk (limited to top-5 for latency), calls the LLM
-    with ``response_format=GradeDocuments`` to produce a binary relevance
-    score.  Aggregates individual scores into ``grade_score`` (mean) and
-    ``grade_label`` ('relevant' if score >= 0.5, else 'irrelevant').
-
-    Degrades gracefully:
-    - No chunks → grade_score=0.0, grade_label='irrelevant'
-    - No LLM client → grade_score=1.0, grade_label='relevant' (pass-through)
-    - Per-chunk LLM failure → assume relevant (score 1.0), log warning
-
-    Reads:
-        - ``state["knowledge_chunks"]``, ``state["message"]``,
-          ``state["session_id"]``
-    Writes:
-        - ``grade_score``, ``grade_label``
-    """
-    t0 = time.perf_counter()
-    session_id = state.get("session_id", "")
-    message = state.get("message", "")
-    chunks = state.get("knowledge_chunks") or []
-
-    if state.get("response_text"):
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="grade_documents",
-            session_id=session_id,
-            mode="skipped_answer_already_generated",
-            grade_score=1.0,
-            grade_label="relevant",
-            duration_ms=elapsed,
-        )
-        return {
-            "grade_score": 1.0,
-            "grade_label": "relevant",
-        }
-
-    logger.info(
-        "graph.node_enter",
-        node="grade_documents",
-        session_id=session_id,
-        chunk_count=len(chunks),
-    )
-
-    # --- No chunks: irrelevant by default ---
-    if not chunks:
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="grade_documents",
-            session_id=session_id,
-            mode="no_chunks",
-            grade_score=0.0,
-            grade_label="irrelevant",
-            duration_ms=elapsed,
-        )
-        return {
-            "grade_score": 0.0,
-            "grade_label": "irrelevant",
-        }
-
-    services = get_services()
-    client = services.llm_client
-
-    # --- No LLM client: pass-through as relevant ---
-    if client is None or GradeDocuments is None:
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="grade_documents",
-            session_id=session_id,
-            mode="no_llm_passthrough",
-            grade_score=1.0,
-            grade_label="relevant",
-            duration_ms=elapsed,
-        )
-        return {
-            "grade_score": 1.0,
-            "grade_label": "relevant",
-        }
-
-    # --- Grade each chunk in parallel (limit to top-5 for latency) ---
-    import asyncio
-
-    gradeable_chunks = chunks[:5]
-
-    async def grade_chunk(i: int, chunk: Any) -> float:
-        chunk_text = getattr(chunk, "text", "") or str(chunk)
-        chunk_title = getattr(chunk, "title", "") or ""
-        try:
-            user_content = (
-                f"Document title: {chunk_title}\n"
-                f"Document content: {chunk_text}\n\n"
-                f"User question: {message}"
-            )
-
-            completion = await client.chat.completions.parse(
-                model=services.model,
-                messages=[
-                    {"role": "system", "content": _GRADE_DOCUMENTS_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                response_format=GradeDocuments,
-                max_completion_tokens=32,
-            )
-
-            message_obj = completion.choices[0].message
-            if message_obj.parsed:
-                binary_score = message_obj.parsed.binary_score
-                return 1.0 if binary_score == "yes" else 0.0
-            else:
-                # Assume relevant on refusal/failure (optimistic)
-                logger.warning(
-                    "grade_documents.chunk_refused",
-                    chunk_index=i,
-                    refusal=message_obj.refusal,
-                    session_id=session_id,
-                )
-                return 1.0
-        except Exception as exc:
-            logger.warning(
-                "grade_documents.chunk_failed",
-                error_type=type(exc).__name__,
-                error=str(exc),
-                chunk_index=i,
-                session_id=session_id,
-            )
-            # Assume relevant on failure (optimistic: avoid unnecessary rewrite)
-            return 1.0
-
-    tasks = [grade_chunk(i, chunk) for i, chunk in enumerate(gradeable_chunks)]
-    scores = await asyncio.gather(*tasks)
-
-    # --- Aggregate scores ---
-    grade_score = sum(scores) / len(scores) if scores else 0.0
-    grade_label = "relevant" if grade_score >= 0.5 else "irrelevant"
-
-    elapsed = round((time.perf_counter() - t0) * 1000, 3)
-    logger.info(
-        "graph.node_exit",
-        node="grade_documents",
-        session_id=session_id,
-        mode="llm",
-        grade_score=round(grade_score, 3),
-        grade_label=grade_label,
-        chunks_graded=len(scores),
-        duration_ms=elapsed,
-    )
-    return {
-        "grade_score": grade_score,
-        "grade_label": grade_label,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 8. rewrite_query_node (REAL — LLM structured-output query rewrite)
-# ---------------------------------------------------------------------------
-
-_REWRITE_QUERY_SYSTEM_PROMPT = """\
-You are a query rewriter for the Ham Ninh tourism assistant's self-corrective RAG system.
-When the initial retrieval returns irrelevant documents, rewrite the user's query to improve \
-retrieval relevance while preserving the original intent and language (Vietnamese or English).
-
-Make the query more specific and retrieval-friendly:
-- Add location context (Hàm Ninh, Phú Quốc) when relevant
-- Expand abbreviations or ambiguous terms
-- Use more precise vocabulary for tourism domain
-- Keep the query concise (under 50 words)
-
-Respond with the rewritten query and a brief reasoning for the changes.
-"""
-
-
-async def rewrite_query_node(state: AgentState) -> dict[str, Any]:
-    """Rewrite query via LLM structured output for self-corrective RAG.
-
-    Calls the LLM with ``response_format=RewriteQuery`` to produce an improved
-    query when initial retrieval returns irrelevant documents. Increments
-    ``rewrite_count`` on each attempt (success or failure).
-
-    Degrades gracefully:
-    - No LLM client → return original message (no_llm_passthrough mode)
-    - LLM failure → return original message and increment rewrite_count (llm_failed mode)
-    - LLM timeout → return original message and increment rewrite_count (llm_failed mode)
-
-    Reads:
-        - ``state["message"]``, ``state["rewrite_count"]``, ``state["session_id"]``
-    Writes:
-        - ``rewritten_query``, ``rewrite_count``
-    """
-    t0 = time.perf_counter()
-    session_id = state.get("session_id", "")
-    message = state.get("message", "")
-    rewrite_count = state.get("rewrite_count", 0)
-    history = _checkpoint_history(state)
-
-    logger.info(
-        "graph.node_enter",
-        node="rewrite_query",
-        session_id=session_id,
-    )
-
-    services = get_services()
-    client = services.llm_client
-
-    # --- No LLM client: pass-through with original message ---
-    if client is None or RewriteQuery is None:
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="rewrite_query",
-            session_id=session_id,
-            mode="no_llm_passthrough",
-            rewritten_query=message,
-            reasoning="no_llm_client",
-            duration_ms=elapsed,
-        )
-        return {
-            "rewritten_query": message,
-            "rewrite_count": rewrite_count,
-        }
-
-    # --- Call LLM with structured output ---
-    import json as _json
-
-    try:
-        messages = [
-            {"role": "system", "content": _REWRITE_QUERY_SYSTEM_PROMPT},
-        ]
-        # Include recent history for coreference resolution
-        for item in (history or [])[-4:]:
-            if item.get("role") in {"user", "assistant"} and item.get("content"):
-                messages.append({"role": item["role"], "content": item["content"]})
-        messages.append({"role": "user", "content": message})
-
-        completion = await client.chat.completions.parse(
-            model=services.model,
-            messages=messages,
-            response_format=RewriteQuery,
-            max_completion_tokens=128,
-        )
-
-        message_obj = completion.choices[0].message
-        if message_obj.parsed:
-            rewritten_query = message_obj.parsed.rewritten_query
-            reasoning = message_obj.parsed.reasoning
-        else:
-            # Fallback to original message if parsing failed
-            raise ValueError(f"LLM refused or failed to parse: {message_obj.refusal}")
-
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="rewrite_query",
-            session_id=session_id,
-            mode="llm_rewrite",
-            rewritten_query=rewritten_query,
-            reasoning=reasoning,
-            duration_ms=elapsed,
-        )
-        return {
-            "rewritten_query": rewritten_query,
-            "rewrite_count": rewrite_count + 1,
-        }
-
-    except Exception as exc:
-        logger.warning(
-            "rewrite_query.llm_failed",
-            error_type=type(exc).__name__,
-            error=str(exc),
-            session_id=session_id,
-            duration_ms=round((time.perf_counter() - t0) * 1000, 3),
-        )
-        elapsed = round((time.perf_counter() - t0) * 1000, 3)
-        logger.info(
-            "graph.node_exit",
-            node="rewrite_query",
-            session_id=session_id,
-            mode="llm_failed",
-            rewritten_query=message,
-            reasoning=f"llm_error: {type(exc).__name__}",
-            duration_ms=elapsed,
-        )
-        return {
-            "rewritten_query": message,
-            "rewrite_count": rewrite_count + 1,
-        }
-
-
-# ---------------------------------------------------------------------------
-# 9. maps_agent_node (REAL — PlaceRecommendationService integration)
+# 6. maps_agent_node
 # ---------------------------------------------------------------------------
 
 
@@ -1842,7 +1396,7 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
     """
     t0 = time.perf_counter()
     session_id = state.get("session_id", "")
-    message = state.get("resolved_query") or state.get("message", "")
+    message = state.get("message", "")
     language = state.get("language", "vi")
     needs_location = state.get("needs_location", False)
 
@@ -1875,19 +1429,6 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
     decision_followup = _answer_place_decision_followup(state)
     if decision_followup is not None:
         return decision_followup
-
-    if state.get("tool_call_allowed") is False:
-        response_text = (
-            "Mình chưa đủ ngữ cảnh để gọi Places cho câu này. Bạn nói rõ địa điểm hoặc mục tiêu muốn tìm, mình sẽ tư vấn tiếp mà không tự đoán."
-            if language == "vi"
-            else "I do not have enough context to call Places for this. Tell me the specific place or search goal, and I will continue without guessing."
-        )
-        return {
-            "places": [],
-            "response_text": response_text,
-            "suggestions": [],
-            "intent": "place_decision_followup",
-        }
 
     # Location consent: use interrupt() pattern per LangGraph docs
     # Frontend will detect interrupt, request geolocation, and resume with Command(resume=user_location)
@@ -1996,6 +1537,13 @@ async def maps_agent_node(state: AgentState, config: RunnableConfig = None) -> d
             "places": places_dicts,
             "response_text": chat_response.message,
             "intent": chat_response.intent or state.get("intent") or "restaurant_search",
+            "run_status": "gathering",
+            "current_step": "places",
+            "tool_receipts": [{
+                "tool": "place_recommendation",
+                "status": "success",
+                "result_count": len(places_dicts),
+            }],
             "last_places": places_dicts,
             "last_place_query": message,
             "last_place_included_type": (

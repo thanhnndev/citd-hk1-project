@@ -1,45 +1,21 @@
-"""Shared state and tool contracts for the LangGraph chat agent."""
+"""State and structured contracts for the Ham Ninh LangGraph."""
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal, TypedDict
 
-from app.models.response import ChatResponse, Citation
+from app.models.response import Citation
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
 
-try:
-    from pydantic import BaseModel, Field
-except Exception:  # pragma: no cover - optional runtime dependency
-    BaseModel = None  # type: ignore[assignment,misc]
-    Field = None  # type: ignore[assignment]
-
-try:
-    from langgraph.graph import END, START, StateGraph
-    from langgraph.graph.message import add_messages
-    from langgraph.checkpoint.memory import MemorySaver
-except Exception:  # pragma: no cover - optional runtime dependency
-    END = "__end__"
-    START = "__start__"
-    StateGraph = None
-    MemorySaver = None
-
-    def add_messages(left: list[Any], right: list[Any]) -> list[Any]:
-        return [*(left or []), *(right or [])]
-
-NODE_TIMEOUT_LLM = 20
-NODE_TIMEOUT_TOOL = 30
-NODE_TIMEOUT_RETRIEVE = 10
-NODE_TIMEOUT_ANSWER = 25
-
-# Per-node timeouts for new v4.2.0 graph nodes (Section 14.2)
 NODE_TIMEOUT_GUARDRAILS = 6
-NODE_TIMEOUT_INTENT_ROUTER = 5
-NODE_TIMEOUT_GRADE = 12
-NODE_TIMEOUT_REWRITE = 8
-NODE_TIMEOUT_SEMANTIC_FALLBACK = 3
+NODE_TIMEOUT_ROUTER = 8
+NODE_TIMEOUT_LLM = 25
+NODE_TIMEOUT_TOOL = 30
 
 
 class NodeTimeoutError(Exception):
-    """Raised when a graph node exceeds its per-node timeout."""
+    """Raised when a graph node exceeds its execution budget."""
 
     def __init__(self, node_name: str, timeout_seconds: int) -> None:
         self.node_name = node_name
@@ -47,182 +23,15 @@ class NodeTimeoutError(Exception):
         super().__init__(f"Node '{node_name}' timed out after {timeout_seconds}s")
 
 
-ToolName = Literal["search_knowledge", "search_places"]
-FollowUpDecision = Literal[
-    "structured_context",
-    "history_context",
-    "clarification_needed",
-    "insufficient_context",
-]
 AgentRunStatus = Literal[
-    "idle",
-    "drafting",
     "planning",
     "gathering",
-    "executing",
     "waiting_for_user_input",
-    "waiting_for_approval",
-    "retrying",
     "verifying",
     "completed",
     "failed-recoverable",
     "failed-terminal",
 ]
-
-
-class AgentState(TypedDict, total=False):
-    run_status: AgentRunStatus
-    current_step: str | None
-    error_code: str | None
-    retry_count: int
-    session_id: str
-    message: str
-    language: str
-    history: list[dict[str, str]]
-    messages: Annotated[list[Any], add_messages]
-    tool_calls: list[Any]
-    tool_call_allowed: bool
-    tool_call_reason: str | None
-    citations: list[Citation]
-    places: list[Any]
-    suggestions: list[str]
-    reasoning_log: str | None
-    intent: str | None
-    response_text: str
-    response: ChatResponse
-    langfuse_trace_id: str | None
-    prior_context: Any | None
-    followup_decision: FollowUpDecision | None
-    context_source: str | None
-    resolved_query: str | None
-    tool_call_signatures: list[str]
-    knowledge_chunks: list[Any]
-    knowledge_response_ready: bool
-    # --- v4.2.0 agent intelligence fields ---
-    # Routing
-    intent_confidence: float | None
-    is_followup: bool
-    routing_tier: Literal["strict", "soft", "fallback"] | None
-    needs_location: bool
-    next_node: str | None  # Routing hint from supervisor to conditional edge (T02)
-    # Guardrails
-    guardrail_flags: dict[str, Any]
-    # Self-corrective RAG
-    grade_score: float | None
-    grade_label: str | None
-    rewrite_count: int
-    rewritten_query: str | None
-    # Session memory boundaries
-    history_included: bool
-    # User location opt-in (v4.2.0)
-    location_consent: bool
-    sort_by_nearest: bool
-    user_location: dict[str, float] | None
-    last_places: list[Any]
-    last_place_query: str | None
-    last_place_included_type: str | None
-    last_place_accessibility_required: bool
-    last_place_user_location: dict[str, float] | None
-    # Graph flow control
-    blocked: bool
-    # User preference filters (v4.3.0)
-    budget_filter: str | None
-    accessibility_required: bool
-
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_knowledge",
-            "description": (
-                "Use only for factual Ham Ninh culture/history/travel knowledge that needs evidence. "
-                "Do not use for greetings, help/capability questions, follow-ups that can be answered from history, "
-                "or place/hotel/restaurant discovery."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_places",
-            "description": (
-                "Use for restaurants, hotels, homestays, cafes, seafood, nearby places, directions, maps, routes, "
-                "or local recommendations around Ham Ninh. "
-                "Optionally accepts budget, accessibility, and user_location preferences."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "budget": {
-                        "type": "string",
-                        "enum": ["free", "inexpensive", "moderate", "expensive", "very_expensive"],
-                        "description": "Optional budget preference. Maps to price level filtering.",
-                    },
-                    "accessibility": {
-                        "type": "boolean",
-                        "description": "Optional: when true, prefer wheelchair-accessible venues.",
-                    },
-                    "user_location": {
-                        "type": "object",
-                        "properties": {
-                            "lat": {"type": "number"},
-                            "lng": {"type": "number"},
-                        },
-                        "description": "Optional user GPS coordinates for proximity scoring.",
-                    },
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
-
-SYSTEM_PROMPT = """\
-Bạn là Trợ lý Hàm Ninh cho du lịch bền vững.
-
-Follow the LangGraph tool-calling pattern: reason over the full conversation, then either answer directly or call the single best tool. Do not behave like a keyword router.
-
-Intent judgement rules:
-- Answer directly only for greetings, thanks, capability/help questions, simple acknowledgements, and follow-ups clearly answerable from conversation history.
-- Ask one concise clarification question when a request is genuinely underspecified and a tool call would need missing information, e.g. bare "đường" without origin/destination.
-- Use search_knowledge when the user wants to understand Hàm Ninh: culture/văn hóa/văn hoá, history/lịch sử, fishing life, local food background, travel notes, origin stories, factual explanations, or a terse follow-up topic after a knowledge answer such as "hải sản".
-- Use search_places when the user wants concrete venue discovery or navigation: restaurants, seafood places, hotels, homestays, cafes, nearby places, directions, routes, maps, or local recommendations.
-- For ambiguous short user turns, use conversation context first. If the previous answer was about local food and the user says "HẢI SẢN", treat it as a knowledge follow-up unless they ask for a venue. If the previous answer listed venues and the user asks "đường", ask which place/origin if not clear.
-- Mixed requests are allowed: choose the tool that best serves the main intent first; call a second tool only if the user explicitly asks for that second output.
-- Do not use brittle keyword decisions. Same words can imply different intents depending on phrasing and history: "kể về hải sản" is knowledge; "tìm quán hải sản" is places; "đường" alone is clarification; "chỉ đường đến chợ Hàm Ninh" is places/navigation.
-
-Grounding and response rules:
-- Cite only facts from search_knowledge results. Do not cite place results as document sources.
-- If search_knowledge returns weak or empty evidence, say what is missing instead of inventing facts.
-- If search_places is unavailable or returns no useful data, say that honestly and ask a practical follow-up.
-- Reply in the user's language.
-- At the end of your final response (when you are not calling any tools), write exactly three short and context-specific suggestion chips for the user's next turn in this format: [SUGGESTIONS] Suggestion 1 | Suggestion 2 | Suggestion 3. Do not include this tag or suggestions if you are proposing tool calls.
-
-Professional ethical travel advisor rules:
-- Treat every answer as professional travel advice for real people, not as keyword matching.
-- Understand the user's practical concern and respond respectfully to everyone, including people with disabilities, older adults, children, students, budget-conscious travelers, visitors from other places, local residents, workers, and communities.
-- Never stereotype, shame, exclude, or assume someone's ability, budget, age, nationality, disability, identity, or social status.
-- Do not invent or overstate missing facts about price, terrain, accessibility, safety, opening hours, travel time, regulations, weather, or live conditions.
-- When important facts are not confirmed by tool output or retrieved context, clearly say what is unknown and give a practical way to verify it.
-- If advice may affect safety, accessibility, money, the environment, local culture, or vulnerable people, be careful, specific about uncertainty, and useful.
-- Do not encourage illegal, unsafe, exploitative, disrespectful, or environmentally harmful behavior.
-- Explain recommendations using available evidence, and distinguish confirmed facts from cautious practical advice.
-- If the user's request is ambiguous, ask one concise clarifying question instead of guessing.
-"""
-
-
-# ---------------------------------------------------------------------------
-# Structured output schemas for v4.2.0 agent intelligence (Section 14.3)
-# ---------------------------------------------------------------------------
 
 IntentLabel = Literal[
     "cultural_query",
@@ -233,62 +42,72 @@ IntentLabel = Literal[
     "unknown",
 ]
 
-if BaseModel is not None:
 
-    class RouterOutput(BaseModel):
-        """Structured intent classifier output for confidence-ladder routing.
+class AgentState(TypedDict, total=False):
+    # Persisted conversation identity and memory.
+    session_id: str
+    message: str
+    language: str
+    history: list[dict[str, str]]
+    messages: Annotated[list[Any], add_messages]
 
-        Produced by OpenAI structured output (``response_format=RouterOutput``).
-        The confidence float drives the routing tier:
-          ≥ 0.75  → strict (direct to RAG or Maps agent)
-          0.45–0.75 → soft (supervisor with tool-calling)
-          < 0.45  → fallback (semantic-router embedding similarity)
-        """
+    # Replayable execution state.
+    run_status: AgentRunStatus
+    current_step: str | None
+    retry_count: int
+    error_code: str | None
+    tool_calls: list[Any]
+    tool_receipts: list[dict[str, Any]]
+    pending_input: dict[str, Any] | None
+    reasoning_log: str | None
 
-        intent: IntentLabel = Field(
-            description="Classified intent category"
-        )
-        confidence: float = Field(
-            ge=0.0,
-            le=1.0,
-            description="Classifier confidence in [0, 1]",
-        )
-        is_followup: bool = Field(
-            description="True when the message references prior conversation context"
-        )
-        needs_location: bool = Field(
-            description="True when the query requires user GPS (e.g. nearby, directions)"
-        )
+    # Turn-scoped routing and output.
+    intent: str | None
+    intent_confidence: float | None
+    is_followup: bool
+    needs_location: bool
+    response_text: str
+    citations: list[Citation]
+    places: list[Any]
+    suggestions: list[str]
+    guardrail_flags: dict[str, Any]
+    blocked: bool
 
-    class GradeDocuments(BaseModel):
-        """Document relevance grading output for self-corrective RAG.
+    # Current request preferences.
+    user_location: dict[str, float] | None
+    budget_filter: str | None
+    accessibility_required: bool
 
-        Produced by OpenAI structured output for the grade_documents node.
-        binary_score is 'yes' when the retrieved chunk is relevant to the
-        user question, 'no' otherwise.
-        """
+    # Persisted grounded place context for comparative follow-ups.
+    last_places: list[Any]
+    last_place_query: str | None
+    last_place_included_type: str | None
+    last_place_accessibility_required: bool
+    last_place_user_location: dict[str, float] | None
 
-        binary_score: Literal["yes", "no"] = Field(
-            description="Relevance score: 'yes' if relevant, 'no' if not relevant"
-        )
+    # Retrieval artifacts.
+    knowledge_chunks: list[Any]
 
-    class RewriteQuery(BaseModel):
-        """Query rewrite output for self-corrective RAG.
 
-        Produced by OpenAI structured output for the rewrite_query node.
-        The rewritten_query preserves the original intent but improves
-        specificity and retrieval likelihood.
-        """
+class RouterOutput(BaseModel):
+    """Structured intent classifier output."""
 
-        rewritten_query: str = Field(
-            description="Improved query preserving original intent and language"
-        )
-        reasoning: str = Field(
-            default="",
-            description="Brief reasoning for the rewrite (for observability)",
-        )
+    intent: IntentLabel
+    confidence: float = Field(ge=0.0, le=1.0)
+    is_followup: bool
+    needs_location: bool
 
-else:  # pragma: no cover - pydantic unavailable
-    RouterOutput = None  # type: ignore[assignment,misc]
-    GradeDocuments = None  # type: ignore[assignment,misc]
-    RewriteQuery = None  # type: ignore[assignment,misc]
+
+SYSTEM_PROMPT = """\
+Bạn là Trợ lý Hàm Ninh cho du lịch bền vững.
+
+- Chỉ trả lời trực tiếp cho hội thoại đơn giản hoặc câu hỏi có thể giải quyết từ lịch sử.
+- Câu hỏi văn hóa, lịch sử và ẩm thực phải dựa trên dữ liệu truy xuất và trích dẫn.
+- Tìm địa điểm, tuyến đường và câu hỏi phù hợp cho gia đình phải dựa trên dữ liệu nhà cung cấp.
+- Không bịa giá, khả năng tiếp cận, an toàn, giờ mở cửa, địa hình hoặc điều kiện trực tiếp.
+- Khi dữ liệu yếu hoặc thiếu, nói rõ phần chưa xác nhận và cách kiểm tra.
+- Chỉ yêu cầu vị trí trình duyệt cho yêu cầu phụ thuộc vị trí hiện tại như "gần tôi".
+- Trả lời bằng ngôn ngữ của người dùng.
+- Cuối câu trả lời, thêm đúng ba gợi ý ngắn theo mẫu:
+  [SUGGESTIONS] Gợi ý 1 | Gợi ý 2 | Gợi ý 3
+"""

@@ -34,7 +34,6 @@ from app.services.user_service import UserService
 from app.services.langfuse_service import init_langfuse
 
 from agents.tools.corpus_loader import load_corpus
-from agents.graph.agent_service import AgentService, create_agent_checkpointer
 from agents.graph.ham_ninh_graph import create_ham_ninh_graph
 from agents.graph.nodes import NodeServices
 from agents.tools.embedding_service import EmbeddingService
@@ -170,7 +169,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.llm_service = None
     app.state.places_service = None
     app.state.place_recommendation_service = None
-    app.state.agent_service = None
 
     try:
         place_cache = await _create_place_cache(os.environ.get("DATABASE_URL"))
@@ -241,21 +239,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning("hybrid.init_failed", error=str(exc))
 
-    checkpoint, checkpoint_mode = await create_agent_checkpointer()
-    app.state.agent_service = AgentService(
-        retriever=app.state.retriever,
-        hybrid_retriever=app.state.hybrid_retriever,
-        llm_service=app.state.llm_service,
-        checkpointer=checkpoint,
-        checkpoint_mode=checkpoint_mode,
-        place_recommendation_service=app.state.place_recommendation_service,
-        semantic_cache=app.state.semantic_cache,
-        embedding_service=app.state.embedding_service,
-        langfuse_client=_langfuse_client,
-    )
-
-    # 5. Wire HamNinhGraph with AsyncPostgresSaver (LangGraph StateGraph)
-    #    R005: Replace custom checkpointing with LangGraph's AsyncPostgresSaver
+    # 5. Wire the single HamNinhGraph runtime.
     app.state.ham_ninh_graph = None
     ham_ninh_checkpoint_mode = "memory"
     ham_ninh_graph_checkpointer = None
@@ -284,7 +268,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         node_services = NodeServices(
             llm_client=openai_client,
             model="gpt-4o-mini",
-            retriever=app.state.retriever or app.state.hybrid_retriever,
+            retriever=app.state.hybrid_retriever or app.state.retriever,
             places_service=app.state.place_recommendation_service,
             cohere_reranker=cohere_reranker,
             llm_answer_service=app.state.llm_service or LLMAnswerService(),
@@ -342,10 +326,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         app.state.ham_ninh_graph = None
 
-    # Link the pre-configured ham_ninh_graph to agent_service for fallback pathways
-    if app.state.agent_service is not None and app.state.ham_ninh_graph is not None:
-        app.state.agent_service._ham_ninh_graph = app.state.ham_ninh_graph
-
     # 5. Initialize UserService (PostgreSQL-backed auth)
     app.state.user_service = None
     dsn = os.environ.get("DATABASE_URL")
@@ -365,13 +345,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         langfuse_client_attached=_langfuse_client is not None,
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
-        agent_service_enabled=app.state.agent_service is not None,
         ham_ninh_graph_enabled=app.state.ham_ninh_graph is not None,
         ham_ninh_checkpoint_mode=ham_ninh_checkpoint_mode,
         place_recommendation_enabled=app.state.place_recommendation_service is not None,
         place_cache_configured=getattr(app.state, "place_cache", None) is not None,
         user_service_enabled=app.state.user_service is not None,
-        checkpoint_mode=checkpoint_mode,
     )
 
     yield
