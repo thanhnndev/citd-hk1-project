@@ -22,13 +22,13 @@ async def seed(only: str) -> None:
         accounts = {
             "admin": {
                 "username": _required_env("SEED_ADMIN_USERNAME", "admin"),
-                "email": _required_env("SEED_ADMIN_EMAIL", "admin@hamninh.local"),
+                "email": _required_env("SEED_ADMIN_EMAIL", "admin@hamninh.vn"),
                 "password": _required_env("SEED_ADMIN_PASSWORD", "Admin@123"),
                 "is_admin": True,
             },
             "user": {
                 "username": _required_env("SEED_USER_USERNAME", "user"),
-                "email": _required_env("SEED_USER_EMAIL", "user@hamninh.local"),
+                "email": _required_env("SEED_USER_EMAIL", "user@hamninh.vn"),
                 "password": _required_env("SEED_USER_PASSWORD", "User@123"),
                 "is_admin": False,
             },
