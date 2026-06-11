@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 type MapProofTranslations = Readonly<{
   title: string;
   intro: string;
-  defaultQuery: string;
   queryLabel: string;
   searchPlaceholder: string;
   submit: string;
@@ -73,7 +72,7 @@ function normalizePercent(value: number | null | undefined) {
 
 export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapProps) {
   const language = locale === "en" ? "en" : "vi";
-  const [query, setQuery] = useState(translations.defaultQuery);
+  const [query, setQuery] = useState("");
   const [response, setResponse] = useState<ChatResponse | null>(null);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [requestState, setRequestState] = useState<RequestState>("idle");
@@ -85,7 +84,8 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
   const pinnedPlaces = useMemo(() => places.filter(hasLocation), [places]);
 
   const runSearch = useCallback(async (nextQuery: string) => {
-    const prompt = nextQuery.trim() || translations.defaultQuery;
+    const prompt = nextQuery.trim();
+    if (!prompt) return;
     setRequestState("loading");
     setErrorMessage(null);
 
@@ -100,11 +100,7 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
       setErrorMessage(error instanceof Error ? error.message : translations.error);
       setRequestState("error");
     }
-  }, [language, sessionId, translations.defaultQuery, translations.error]);
-
-  useEffect(() => {
-    void runSearch(translations.defaultQuery);
-  }, [runSearch, translations.defaultQuery]);
+  }, [language, sessionId, translations.error]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

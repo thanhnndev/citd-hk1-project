@@ -355,7 +355,7 @@
   "Map": {
     "title": "Khám phá Bản đồ Hàm Ninh",
     "intro": "Tìm kiếm các địa điểm ăn uống, vui chơi và trải nghiệm dịch vụ tại làng chài Hàm Ninh. Bản đồ tương tác trực quan giúp bạn dễ dàng chọn được điểm đến phù hợp nhất.",
-    "defaultQuery": "Gợi ý các quán ăn hải sản ngon, bình dân xung quanh Hàm Ninh.",
+    "defaultQuery": "Gợi ý quán ăn gần đây",
     "queryLabel": "Nội dung tìm kiếm địa điểm",
     "searchPlaceholder": "Hỏi địa điểm hoặc dịch vụ ở Hàm Ninh...",
     "submit": "Tìm địa điểm",

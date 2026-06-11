@@ -355,7 +355,7 @@
   "Map": {
     "title": "Explore Ham Ninh Map",
     "intro": "Find dining, sightseeing, and services around Ham Ninh fishing village. The interactive map helps you easily choose the best destinations.",
-    "defaultQuery": "Recommend local and affordable seafood restaurants around Ham Ninh.",
+    "defaultQuery": "Suggest restaurants nearby",
     "queryLabel": "Search query",
     "searchPlaceholder": "Ask for places or services in Ham Ninh...",
     "submit": "Find places",

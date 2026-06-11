@@ -17,7 +17,6 @@ export default async function MapPage({ params }: Props) {
   const translations = {
     title: t('title'),
     intro: t('intro'),
-    defaultQuery: t('defaultQuery'),
     queryLabel: t('queryLabel'),
     searchPlaceholder: t('searchPlaceholder'),
     submit: t('submit'),
