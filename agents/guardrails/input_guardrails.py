@@ -59,6 +59,26 @@ def _strip_zero_width(message: str) -> str:
     return re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", message)
 
 
+_NON_ADVISORY_CONTENT_RE = re.compile(
+    r"("
+    r"\b(write|compose|draft|create|generate|make)\b.{0,40}\b(poem|song|story|joke|email|essay|script|code)\b"
+    r"|"
+    r"\b(poem|song|joke|email|essay|script|code)\b"
+    r"|"
+    r"(làm|viết|tạo|sáng tác|soạn|kể)\s+(một\s+|1\s+)?(bài\s+)?(thơ|bài hát|truyện|chuyện cười|email|mã|code|kịch bản)"
+    r"|"
+    r"(bài\s+thơ|chuyện\s+cười|truyện\s+cười)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_non_advisory_content_generation(message: str) -> bool:
+    """Detect content-generation tasks outside professional travel advice."""
+    normalized = _normalize(_strip_zero_width(message))
+    return bool(_NON_ADVISORY_CONTENT_RE.search(normalized))
+
+
 # ---------------------------------------------------------------------------
 # Injection blocking patterns
 # ---------------------------------------------------------------------------
@@ -229,6 +249,21 @@ async def reject_off_topic(
         return GuardrailResult(verdict="pass")
 
     query_hash = _hash_query(message)
+
+    if _is_non_advisory_content_generation(message):
+        logger.warning(
+            "guardrail.topic_rejected",
+            verdict="blocked",
+            reason="non_advisory_content_generation",
+            query_hash=query_hash,
+            severity="medium",
+        )
+        return GuardrailResult(
+            verdict="blocked",
+            reason="off_topic",
+            details="non_advisory_content_generation",
+            severity="medium",
+        )
 
     if llm_client is None:
         logger.warning(

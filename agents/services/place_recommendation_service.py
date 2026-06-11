@@ -312,7 +312,7 @@ class PlaceRecommendationService:
 
         pre_filter_count = len(candidates)
         candidates, filtered_count = _apply_preference_filters(candidates, request)
-        frame = _build_recommendation_frame(request.query)
+        frame = _build_recommendation_frame(query)
         if request.wheelchair_accessible_preference is True and "accessibility" not in frame.constraints:
             frame = RecommendationFrame(
                 goal=frame.goal,
@@ -341,7 +341,7 @@ class PlaceRecommendationService:
         provider_status_val = tool_response.status.value
         try:
             places = _reranked_results(
-                candidates, request.query,
+                candidates, query,
                 provider_source=provider_source_val,
                 provider_status=provider_status_val,
                 request=request,
@@ -358,6 +358,7 @@ class PlaceRecommendationService:
                 provider_source=provider_source_val,
                 provider_status=provider_status_val,
                 request=request,
+                original_query=query,
                 language=language,
             )
             reranking_ok = False
@@ -475,8 +476,9 @@ class PlaceRecommendationService:
                 user_loc = None
 
         included_type = _infer_included_type(query)
+        provider_query = _provider_search_query(query, included_type)
         return PlaceSearchRequest(
-            query=query,
+            query=provider_query,
             language_code=language_code,
             location_bias=HAM_NINH_CENTER.model_copy(),
             radius_meters=DEFAULT_SEARCH_RADIUS_METERS,
@@ -637,6 +639,7 @@ def _grounded_results(
     provider_source: str | None = None,
     provider_status: str | None = None,
     request: PlaceSearchRequest | None = None,
+    original_query: str | None = None,
     language: str = "vi",
 ) -> list[PlaceResult]:
     """Fallback path: return candidates with a neutral ScoreBreakdown."""
@@ -724,7 +727,10 @@ def _grounded_results(
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
                     language=language,
-                    frame=_build_recommendation_frame(request.query) if request else None,
+                    frame=(
+                        _build_recommendation_frame(original_query or request.query)
+                        if request else None
+                    ),
                 ),
             )
         )
@@ -850,6 +856,17 @@ def _infer_included_type(query: str) -> str | None:
     if any(term in text for term in ("cà phê", "cafe", "coffee", "quán cf", "quan cf")):
         return "cafe"
     return None
+
+def _provider_search_query(query: str, included_type: str | None) -> str:
+    """Return a stable provider query while keeping preferences out of Text Search.
+
+    Terms like "view đẹp" are user preferences, not reliable provider search
+    constraints. Sending them verbatim tends to broaden results across Phu Quoc,
+    after which the Ham Ninh boundary filter removes every candidate.
+    """
+    if included_type == "cafe":
+        return "quán cà phê Hàm Ninh"
+    return query
 
 def _build_recommendation_frame(query: str) -> RecommendationFrame:
     text = _norm_query(query)

@@ -5,12 +5,21 @@ import pytest
 from agents.services.place_recommendation_service import (
     PlaceRecommendationService,
     _apply_geographic_boundary_filter,
+    _infer_included_type,
+    _provider_search_query,
 )
 from agents.ranking.feature_extractor import FeatureExtractor, haversine
 from app.models.places import PlaceCandidate, HAM_NINH_CENTER
 from app.models.request import LatLng
 from agents.tools.places_service import _location
-from agents.graph.nodes import maps_agent_node, supervisor_node
+from agents.guardrails.input_guardrails import reject_off_topic
+from agents.graph.nodes import (
+    _conversational_domain_action,
+    conversational_node,
+    maps_agent_node,
+    requires_user_location_heuristic,
+    supervisor_node,
+)
 
 def _candidate(name: str, lat: float, lng: float, types: list[str]) -> PlaceCandidate:
     return PlaceCandidate(
@@ -50,6 +59,49 @@ def test_google_places_new_location_shape() -> None:
     assert location is not None
     assert location.lat == HAM_NINH_CENTER.lat
     assert location.lng == HAM_NINH_CENTER.lng
+
+def test_cafe_provider_query_ignores_subjective_preferences() -> None:
+    included_type = _infer_included_type("Tìm quán cafe view đẹp ở Hàm Ninh")
+
+    assert included_type == "cafe"
+    assert (
+        _provider_search_query("Tìm quán cafe view đẹp ở Hàm Ninh", included_type)
+        == "quán cà phê Hàm Ninh"
+    )
+
+def test_near_named_area_does_not_require_user_location() -> None:
+    assert requires_user_location_heuristic("Có quán cà phê nào gần Hàm Ninh không") is False
+    assert requires_user_location_heuristic("Có quán cà phê nào gần tôi không") is True
+
+def test_conversational_domain_gate_refuses_general_tasks() -> None:
+    assert _conversational_domain_action("Write an email asking for leave", []) == "refuse"
+    assert _conversational_domain_action("Tell me about Ham Ninh", []) == "allow"
+
+def test_conversational_domain_gate_clarifies_responsible_travel_without_context() -> None:
+    assert _conversational_domain_action("Is it safe for wheelchair users?", []) == "clarify"
+    assert _conversational_domain_action(
+        "Is it safe for wheelchair users?",
+        [{"role": "assistant", "content": "Ham Ninh travel places around Phu Quoc"}],
+    ) == "allow"
+
+@pytest.mark.asyncio
+async def test_conversational_node_refuses_off_domain_llm_path() -> None:
+    result = await conversational_node({
+        "session_id": "test-session",
+        "message": "Write an email asking for leave",
+        "language": "en",
+        "history": [],
+    })
+
+    assert result["intent"] == "off_topic"
+    assert "Ham Ninh/Phu Quoc travel advice" in result["response_text"]
+
+@pytest.mark.asyncio
+async def test_input_guardrail_blocks_creative_content_even_when_ham_ninh_is_named() -> None:
+    result = await reject_off_topic("tạo 1 bài thơ về Hàm Ninh", llm_client=None)
+
+    assert result.verdict == "blocked"
+    assert result.details == "non_advisory_content_generation"
 
 def test_vietnamese_concept_match() -> None:
     candidate = _candidate("Water Park", 10.1835, 104.0497, ["amusement_park"])

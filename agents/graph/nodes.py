@@ -38,7 +38,7 @@ import inspect
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from langgraph.types import interrupt
@@ -138,13 +138,122 @@ def _routing_tier_from_confidence(confidence: float) -> str:
 def requires_user_location_heuristic(message: str) -> bool:
     """Determine if a message requires location using simple substring search (no regex)."""
     text_lower = " ".join((message or "").strip().lower().split())
-    # Substring search to avoid regex library and match rules simply when LLM is unavailable:
+    if _has_explicit_search_area(text_lower):
+        return False
+    return _has_personal_location_reference(text_lower)
+
+
+def _has_personal_location_reference(message: str) -> bool:
+    """Return true only when the user asks relative to their current position."""
+    text_lower = " ".join((message or "").strip().lower().split())
     keywords = [
         "gần tôi", "gần mình", "gần đây", "quanh đây", "quanh tôi", "quanh mình",
         "vị trí của tôi", "vị trí hiện tại", "near me", "nearby", "around here",
-        "my location", "closest to me", "địa điểm gần", "quán gần"
+        "my location", "closest to me",
     ]
     return any(keyword in text_lower for keyword in keywords)
+
+
+def _has_explicit_search_area(message: str) -> bool:
+    """Return true when the user already named the destination/search area."""
+    text_lower = " ".join((message or "").strip().lower().split())
+    areas = [
+        "hàm ninh", "ham ninh", "phú quốc", "phu quoc",
+        "làng chài", "lang chai",
+    ]
+    return any(area in text_lower for area in areas)
+
+
+def _resolve_needs_location(message: str, model_needs_location: bool) -> bool:
+    """Keep the model decision, but do not ask for GPS when area is explicit."""
+    text_lower = " ".join((message or "").strip().lower().split())
+    if _has_explicit_search_area(text_lower):
+        return False
+    if _has_personal_location_reference(text_lower):
+        return True
+    return model_needs_location
+
+
+def _has_domain_context(history: list[dict[str, str]]) -> bool:
+    """Return true when recent conversation already established Ham Ninh tourism context."""
+    recent = " ".join(str(item.get("content", "")) for item in history[-6:])
+    text = " ".join(recent.lower().split())
+    return _has_explicit_search_area(text) or _has_tourism_signal(text)
+
+
+def _has_tourism_signal(message: str) -> bool:
+    text = " ".join((message or "").strip().lower().split())
+    terms = (
+        "du lịch", "du lich", "tham quan", "lịch trình", "lich trinh",
+        "địa điểm", "dia diem", "điểm đến", "diem den", "đi đâu", "di dau",
+        "ăn uống", "an uong", "món ăn", "mon an", "hải sản", "hai san",
+        "nhà hàng", "nha hang", "quán", "quan", "cà phê", "cafe",
+        "khách sạn", "khach san", "homestay", "đường đi", "duong di",
+        "chỉ đường", "chi duong", "bản đồ", "ban do", "route", "map",
+        "restaurant", "hotel", "place", "places", "trip", "travel",
+        "tourism", "attraction", "direction", "seafood",
+    )
+    return any(term in text for term in terms)
+
+
+def _has_responsible_travel_signal(message: str) -> bool:
+    text = " ".join((message or "").strip().lower().split())
+    terms = (
+        "người khuyết tật", "nguoi khuyet tat", "xe lăn", "xe lan",
+        "tiếp cận", "tiep can", "accessibility", "accessible",
+        "người già", "nguoi gia", "người lớn tuổi", "nguoi lon tuoi",
+        "trẻ em", "tre em", "gia đình", "gia dinh", "sinh viên", "sinh vien",
+        "ngân sách", "ngan sach", "giá rẻ", "gia re", "an toàn", "an toan",
+        "nguy hiểm", "nguy hiem", "địa hình", "dia hinh", "môi trường",
+        "moi truong", "địa phương", "dia phuong", "tôn trọng", "ton trong",
+        "phù hợp", "phu hop", "nên tránh", "nen tranh", "safety", "budget",
+        "disabled", "wheelchair", "elderly", "children", "terrain",
+        "responsible", "local community",
+    )
+    return any(term in text for term in terms)
+
+
+def _domain_refusal_message(language: str) -> str:
+    if language == "vi":
+        return (
+            "Mình chỉ hỗ trợ tư vấn du lịch Hàm Ninh/Phú Quốc. "
+            "Bạn có thể hỏi về địa điểm, đường đi, văn hóa, lịch trình, an toàn, "
+            "ngân sách, khả năng tiếp cận hoặc du lịch có trách nhiệm."
+        )
+    return (
+        "I only help with Ham Ninh/Phu Quoc travel advice. "
+        "You can ask about places, directions, culture, itineraries, safety, "
+        "budget, accessibility, or responsible tourism."
+    )
+
+
+def _domain_context_clarification_message(language: str) -> str:
+    if language == "vi":
+        return (
+            "Bạn đang hỏi trong bối cảnh chuyến đi Hàm Ninh/Phú Quốc hay địa điểm nào cụ thể? "
+            "Mình cần ngữ cảnh đó để tư vấn chính xác và có trách nhiệm."
+        )
+    return (
+        "Are you asking in the context of a Ham Ninh/Phu Quoc trip or a specific place? "
+        "I need that context to give careful travel advice."
+    )
+
+
+def _conversational_domain_action(
+    message: str,
+    history: list[dict[str, str]],
+) -> Literal["allow", "clarify", "refuse"]:
+    """Fallback-only domain gate when the semantic policy LLM is unavailable."""
+    text = " ".join((message or "").strip().lower().split())
+    if _has_explicit_search_area(text):
+        return "allow"
+    if _has_tourism_signal(text) and _has_domain_context(history):
+        return "allow"
+    if _has_responsible_travel_signal(text):
+        return "allow" if _has_domain_context(history) else "clarify"
+    if _has_tourism_signal(text):
+        return "clarify"
+    return "refuse"
 
 
 def _requests_accessibility(message: str) -> bool:
@@ -644,7 +753,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
                 confidence = float(message.parsed.confidence)
                 is_followup = bool(message.parsed.is_followup)
                 model_needs_location = bool(message.parsed.needs_location)
-                needs_location = model_needs_location
+                needs_location = _resolve_needs_location(original_message, model_needs_location)
                 routing_tier = _routing_tier_from_confidence(confidence)
             else:
                 # Fallback to heuristic if model refused or parsing failed
@@ -912,6 +1021,33 @@ async def conversational_node(state: AgentState) -> dict[str, Any]:
             "response_text": response_text,
             "suggestions": suggestions,
             "intent": "clarification",
+        }
+
+    domain_action = _conversational_domain_action(message, history)
+    if domain_action in {"clarify", "refuse"}:
+        response_text = (
+            _domain_context_clarification_message(language)
+            if domain_action == "clarify"
+            else _domain_refusal_message(language)
+        )
+        intent = "clarification" if domain_action == "clarify" else "off_topic"
+        suggestions = _get_default_suggestions(
+            intent=intent,
+            language=language,
+            fallback=True,
+        )
+        elapsed = round((time.perf_counter() - t0) * 1000, 3)
+        logger.info(
+            "graph.node_exit",
+            node="conversational",
+            session_id=session_id,
+            action=f"domain_{domain_action}",
+            duration_ms=elapsed,
+        )
+        return {
+            "response_text": response_text,
+            "suggestions": suggestions,
+            "intent": intent,
         }
 
     # --- LLM path for general conversational ---
