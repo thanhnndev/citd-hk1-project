@@ -8,10 +8,10 @@ from app.models.response import Citation
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-NODE_TIMEOUT_GUARDRAILS = 6
-NODE_TIMEOUT_ROUTER = 8
-NODE_TIMEOUT_LLM = 25
-NODE_TIMEOUT_TOOL = 30
+NODE_TIMEOUT_GUARDRAILS = 30
+NODE_TIMEOUT_ROUTER = 30
+NODE_TIMEOUT_LLM = 60
+NODE_TIMEOUT_TOOL = 120
 
 
 
