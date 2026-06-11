@@ -6,6 +6,7 @@ import { ReasoningLog } from "@/components/reasoning/reasoning-log";
 import {
   Bot,
   CheckCircle2,
+  Clock3,
   Loader2,
   UserRound,
   FileText,
@@ -124,6 +125,8 @@ interface MessageBubbleProps {
   reasoningLog?: string | null;
   locale?: string;
   streamStatus?: ChatStreamStatus | null;
+  responseTimeMs?: number;
+  responseTimeLabel?: string;
 }
 
 export function MessageBubble({
@@ -154,12 +157,20 @@ export function MessageBubble({
   reasoningLog,
   locale,
   streamStatus,
+  responseTimeMs,
+  responseTimeLabel = "Response time",
 }: MessageBubbleProps) {
   const isUser = role === "user";
   const isPending = !content;
   const hasSources = Boolean(citations?.length);
   const showComplete = !isUser && status === "complete" && content;
   const isStreaming = status === "streaming" || status === "submitted";
+  const formattedResponseTime =
+    typeof responseTimeMs === "number" && Number.isFinite(responseTimeMs) && responseTimeMs >= 0
+      ? responseTimeMs < 1000
+        ? `${Math.round(responseTimeMs)} ms`
+        : `${(responseTimeMs / 1000).toFixed(2)} s`
+      : null;
   const [showAllPlaces, setShowAllPlaces] = useState(false);
   const [feedbackState, setFeedbackState] = useState<"like" | "dislike" | null>(null);
   const [showReasonInput, setShowReasonInput] = useState(false);
@@ -287,6 +298,13 @@ export function MessageBubble({
               />
             )}
           </div>
+
+          {!isUser && status === "complete" && formattedResponseTime && (
+            <div className="mt-3 flex items-center gap-1.5 border-t border-[#e9e9e7] pt-2 text-[0.7rem] font-medium text-[#6b7f7e]">
+              <Clock3 className="size-3" aria-hidden="true" />
+              <span>{responseTimeLabel}: {formattedResponseTime}</span>
+            </div>
+          )}
 
           {/* Hover actions — copy, retry, feedback */}
           {!isUser && !isPending && content && (

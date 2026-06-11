@@ -116,8 +116,14 @@ export function PlaceResultsPanel({
       )}
 
       {mobileOpen && (
-        <div className="fixed inset-0 z-50 bg-black/25 lg:hidden" role="dialog" aria-modal="true" aria-label={translations.placeResultsHeading}>
-          <aside className="ml-auto flex h-full w-[min(92vw,380px)] flex-col bg-white shadow-xl">
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label={translations.placeResultsHeading}>
+          <button
+            type="button"
+            className="absolute inset-0 z-0 bg-black/25"
+            onClick={onMobileClose}
+            aria-label="Close sources panel"
+          />
+          <aside className="relative z-10 ml-auto flex h-full w-[min(92vw,380px)] flex-col bg-white shadow-xl">
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#e9e9e7] px-4">
               <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide">
                 <BadgeCheck className="size-4 text-[#2eaadc]" />
