@@ -56,6 +56,7 @@ export function LoginForm({ locale, translations }: LoginFormProps) {
           username: user.username,
           email: user.email,
           is_verified: user.is_verified,
+          is_admin: user.is_admin,
         });
       }
 

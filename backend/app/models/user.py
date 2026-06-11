@@ -53,4 +53,5 @@ class UserResponse(BaseModel):
     email: str = Field(description="Email address.")
     is_active: bool = Field(description="Whether the account is active.")
     is_verified: bool = Field(description="Whether the email is verified.")
+    is_admin: bool = Field(description="Whether the user can access admin features.")
     created_at: datetime = Field(description="Account creation timestamp.")

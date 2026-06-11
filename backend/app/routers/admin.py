@@ -29,7 +29,7 @@ from app.models.response import (
     TracesStatusResponse,
     FairnessSummaryResponse,
 )
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_admin
 from agents.tools.corpus_loader import load_proposition_corpus
 from agents.tools.embedding_service import EmbeddingService, EmbeddingValidationError
 from agents.tools.hybrid_retriever import BM25Vectorizer
@@ -49,7 +49,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 @router.post("/embed", response_model=EmbedResponse, status_code=status.HTTP_200_OK)
 async def embed_corpus(
     request: Request,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> EmbedResponse:
     """Trigger full corpus ingestion into Qdrant.
 
@@ -273,7 +273,7 @@ def _check_thresholds(aggregate_scores: dict) -> tuple[dict, bool]:
 async def trigger_eval(
     body: EvalTriggerRequest | None = None,
     request: Request = None,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> EvalResultResponse:
     """Run RAGAS evaluation against eval_dataset.jsonl.
 
@@ -335,7 +335,7 @@ async def trigger_eval(
 
 @router.get("/eval/results", response_model=list[EvalFileListing])
 async def list_eval_results(
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> list[EvalFileListing]:
     """List recent evaluation results from data/eval_results/.
 
@@ -367,7 +367,7 @@ async def list_eval_results(
 @router.get("/traces", response_model=TracesStatusResponse)
 async def get_traces(
     request: Request,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> TracesStatusResponse:
     """Return Langfuse tracing status and recent trace data.
 
@@ -452,7 +452,7 @@ def _fetch_recent_traces(
 
 @router.get("/fairness", response_model=FairnessSummaryResponse)
 async def get_fairness(
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> FairnessSummaryResponse:
     """Return fairness audit summary for social impact diagnostics.
 
@@ -561,7 +561,7 @@ def _bucket_local_factors_aggregate(local_factors: list[float]) -> dict[str, int
 @router.get("/stats", response_model=AdminStatsResponse)
 async def get_stats(
     request: Request,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> AdminStatsResponse:
     """Return corpus operational stats for admin dashboard visibility.
 

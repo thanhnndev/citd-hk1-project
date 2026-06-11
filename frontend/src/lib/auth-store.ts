@@ -13,6 +13,7 @@ export interface StoredUser {
   username: string;
   email: string;
   is_verified: boolean;
+  is_admin: boolean;
 }
 
 function isClient(): boolean {
