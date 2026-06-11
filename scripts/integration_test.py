@@ -1230,8 +1230,8 @@ def test_langfuse_trace_topology(
 
     # Step 4: Check expected nodes
     expected_nodes = {
-        "input_guardrails", "intent_router", "supervisor",
-        "rag_agent", "grade_documents", "output_guardrails",
+        "input_guardrails", "intent_router", "conversational",
+        "knowledge", "places", "output_guardrails",
     }
     found_expected = expected_nodes & found_nodes
     missing = expected_nodes - found_nodes
@@ -1275,15 +1275,14 @@ def test_per_node_timeout_audit() -> TestResult:
 
     checks = []
 
-    # Check 1: TimeoutPolicy class exists
-    has_timeout_policy = "class TimeoutPolicy" in source
-    checks.append(("TimeoutPolicy class exists", has_timeout_policy))
+    # Check 1: nodes are wrapped by the shared timeout helper
+    has_timeout_policy = "def _with_timeout" in source
+    checks.append(("Shared timeout wrapper exists", has_timeout_policy))
 
-    # Check 2: All 9 node names have timeout assignments
+    # Check 2: all workflow nodes are registered with timeout wrappers
     expected_nodes = [
-        "input_guardrails", "intent_router", "supervisor",
-        "conversational", "output_guardrails", "rag_agent",
-        "grade_documents", "rewrite_query", "maps_agent",
+        "input_guardrails", "intent_router", "conversational",
+        "knowledge", "places", "output_guardrails",
     ]
 
     # Look for node names as keys in the timeouts dict
@@ -1299,7 +1298,7 @@ def test_per_node_timeout_audit() -> TestResult:
 
     all_nodes_covered = len(nodes_missing) == 0
     checks.append(
-        (f"All 9 nodes have timeout entries ({len(nodes_with_timeouts)}/9)", all_nodes_covered)
+        (f"All 6 nodes have timeout entries ({len(nodes_with_timeouts)}/6)", all_nodes_covered)
     )
     if nodes_missing:
         checks.append((f"Missing timeouts: {', '.join(nodes_missing)}", False))

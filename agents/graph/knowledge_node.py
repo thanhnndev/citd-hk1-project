@@ -41,7 +41,7 @@ async def rag_agent_node(state: AgentState) -> dict[str, Any]:
           ``state["language"]``, ``state["session_id"]``
     Writes:
         - ``knowledge_chunks``, ``citations``, ``response_text``,
-          ``knowledge_response_ready``
+          ``tool_receipts``
     """
     t0 = time.perf_counter()
     message = state.get("message", "")

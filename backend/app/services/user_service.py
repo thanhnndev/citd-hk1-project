@@ -1,7 +1,7 @@
 """User service — registration, authentication, and lookup.
 
 Uses asyncpg directly (matching the project's existing pattern in
-agent_service.py) to avoid adding SQLAlchemy as a dependency.
+the agent runtime) to avoid adding SQLAlchemy as a dependency.
 """
 
 from __future__ import annotations

@@ -52,18 +52,18 @@ def _graph(request: Request):
     return graph
 
 
-def _chat_response(session_id: str, result, started: float) -> ChatResponse:
+def _chat_response(session_id: str, graph_result, started: float) -> ChatResponse:
     return ChatResponse(
         session_id=session_id,
-        message=result.response_text or "Mình chưa thể tạo câu trả lời.",
-        intent=result.intent or "unknown",
-        citations=result.citations or [],
-        places=result.places or [],
-        suggestions=result.suggestions or [],
-        reasoning_log=result.reasoning_log,
-        fallback=result.blocked,
+        message=graph_result.response_text or "Mình chưa thể tạo câu trả lời.",
+        intent=graph_result.intent or "unknown",
+        citations=graph_result.citations or [],
+        places=graph_result.places or [],
+        suggestions=graph_result.suggestions or [],
+        reasoning_log=graph_result.reasoning_log,
+        fallback=graph_result.blocked,
         latency_ms=round((time.perf_counter() - started) * 1000, 3),
-        langfuse_trace_id=result.langfuse_trace_id,
+        langfuse_trace_id=graph_result.langfuse_trace_id,
     )
 
 
