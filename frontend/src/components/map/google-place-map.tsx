@@ -15,6 +15,50 @@ function hasLocation(place: PlaceResult): place is PlaceResult & { location: { l
   );
 }
 
+// Global promise to prevent appending the Google Maps script multiple times across mount cycles
+let sdkLoadingPromise: Promise<void> | null = null;
+
+function loadGoogleMapsSdk(token: string): Promise<void> {
+  if (window.google?.maps?.marker?.AdvancedMarkerElement) {
+    return Promise.resolve();
+  }
+  if (sdkLoadingPromise) {
+    return sdkLoadingPromise;
+  }
+
+  sdkLoadingPromise = new Promise<void>((resolve, reject) => {
+    const scriptId = "google-maps-sdk";
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+    const handleCallback = () => {
+      resolve();
+    };
+    (window as any).initGoogleMapCallback = handleCallback;
+
+    if (!script) {
+      script = document.createElement("script");
+      script.id = scriptId;
+      // Load both maps and marker libraries synchronously in the script bootstrap url
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${token}&loading=async&callback=initGoogleMapCallback&libraries=marker`;
+      script.async = true;
+      script.defer = true;
+      script.addEventListener("error", (err) => {
+        sdkLoadingPromise = null;
+        reject(err);
+      });
+      document.head.appendChild(script);
+    } else {
+      script.addEventListener("load", handleCallback);
+      script.addEventListener("error", (err) => {
+        sdkLoadingPromise = null;
+        reject(err);
+      });
+    }
+  });
+
+  return sdkLoadingPromise;
+}
+
 type GooglePlaceMapProps = Readonly<{
   places: PlaceResult[];
   selectedPlaceId: string | null;
@@ -40,121 +84,60 @@ export function GooglePlaceMap({
   const mapRef = useRef<google.maps.Map | null>(null);
   const markersRef = useRef<any[]>([]);
   const [mapError, setMapError] = useState<string | null>(null);
-  const [isSdkLoaded, setIsSdkLoaded] = useState(false);
-  
+
   const token = apiKey;
   const pinnedPlaces = useMemo(() => places.filter(hasLocation), [places]);
 
-  // Load Google Maps JS SDK dynamically with async loading + callback
   useEffect(() => {
-    if (!token) return;
-
-    if (window.google?.maps) {
-      setIsSdkLoaded(true);
-      return;
-    }
-
-    const scriptId = "google-maps-sdk";
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
-    
-    const handleCallback = () => {
-      setIsSdkLoaded(true);
-    };
-    (window as any).initGoogleMapCallback = handleCallback;
-
-    if (!script) {
-      script = document.createElement("script");
-      script.id = scriptId;
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${token}&loading=async&callback=initGoogleMapCallback`;
-      script.async = true;
-      script.defer = true;
-      document.head.appendChild(script);
-    }
-
-    return () => {
-      // Keep global callback clean if unmounted before loading
-      if (document.getElementById(scriptId) && !(window as any).google?.maps) {
-        delete (window as any).initGoogleMapCallback;
-      }
-    };
-  }, [token]);
-
-  // Initialize Map
-  useEffect(() => {
-    if (!isSdkLoaded || !containerRef.current || !token || pinnedPlaces.length === 0 || mapRef.current) return;
+    if (!token || !containerRef.current) return;
 
     let active = true;
 
-    async function initMap() {
+    async function setupMapAndMarkers() {
       try {
-        const { Map } = await google.maps.importLibrary("maps") as google.maps.MapsLibrary;
+        // 1. Ensure Google Maps SDK (including marker library) is loaded
+        await loadGoogleMapsSdk(token);
         if (!active || !containerRef.current) return;
 
-        mapRef.current = new Map(containerRef.current, {
-          center: HAM_NINH_CENTER,
-          zoom: 12,
-          mapId: "DEMO_MAP_ID", // Required for AdvancedMarkerElement to work
-          mapTypeControl: false,
-          streetViewControl: false,
-          fullscreenControl: false,
-          zoomControl: true,
-          // Custom styles for clean, non-cluttered map
-          styles: [
-            {
-              featureType: "poi",
-              elementType: "labels",
-              stylers: [{ visibility: "off" }],
-            },
-            {
-              featureType: "transit",
-              elementType: "labels",
-              stylers: [{ visibility: "off" }],
-            },
-          ],
-        });
-      } catch {
-        if (active) {
-          setMapError("map-unavailable");
+        // 2. Initialize the Map instance if it doesn't exist yet
+        let map = mapRef.current;
+        if (!map) {
+          map = new google.maps.Map(containerRef.current, {
+            center: HAM_NINH_CENTER,
+            zoom: 12,
+            mapId: "DEMO_MAP_ID", // Required for AdvancedMarkerElement
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: false,
+            zoomControl: true,
+            styles: [
+              {
+                featureType: "poi",
+                elementType: "labels",
+                stylers: [{ visibility: "off" }],
+              },
+              {
+                featureType: "transit",
+                elementType: "labels",
+                stylers: [{ visibility: "off" }],
+              },
+            ],
+          });
+          mapRef.current = map;
         }
-      }
-    }
 
-    void initMap();
-
-    return () => {
-      active = false;
-      markersRef.current.forEach((marker) => {
-        marker.map = null;
-      });
-      markersRef.current = [];
-      mapRef.current = null;
-    };
-  }, [isSdkLoaded, pinnedPlaces.length, token]);
-
-  // Update Markers and Fit Bounds using AdvancedMarkerElement
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !isSdkLoaded) return;
-
-    let active = true;
-
-    async function updateMarkers() {
-      try {
-        const { AdvancedMarkerElement } = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
-        const currentMap = mapRef.current;
-        if (!active || !currentMap) return;
-
-        // Clear existing markers
+        // 3. Remove existing markers
         markersRef.current.forEach((marker) => {
           marker.map = null;
         });
         markersRef.current = [];
 
-        // Place custom HTML styled markers
+        if (pinnedPlaces.length === 0) return;
+
+        // 4. Place custom HTML markers using AdvancedMarkerElement from window.google.maps
         markersRef.current = pinnedPlaces.map((place, index) => {
           const isSelected = selectedPlaceId === place.place_id;
 
-          // Custom styled HTML element for the marker
           const pinElement = document.createElement("div");
           pinElement.className = [
             "grid size-9 place-items-center rounded-full border-2 text-sm font-bold shadow-md transition-all duration-300 hover:scale-110 cursor-pointer",
@@ -164,8 +147,8 @@ export function GooglePlaceMap({
           ].join(" ");
           pinElement.textContent = String(index + 1);
 
-          const marker = new AdvancedMarkerElement({
-            map: currentMap,
+          const marker = new google.maps.marker.AdvancedMarkerElement({
+            map: map!,
             position: { lat: place.location.lat, lng: place.location.lng },
             content: pinElement,
             title: `${selectPlaceLabel}: ${place.display_name}`,
@@ -178,47 +161,66 @@ export function GooglePlaceMap({
           return marker;
         });
 
-        // Fit bounds
-        if (pinnedPlaces.length > 0) {
-          const bounds = new google.maps.LatLngBounds();
-          pinnedPlaces.forEach((place) => bounds.extend({ lat: place.location.lat, lng: place.location.lng }));
-          currentMap.fitBounds(bounds);
+        // 5. Fit bounds to frame all pins
+        const bounds = new google.maps.LatLngBounds();
+        pinnedPlaces.forEach((place) => bounds.extend({ lat: place.location.lat, lng: place.location.lng }));
+        map.fitBounds(bounds);
 
-          // Prevent excessive zoom for single marker
-          if (pinnedPlaces.length === 1) {
-            const listener = google.maps.event.addListener(currentMap, "idle", () => {
-              if (currentMap.getZoom()! > 14) currentMap.setZoom(14);
-              google.maps.event.removeListener(listener);
-            });
-          }
+        if (pinnedPlaces.length === 1) {
+          const listener = google.maps.event.addListener(map, "idle", () => {
+            if (map.getZoom()! > 14) map.setZoom(14);
+            google.maps.event.removeListener(listener);
+          });
         }
       } catch (err) {
-        console.error("Failed to load map markers:", err);
+        if (active) {
+          console.error("Map load failed:", err);
+          setMapError("map-unavailable");
+        }
       }
     }
 
-    void updateMarkers();
+    void setupMapAndMarkers();
 
     return () => {
       active = false;
     };
-  }, [isSdkLoaded, onMarkerSelect, pinnedPlaces, selectPlaceLabel, selectedPlaceId]);
+  }, [token, pinnedPlaces, selectedPlaceId, onMarkerSelect, selectPlaceLabel]);
 
-  if (!token) {
-    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{missingTokenLabel}</div>;
-  }
-
-  if (mapError) {
-    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{unavailableLabel}</div>;
-  }
-
-  if (pinnedPlaces.length === 0) {
-    return <div role="status" className="grid h-80 place-items-center p-8 text-center text-sm font-medium text-muted-foreground">{emptyLabel}</div>;
-  }
+  // Handle map instance teardown on final component unmount
+  useEffect(() => {
+    return () => {
+      markersRef.current.forEach((marker) => {
+        marker.map = null;
+      });
+      markersRef.current = [];
+      mapRef.current = null;
+    };
+  }, []);
 
   return (
-    <div className="relative h-80 overflow-hidden bg-muted rounded-t-3xl border-b">
+    <div className="relative h-[450px] overflow-hidden bg-card rounded-[2rem] border shadow-xl shadow-primary/10">
+      {/* Map container - always stays in DOM to preserve the instance and avoid quota usage */}
       <div ref={containerRef} className="h-full w-full" />
+
+      {/* Overlay messages */}
+      {!token && (
+        <div role="status" className="absolute inset-0 grid place-items-center bg-muted p-8 text-center text-sm font-medium text-muted-foreground z-10">
+          {missingTokenLabel}
+        </div>
+      )}
+
+      {token && mapError && (
+        <div role="status" className="absolute inset-0 grid place-items-center bg-muted p-8 text-center text-sm font-medium text-muted-foreground z-10">
+          {unavailableLabel}
+        </div>
+      )}
+
+      {token && !mapError && pinnedPlaces.length === 0 && (
+        <div role="status" className="absolute inset-0 grid place-items-center bg-muted p-8 text-center text-sm font-medium text-muted-foreground z-10">
+          {emptyLabel}
+        </div>
+      )}
     </div>
   );
 }

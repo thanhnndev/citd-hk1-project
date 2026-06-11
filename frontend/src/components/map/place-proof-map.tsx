@@ -171,28 +171,16 @@ export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapPro
           </div>
 
           <div className="space-y-4">
-            <Card className="overflow-hidden bg-card/90 shadow-xl shadow-primary/10">
-              <GooglePlaceMap
-                places={places}
-                selectedPlaceId={selectedPlaceId}
-                onMarkerSelect={setSelectedPlaceId}
-                missingTokenLabel={translations.missingMapToken}
-                unavailableLabel={translations.mapUnavailable}
-                emptyLabel={translations.noPins}
-                selectPlaceLabel={translations.selectPlace}
-                apiKey={apiKey}
-              />
-              <CardContent className="p-5">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {places.map((place, index) => (
-                    <div key={place.place_id} className="rounded-2xl border bg-background/70 p-3 text-sm">
-                      <span className="font-semibold">#{index + 1} {place.display_name}</span>
-                      <p className="mt-1 text-xs text-muted-foreground">{hasLocation(place) ? `${translations.coordinates}: ${formatNumber(place.location.lat)}, ${formatNumber(place.location.lng)}` : translations.pinUnavailable}</p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <GooglePlaceMap
+              places={places}
+              selectedPlaceId={selectedPlaceId}
+              onMarkerSelect={setSelectedPlaceId}
+              missingTokenLabel={translations.missingMapToken}
+              unavailableLabel={translations.mapUnavailable}
+              emptyLabel={translations.noPins}
+              selectPlaceLabel={translations.selectPlace}
+              apiKey={apiKey}
+            />
 
             {selectedPlace && <PlaceDetail place={selectedPlace} translations={translations} />}
           </div>
@@ -240,7 +228,7 @@ function PlaceDetail({ place, translations }: { place: PlaceResult; translations
           <Detail label={translations.rating} value={place.rating?.toFixed(1) ?? translations.unknown} />
           <Detail label={translations.reviews} value={place.user_rating_count?.toString() ?? translations.unknown} />
           <Detail label={translations.businessStatus} value={place.business_status ?? translations.unknown} />
-          <Detail label={translations.openNow} value={place.open_now === true ? translations.openNow : place.open_now === false ? translations.closedNow : translations.openUnknown} />
+          <Detail label={translations.openNow === "Đang mở cửa" ? "Giờ hoạt động" : "Opening hours"} value={place.open_now === true ? translations.openNow : place.open_now === false ? translations.closedNow : translations.openUnknown} />
           <Detail label={translations.type} value={place.primary_type ?? (place.types.join(", ") || translations.unknown)} />
           <Detail label={translations.accessibility} value={accessibility === null ? (place.accessibility_warning ?? translations.unknown) : `${accessibility}%`} />
         </dl>
