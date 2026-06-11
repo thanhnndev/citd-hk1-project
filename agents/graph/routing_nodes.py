@@ -132,11 +132,7 @@ async def input_guardrails_node(state: AgentState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _checkpoint_history(state: AgentState) -> list[dict[str, str]]:
-    """Return prior chat turns from checkpointed messages, excluding current user turn."""
-    explicit_history = state.get("history") or []
-    if explicit_history:
-        return explicit_history
-
+    """Return prior chat turns from state messages, excluding current user turn."""
     current_message = state.get("message", "")
     raw_messages = state.get("messages") or []
     history: list[dict[str, str]] = []
@@ -200,7 +196,7 @@ async def intent_router_node(state: AgentState) -> dict[str, Any]:
     Falls back to deterministic heuristic routing when unavailable.
 
     Reads:
-        - ``state["message"]``, ``state["history"]``, ``state["language"]``
+        - ``state["message"]``, ``state["messages"]``, ``state["language"]``
     Writes:
         - ``intent``, ``intent_confidence``, ``needs_location``
     """

@@ -23,7 +23,6 @@ export async function GET(request: NextRequest) {
   const accessibility = searchParams.get("accessibility")?.trim();
   const lat = searchParams.get("lat")?.trim();
   const lng = searchParams.get("lng")?.trim();
-  const history = searchParams.get("history")?.trim();
   const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
 
   if (!message || !sessionId) {
@@ -41,7 +40,6 @@ export async function GET(request: NextRequest) {
     backendParams.set("lat", lat);
     backendParams.set("lng", lng);
   }
-  if (history) backendParams.set("history", history);
 
   const backendUrl = `http://localhost:${BACKEND_PORT}/chat/stream?${backendParams.toString()}`;
 

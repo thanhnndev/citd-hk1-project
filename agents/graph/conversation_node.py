@@ -35,9 +35,9 @@ async def conversational_node(state: AgentState) -> dict[str, Any]:
     LLM for a natural conversational response.
 
     Reads:
-        - ``state["message"]``, ``state["history"]``, ``state["language"]``
+        - ``state["message"]``, ``state["messages"]``, ``state["language"]``
     Writes:
-        - ``response_text``, ``suggestions``, ``intent``
+        - ``response_text``, ``suggestions``, ``
     """
     t0 = time.perf_counter()
     message = state.get("message", "")

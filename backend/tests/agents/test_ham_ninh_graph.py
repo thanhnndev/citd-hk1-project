@@ -40,7 +40,6 @@ def test_new_turn_resets_turn_scoped_outputs():
         session_id="session",
         message="hello",
         language="vi",
-        history=[],
         user_location=None,
         budget_filter=None,
         accessibility_required=False,
@@ -65,7 +64,6 @@ async def test_family_question_routes_to_grounded_places_without_llm():
         "session_id": "family",
         "message": "Đi với trẻ em nên ghé đâu?",
         "language": "vi",
-        "history": [],
         "messages": [],
     })
     assert result["intent"] == "restaurant_search"

@@ -184,7 +184,6 @@ async def chat_stream(
     lng: float | None = Query(None),
     budget: str | None = Query(None),
     accessibility: bool = Query(False),
-    history: str | None = Query(None),
 ) -> StreamingResponse:
     query = message.strip()
     sid = session_id.strip()
@@ -196,21 +195,6 @@ async def chat_stream(
     except HTTPException:
         return _error_stream("service_unavailable", "The agent graph is not available.", True)
 
-    parsed_history: list[dict[str, str]] = []
-    if history:
-        try:
-            items = json.loads(history)
-            if isinstance(items, list):
-                parsed_history = [
-                    {"role": item["role"], "content": item["content"][:2000]}
-                    for item in items[-8:]
-                    if isinstance(item, dict)
-                    and item.get("role") in {"user", "assistant"}
-                    and isinstance(item.get("content"), str)
-                ]
-        except (json.JSONDecodeError, KeyError, TypeError):
-            logger.warning("chat.history_invalid", session_id=sid)
-
     user_location = {"lat": lat, "lng": lng} if lat is not None and lng is not None else None
 
     async def events() -> AsyncGenerator[str, None]:
@@ -219,7 +203,6 @@ async def chat_stream(
                 session_id=sid,
                 message=query,
                 language=language,
-                history=parsed_history,
                 user_location=user_location,
                 budget_filter=budget,
                 accessibility_required=accessibility,

@@ -13,7 +13,7 @@ import { WelcomeScreen } from "./welcome-screen";
 import { ChatSidebar } from "./chat-sidebar";
 import { PlaceResultsPanel } from "./place-results-panel";
 import styles from "./chat-interface.module.css";
-import { sendChat, streamChat, type ChatHistoryTurn, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
+import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
 import { AUTH_CHANGED_EVENT, getUser } from "@/lib/auth-store";
 import {
   createEmptyConversation,
@@ -248,11 +248,6 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       const requestLocation = userLocation;
 
-      const requestHistory: ChatHistoryTurn[] = messages
-        .filter((message): message is Message & { content: string } => Boolean(message.content) && (message.role === "user" || message.role === "assistant"))
-        .slice(-8)
-        .map((message) => ({ role: message.role, content: message.content }));
-
       const userMsg: Message = { role: "user", content: messageText, status: "complete" };
       const assistantPlaceholder: Message = {
         role: "assistant",
@@ -369,7 +364,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             streamFailed = true;
             streamErrorMessage = err;
           },
-        }, budgetFilter, accessibilityRequired, requestLocation, requestHistory);
+        }, budgetFilter, accessibilityRequired, requestLocation);
 
         if (streamFailed) {
           try {

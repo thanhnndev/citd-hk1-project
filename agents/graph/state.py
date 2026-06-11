@@ -43,7 +43,6 @@ class AgentState(TypedDict, total=False):
     session_id: str
     message: str
     language: str
-    history: list[dict[str, str]]
     messages: Annotated[list[Any], add_messages]
 
     # Replayable execution state.

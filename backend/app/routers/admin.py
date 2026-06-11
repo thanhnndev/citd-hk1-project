@@ -280,6 +280,9 @@ async def trigger_eval(
     Requires JWT auth. Returns credential_blocked verdict if OPENAI_API_KEY
     is not configured. Synchronous call — may block ~30s for 10-15 questions.
 
+    When Langfuse is configured, evaluation scores are logged to Langfuse
+    for centralized observability alongside agent traces.
+
     Returns:
         EvalResultResponse with verdict, metrics, timestamp, and result path.
     """
@@ -290,6 +293,7 @@ async def trigger_eval(
         body.dataset_path if body else None
     )
     metrics = body.metrics if body else None
+    langfuse_client = getattr(request.app.state, "langfuse_client", None) if request else None
 
     logger.info(
         "eval.trigger",
@@ -304,6 +308,7 @@ async def trigger_eval(
         corpus_path=_resolve_eval_dataset_path(None).replace(
             "eval_dataset.jsonl", "tourism_documents.jsonl"
         ),
+        langfuse_client=langfuse_client,
     )
     result = evaluator.evaluate(dataset_path)
 

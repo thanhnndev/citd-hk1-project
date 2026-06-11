@@ -19,6 +19,7 @@ from agents.guardrails.output_guardrails import verify_grounding
 from agents.graph.routing import (_clarify_message, _direct_answer, _extract_suggestions, _fallback_action, _get_default_suggestions, _messages_for_llm)
 from agents.tools.retriever import citation_from_chunk
 from agents.graph.dependencies import NodeServices, configure_services, get_services
+from agents.eval.rag_scorer import score_rag_trace
 from agents.graph.helpers import *
 
 logger = structlog.get_logger(__name__)
@@ -87,6 +88,23 @@ async def output_guardrails_node(state: AgentState) -> dict[str, Any]:
         "severity": grounding_result.severity,
         "details": grounding_result.details or "",
     }
+
+    # Log RAG quality scores to Langfuse for knowledge intents
+    if intent in {"cultural_query", "food_culture"}:
+        tool_receipts = state.get("tool_receipts") or []
+        retrieval_mode = "unknown"
+        for receipt in tool_receipts:
+            if isinstance(receipt, dict) and receipt.get("tool") == "knowledge_retriever":
+                retrieval_mode = receipt.get("status", "unknown")
+                break
+
+        score_rag_trace(
+            response_text=response_text,
+            chunk_count=len(state.get("knowledge_chunks") or []),
+            citation_count=len(citations),
+            grounding_verdict=grounding_result.verdict,
+            retrieval_mode=retrieval_mode,
+        )
 
     elapsed = round((time.perf_counter() - t0) * 1000, 3)
     logger.info(

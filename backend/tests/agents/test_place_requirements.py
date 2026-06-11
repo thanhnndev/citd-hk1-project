@@ -89,7 +89,7 @@ async def test_conversational_node_refuses_off_domain_llm_path() -> None:
         "session_id": "test-session",
         "message": "Write an email asking for leave",
         "language": "en",
-        "history": [],
+        "messages": [],
     })
 
     assert result["intent"] == "off_topic"

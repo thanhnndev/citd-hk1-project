@@ -258,7 +258,6 @@ export async function streamChat(
   budgetFilter?: string | null,
   accessibilityRequired?: boolean,
   userLocation?: LatLng | null,
-  history?: ChatHistoryTurn[],
 ): Promise<void> {
   const params = new URLSearchParams({
     message,
@@ -275,9 +274,6 @@ export async function streamChat(
   if (userLocation) {
     params.set('lat', String(userLocation.lat));
     params.set('lng', String(userLocation.lng));
-  }
-  if (history && history.length > 0) {
-    params.set('history', JSON.stringify(history.slice(-8)));
   }
 
   const res = await fetch(`/api/chat/stream?${params.toString()}`, {
