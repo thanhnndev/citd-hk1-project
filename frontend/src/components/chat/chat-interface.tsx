@@ -41,6 +41,7 @@ interface Message {
   /** Bounded history of operational phases seen during streaming. */
   statusHistory?: ChatStreamStatus[];
   reasoningLog?: string | null;
+  responseTimeMs?: number;
 }
 
 interface ChatInterfaceProps {
@@ -239,6 +240,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     async (overrideMessage?: string) => {
       const messageText = overrideMessage ?? input.trim();
       if (!messageText || loading) return;
+      const responseStartedAt = performance.now();
 
       setError(null);
       setLoading(true);
@@ -289,6 +291,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           fallback: response.fallback,
           langfuseTraceId: response.langfuse_trace_id,
           cacheHit: response.cache_hit,
+          responseTimeMs: response.latency_ms,
           status: "complete",
           streamStatus: null,
           statusHistory: message.statusHistory && message.statusHistory.length > 0
@@ -310,6 +313,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           suggestions: getQuickReplyLabels("generic"),
           guardrailStatus: reason,
           fallback: true,
+          responseTimeMs: performance.now() - responseStartedAt,
           status: "complete",
           streamStatus: null,
           statusHistory: ["planning", "failed-terminal"],
@@ -353,7 +357,12 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             return null;
           },
           onDone: () => {
-            updateLastAssistant((message) => ({ ...message, status: "complete", streamStatus: null }));
+            updateLastAssistant((message) => ({
+              ...message,
+              responseTimeMs: performance.now() - responseStartedAt,
+              status: "complete",
+              streamStatus: null,
+            }));
             setLoading(false);
           },
           onError: (err) => {
@@ -629,11 +638,23 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       <div className="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-[#e9e9e7] bg-white px-3 lg:px-4">
         <button
           type="button"
-          className="inline-flex items-center gap-2 rounded-full border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-semibold text-[#37352f] shadow-sm transition hover:bg-[#f7f7f5]"
+          className="inline-flex items-center gap-2 rounded-full border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-semibold text-[#37352f] shadow-sm transition hover:bg-[#f7f7f5] lg:hidden"
+          onClick={() => setSidebarOpen(true)}
+          aria-label={language === "vi" ? "Mở menu" : "Open menu"}
+          data-testid="sidebar-toggle"
+        >
+          <PanelLeftOpen className="size-4" />
+          <span className="hidden sm:inline">
+            {language === "vi" ? "Mở lịch sử" : "Open history"}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="hidden items-center gap-2 rounded-full border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-semibold text-[#37352f] shadow-sm transition hover:bg-[#f7f7f5] lg:inline-flex"
           onClick={() => setSidebarCollapsed((current) => !current)}
           aria-label={sidebarToggleLabel}
           aria-pressed={!sidebarCollapsed}
-          data-testid="sidebar-toggle"
+          data-testid="sidebar-toggle-desktop"
         >
           {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
           <span className="hidden sm:inline">
@@ -644,16 +665,28 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         </button>
 
         {hasEvidencePanel && (
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb]"
-            onClick={() => setPlacesPanelOpen((current) => !current)}
-            aria-label={sourcesToggleLabel}
-            aria-pressed={placesPanelOpen}
-          >
-            <BookOpen className="size-4" />
-            <span>{placeTranslations.placeResultsHeading}</span>
-          </button>
+          <>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb] lg:hidden"
+              onClick={() => setPlacesOpen(true)}
+              aria-label={placeTranslations.placeResultsHeading}
+              data-testid="sources-toggle"
+            >
+              <BookOpen className="size-4" />
+              <span>{placeTranslations.placeResultsHeading}</span>
+            </button>
+            <button
+              type="button"
+              className="hidden items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb] lg:inline-flex"
+              onClick={() => setPlacesPanelOpen((current) => !current)}
+              aria-label={sourcesToggleLabel}
+              aria-pressed={placesPanelOpen}
+            >
+              <BookOpen className="size-4" />
+              <span>{placeTranslations.placeResultsHeading}</span>
+            </button>
+          </>
         )}
       </div>
 
@@ -776,6 +809,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               reasoningLog={msg.reasoningLog}
               locale={locale}
               streamStatus={msg.streamStatus}
+              responseTimeMs={msg.responseTimeMs}
+              responseTimeLabel={language === "vi" ? "Thời gian phản hồi" : "Response time"}
             />
           ))}
 

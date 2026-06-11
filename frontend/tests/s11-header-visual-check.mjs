@@ -23,15 +23,18 @@ try {
   ]) {
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
+      hasTouch: viewport.name === "mobile",
+      isMobile: viewport.name === "mobile",
     });
     const page = await context.newPage();
     const errors = [];
 
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.goto(`${BASE_URL}/vi`, {
+    await page.goto(`${BASE_URL}/vi/architecture`, {
       waitUntil: "networkidle",
       timeout: 20_000,
     });
+    await page.waitForTimeout(800);
 
     await page.screenshot({
       path: `${outputDir}/${viewport.name}.png`,
@@ -48,6 +51,13 @@ try {
       dimensions.clientWidth,
       `${viewport.name} header must not overflow horizontally`,
     );
+
+    if (viewport.name === "mobile") {
+      const registerLink = page.locator('a[href$="/auth/register"]');
+      await registerLink.click({ timeout: 3_000 });
+      await page.waitForURL("**/vi/auth/register", { timeout: 3_000 });
+    }
+
     assert.deepEqual(errors, [], `${viewport.name} header should not throw`);
     await context.close();
   }

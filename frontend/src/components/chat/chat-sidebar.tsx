@@ -193,11 +193,11 @@ export function ChatSidebar({
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Chat navigation">
           <button
             type="button"
-            className="absolute inset-0 bg-black/25"
+            className="absolute inset-0 z-0 bg-black/25"
             onClick={onMobileClose}
             aria-label={isVi ? "Đóng menu" : "Close menu"}
           />
-          <aside className="relative h-full w-72 max-w-[85vw] border-r border-[#e9e9e7] bg-[#f7f7f5] shadow-xl">
+          <aside className="relative z-10 h-full w-72 max-w-[85vw] border-r border-[#e9e9e7] bg-[#f7f7f5] shadow-xl">
             {content}
           </aside>
         </div>
