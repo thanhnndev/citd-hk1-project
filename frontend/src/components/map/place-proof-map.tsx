@@ -6,7 +6,7 @@ import { ExternalLink, Loader2, Navigation, Search, ShieldAlert, Star } from "lu
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { GoongPlaceMap } from "@/components/map/goong-place-map";
+import { GooglePlaceMap } from "@/components/map/google-place-map";
 import { sendChat, type ChatResponse, type PlaceResult } from "@/lib/chat-api";
 import { cn } from "@/lib/utils";
 
@@ -171,7 +171,7 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
 
           <div className="space-y-4">
             <Card className="overflow-hidden bg-card/90 shadow-xl shadow-primary/10">
-              <GoongPlaceMap
+              <GooglePlaceMap
                 places={places}
                 selectedPlaceId={selectedPlaceId}
                 onMarkerSelect={setSelectedPlaceId}
