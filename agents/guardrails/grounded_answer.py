@@ -65,7 +65,7 @@ User message: {message}"""
 def detect_intent(message: str) -> str:
     """Lightweight keyword/rule-based intent classifier (FALLBACK ONLY).
 
-    Primary intent routing is LLM-based via classify_intent() in AgentService.
+    Primary intent routing is handled by the LangGraph intent router.
     This function remains for backwards compatibility and when the LLM is unavailable
     (test mode, API down, timeout).
 

@@ -1,4 +1,4 @@
-"""Response and message helpers for AgentService.
+"""Prompt and response helpers for the Ham Ninh graph.
 
 Semantic intent routing belongs to the LangGraph LLM/tool loop. This module
 keeps only deterministic conversational shortcuts and serialization helpers.

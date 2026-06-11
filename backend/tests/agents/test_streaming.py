@@ -101,20 +101,6 @@ async def test_adapter_maps_intent_router(adapter):
 
 
 @pytest.mark.asyncio
-async def test_adapter_maps_supervisor(adapter):
-    """Internal dispatch remains represented as user-facing planning."""
-    async def fake_stream():
-        yield {
-            "type": "updates",
-            "data": {
-                "supervisor": {"next_node": "rag_agent"}
-            }
-        }
-
-    events = await _collect_events(adapter.adapt_stream(fake_stream()))
-    assert "[STATUS] planning" in events
-
-
 @pytest.mark.asyncio
 async def test_adapter_maps_conversational_response(adapter):
     """Completed conversational response is marked as a full message, not a token."""
@@ -138,7 +124,7 @@ async def test_adapter_maps_rag_agent(adapter):
         yield {
             "type": "updates",
             "data": {
-                "rag_agent": {}
+                "knowledge": {}
             }
         }
     
@@ -153,7 +139,7 @@ async def test_adapter_maps_maps_agent(adapter):
         yield {
             "type": "updates",
             "data": {
-                "maps_agent": {}
+                "places": {}
             }
         }
     
@@ -390,7 +376,7 @@ async def test_adapter_handles_dict_places_and_citations(adapter):
         yield {
             "type": "updates",
             "data": {
-                "rag_agent": {
+                "knowledge": {
                     "places": [{"name": "Beach", "lat": 10.5}],
                     "citations": [{"title": "Source", "url": "http://test.com"}]
                 }
@@ -481,7 +467,7 @@ async def test_adapter_accumulates_state_across_updates(adapter):
         yield {
             "type": "updates",
             "data": {
-                "rag_agent": {
+                "knowledge": {
                     "places": [{"name": "Beach"}],
                     "citations": [{"title": "Guide"}]
                 }

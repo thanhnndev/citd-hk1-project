@@ -164,23 +164,20 @@ class StreamingAdapter:
         elif node_name == "intent_router":
             yield "[STATUS] planning"
 
-        elif node_name == "supervisor":
-            yield "[STATUS] planning"
-                
         elif node_name == "conversational":
             response_text = state_update.get("response_text")
             if response_text and not self._response_text_emitted:
                 self._response_text_emitted = True
                 yield _message_event(response_text)
                 
-        elif node_name == "rag_agent":
+        elif node_name == "knowledge":
             yield "[STATUS] gathering:knowledge"
             response_text = state_update.get("response_text")
             if response_text and not self._response_text_emitted:
                 self._response_text_emitted = True
                 yield _message_event(response_text)
             
-        elif node_name == "maps_agent":
+        elif node_name == "places":
             yield "[STATUS] gathering:places"
             response_text = state_update.get("response_text")
             if response_text and not self._response_text_emitted:

@@ -18,7 +18,6 @@ from agents.graph.nodes import (
     conversational_node,
     maps_agent_node,
     requires_user_location_heuristic,
-    supervisor_node,
 )
 
 def _candidate(name: str, lat: float, lng: float, types: list[str]) -> PlaceCandidate:
@@ -170,40 +169,3 @@ async def test_deictic_decision_followup_without_context_does_not_call_places() 
     assert result["intent"] == "place_decision_followup"
     assert result["places"] == []
 
-
-@pytest.mark.asyncio
-async def test_supervisor_blocks_places_call_for_existing_place_followup() -> None:
-    state = {
-        "session_id": "test-session",
-        "message": "Người khuyết tật đi đến đó có được không?",
-        "language": "vi",
-        "intent": "restaurant_search",
-        "routing_tier": "strict",
-        "guardrail_flags": {},
-        "last_places": [{"display_name": "Bè hải sản Tình Biển 2"}],
-    }
-
-    result = await supervisor_node(state)
-
-    assert result["next_node"] == "maps_agent"
-    assert result["tool_call_allowed"] is False
-    assert result["tool_call_reason"] == "decision_followup_existing_places"
-
-
-@pytest.mark.asyncio
-async def test_supervisor_allows_places_call_for_new_discovery() -> None:
-    state = {
-        "session_id": "test-session",
-        "message": "Tìm quán hải sản ở Hàm Ninh",
-        "language": "vi",
-        "intent": "restaurant_search",
-        "routing_tier": "strict",
-        "guardrail_flags": {},
-        "last_places": [],
-    }
-
-    result = await supervisor_node(state)
-
-    assert result["next_node"] == "maps_agent"
-    assert result["tool_call_allowed"] is True
-    assert result["tool_call_reason"] == "new_place_discovery"

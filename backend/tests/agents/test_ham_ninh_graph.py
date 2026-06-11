@@ -76,7 +76,7 @@ async def test_places_interrupts_when_current_location_is_required():
         intent="restaurant_search",
     )
     configure_services(NodeServices(places_service=service))
-    with patch("agents.graph.nodes.interrupt", return_value={"lat": 10.0, "lng": 103.0}) as call:
+    with patch("agents.graph.places_node.interrupt", return_value={"lat": 10.0, "lng": 103.0}) as call:
         await maps_agent_node({
             "session_id": "nearby",
             "message": "Tìm quán gần tôi",

@@ -1,7 +1,5 @@
 """Single LangGraph runtime for the Ham Ninh assistant."""
 
-from __future__ import annotations
-
 import asyncio
 import inspect
 import json
@@ -9,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
 import structlog
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
@@ -39,7 +38,10 @@ def _with_timeout(node, name: str, seconds: int):
     """Apply one deterministic timeout policy to a graph node."""
     accepts_config = len(inspect.signature(node).parameters) >= 2
 
-    async def wrapped(state: AgentState, config: Any = None) -> dict[str, Any]:
+    async def wrapped(
+        state: AgentState,
+        config: RunnableConfig | None = None,
+    ) -> dict[str, Any]:
         try:
             call = node(state, config) if accepts_config else node(state)
             return await asyncio.wait_for(call, timeout=seconds)
