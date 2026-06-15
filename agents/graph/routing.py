@@ -1,4 +1,4 @@
-"""Response and message helpers for AgentService.
+"""Prompt and response helpers for the Ham Ninh graph.
 
 Semantic intent routing belongs to the LangGraph LLM/tool loop. This module
 keeps only deterministic conversational shortcuts and serialization helpers.
@@ -169,10 +169,10 @@ def _chunk_payload(chunk: RAGChunk, index: int) -> dict[str, str | int]:
 
 def _status_for_state(state: AgentState) -> str:
     if state.get("places"):
-        return "[STATUS] checking_places"
+        return "[STATUS] gathering:places"
     if state.get("citations"):
-        return "[STATUS] searching_knowledge"
-    return "[STATUS] using_history"
+        return "[STATUS] gathering:knowledge"
+    return "[STATUS] planning"
 
 
 def _status_for_tool_calls(tool_calls: list[Any]) -> str:
@@ -186,7 +186,7 @@ def _status_for_tool_calls(tool_calls: list[Any]) -> str:
         if name:
             names.add(str(name))
     if "search_places" in names:
-        return "[STATUS] checking_places"
+        return "[STATUS] gathering:places"
     if "search_knowledge" in names:
-        return "[STATUS] searching_knowledge"
-    return "[STATUS] composing"
+        return "[STATUS] gathering:knowledge"
+    return "[STATUS] executing"

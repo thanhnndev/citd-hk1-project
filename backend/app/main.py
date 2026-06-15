@@ -34,10 +34,13 @@ from app.services.user_service import UserService
 from app.services.langfuse_service import init_langfuse
 
 from agents.tools.corpus_loader import load_corpus
-from agents.graph.agent_service import AgentService, create_agent_checkpointer
+from agents.graph.ham_ninh_graph import create_ham_ninh_graph
+from agents.graph.nodes import NodeServices
 from agents.tools.embedding_service import EmbeddingService
 from agents.tools.hybrid_retriever import BM25Vectorizer, HybridRetriever
 from agents.services.llm_answer_service import LLMAnswerService
+from agents.services.cohere_reranker import CohereReranker
+import openai
 from agents.services.place_recommendation_service import PlaceRecommendationService
 from agents.tools.places_service import GooglePlacesService, GoongPlacesService, DualPlacesService
 from agents.tools.routes_service import GoongRoutesService
@@ -66,6 +69,37 @@ async def _create_place_cache(dsn: str | None) -> PlaceCache | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("place_cache.degraded", error_type=type(exc).__name__, reason="init_failed")
         return None
+
+
+# ── OpenAI client factory ───────────────────────────────────────────────
+
+def create_openai_client(langfuse_client: Any | None, api_key: str):
+    """Create OpenAI client, optionally patched with Langfuse for automatic tracing.
+
+    When Langfuse is enabled (langfuse_client is not None), uses langfuse.openai
+    to wrap the OpenAI client for automatic LLM call tracing. Otherwise uses
+    standard openai.AsyncOpenAI.
+
+    Args:
+        langfuse_client: Langfuse client instance, or None if disabled.
+        api_key: OpenAI API key.
+
+    Returns:
+        AsyncOpenAI client (patched or standard).
+    """
+    if langfuse_client is not None:
+        from langfuse.openai import openai as langfuse_openai
+        client = langfuse_openai.AsyncOpenAI(api_key=api_key)
+        logger.info(
+            "openai_client.configured",
+            api_key_present=bool(api_key),
+            langfuse_patched=True,
+        )
+        return client
+    else:
+        client = openai.AsyncOpenAI(api_key=api_key)
+        logger.info("openai_client.configured", api_key_present=bool(api_key))
+        return client
 
 
 # ── Lifespan manager ────────────────────────────────────────────────────
@@ -131,10 +165,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.bm25_vectorizer = None
     app.state.qdrant_service = None
     app.state.embedding_service = None
+    app.state.semantic_cache = None
     app.state.llm_service = None
     app.state.places_service = None
     app.state.place_recommendation_service = None
-    app.state.agent_service = None
 
     try:
         place_cache = await _create_place_cache(os.environ.get("DATABASE_URL"))
@@ -164,10 +198,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("places.recommendation_init_failed", error_type=type(exc).__name__)
         app.state.place_cache = None
 
+    # Initialize Embedding Service and Semantic Cache
+    try:
+        from agents.tools.semantic_cache import SemanticCache
+        app.state.embedding_service = EmbeddingService()
+        app.state.semantic_cache = SemanticCache(redis_url=settings.redis_url)
+        logger.info(
+            "semantic_cache.configured",
+            redis_url=settings.redis_url,
+            embedding_service_ready=True,
+        )
+    except Exception as exc:
+        logger.warning("semantic_cache.init_failed", error=str(exc))
+
     if chunks:
         try:
             qdrant_service = QdrantService()
-            embedding_service = EmbeddingService()
+            embedding_service = app.state.embedding_service or EmbeddingService()
 
             bm25 = BM25Vectorizer()
             bm25.fit([c.text for c in chunks])
@@ -188,20 +235,99 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             app.state.bm25_vectorizer = bm25
             app.state.qdrant_service = qdrant_service
             app.state.embedding_service = embedding_service
-            app.state.llm_service = LLMAnswerService()
         except Exception as exc:
             logger.warning("hybrid.init_failed", error=str(exc))
 
-    checkpoint, checkpoint_mode = await create_agent_checkpointer()
-    app.state.agent_service = AgentService(
-        retriever=app.state.retriever,
-        hybrid_retriever=app.state.hybrid_retriever,
-        llm_service=app.state.llm_service,
-        checkpointer=checkpoint,
-        checkpoint_mode=checkpoint_mode,
-        place_recommendation_service=app.state.place_recommendation_service,
-        langfuse_client=_langfuse_client,
-    )
+    # 5. Wire the single HamNinhGraph runtime.
+    app.state.ham_ninh_graph = None
+    ham_ninh_checkpoint_mode = "memory"
+    ham_ninh_graph_checkpointer = None
+    try:
+        # Build OpenAI client for LLM-dependent graph nodes
+        # Patch with langfuse.openai when Langfuse is enabled for automatic LLM call tracing
+        if _langfuse_client is not None:
+            from langfuse.openai import openai as langfuse_openai
+            openai_client = langfuse_openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            logger.info(
+                "openai_client.configured",
+                api_key_present=bool(settings.OPENAI_API_KEY),
+                langfuse_patched=True,
+            )
+        else:
+            openai_client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            logger.info("openai_client.configured", api_key_present=bool(settings.OPENAI_API_KEY))
+
+        # Build CohereReranker if key present (graceful degradation: None skips reranking)
+        cohere_reranker = None
+        if settings.COHERE_API_KEY:
+            cohere_reranker = CohereReranker(api_key=settings.COHERE_API_KEY)
+        logger.info("cohere.configured", api_key_present=bool(settings.COHERE_API_KEY))
+
+        # Build NodeServices with available services
+        node_services = NodeServices(
+            llm_client=openai_client,
+            model="gpt-4o-mini",
+            retriever=app.state.hybrid_retriever or app.state.retriever,
+            places_service=app.state.place_recommendation_service,
+            cohere_reranker=cohere_reranker,
+            llm_answer_service=LLMAnswerService(
+                client=openai_client,
+                model="gpt-4o-mini",
+            ),
+            semantic_cache=app.state.semantic_cache,
+            embedding_service=app.state.embedding_service,
+        )
+        app.state.llm_service = node_services.llm_answer_service
+
+        # Create HamNinhGraph with AsyncPostgresSaver if DATABASE_URL is available
+        dsn = os.environ.get("DATABASE_URL")
+        if dsn:
+            try:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+                from agents.graph.ham_ninh_graph import HamNinhGraph
+                # Create checkpointer and call setup() to create tables
+                ham_ninh_graph_checkpointer = AsyncPostgresSaver.from_conn_string(dsn)
+                await ham_ninh_graph_checkpointer.setup()
+                # Pass checkpointer directly to avoid duplicate connections
+                app.state.ham_ninh_graph = HamNinhGraph(
+                    checkpointer=ham_ninh_graph_checkpointer,
+                    services=node_services,
+                    langfuse_client=_langfuse_client,
+                )
+                ham_ninh_checkpoint_mode = "postgres"
+                logger.info("ham_ninh_graph.initialized", checkpoint_mode="postgres")
+            except ImportError:
+                logger.warning("ham_ninh_graph.postgres_unavailable", fallback="memory")
+                app.state.ham_ninh_graph = await create_ham_ninh_graph(
+                    checkpoint_mode="memory",
+                    services=node_services,
+                    langfuse_client=_langfuse_client,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ham_ninh_graph.postgres_init_failed",
+                    error_type=type(exc).__name__,
+                    fallback="memory",
+                )
+                app.state.ham_ninh_graph = await create_ham_ninh_graph(
+                    checkpoint_mode="memory",
+                    services=node_services,
+                    langfuse_client=_langfuse_client,
+                )
+        else:
+            app.state.ham_ninh_graph = await create_ham_ninh_graph(
+                checkpoint_mode="memory",
+                services=node_services,
+                langfuse_client=_langfuse_client,
+            )
+            logger.info("ham_ninh_graph.initialized", checkpoint_mode="memory")
+    except Exception as exc:
+        logger.warning(
+            "ham_ninh_graph.init_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        app.state.ham_ninh_graph = None
 
     # 5. Initialize UserService (PostgreSQL-backed auth)
     app.state.user_service = None
@@ -222,11 +348,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         langfuse_client_attached=_langfuse_client is not None,
         corpus_loaded=app.state.retriever is not None,
         llm_service_enabled=app.state.llm_service is not None,
-        agent_service_enabled=app.state.agent_service is not None,
+        ham_ninh_graph_enabled=app.state.ham_ninh_graph is not None,
+        ham_ninh_checkpoint_mode=ham_ninh_checkpoint_mode,
         place_recommendation_enabled=app.state.place_recommendation_service is not None,
         place_cache_configured=getattr(app.state, "place_cache", None) is not None,
         user_service_enabled=app.state.user_service is not None,
-        checkpoint_mode=checkpoint_mode,
     )
 
     yield
@@ -241,6 +367,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     place_cache = getattr(app.state, "place_cache", None)
     if place_cache is not None:
         await place_cache.close()
+
+    # Close HamNinhGraph checkpointer (AsyncPostgresSaver connection pool)
+    if ham_ninh_graph_checkpointer is not None:
+        try:
+            close_fn = getattr(ham_ninh_graph_checkpointer, "close", None)
+            if close_fn is not None:
+                await close_fn()
+            logger.info("ham_ninh_graph.checkpointer_closed")
+        except Exception as exc:
+            logger.warning(
+                "ham_ninh_graph.checkpointer_close_failed",
+                error_type=type(exc).__name__,
+            )
 
     # Close user service pool
     user_service = getattr(app.state, "user_service", None)
@@ -333,7 +472,7 @@ app.include_router(auth_router)
 # Chat router — requires API key auth
 app.include_router(chat_router, dependencies=[Depends(verify_api_key)])
 
-# Admin router — each endpoint manages its own JWT auth via Depends(get_current_user)
+# Admin router — each endpoint requires an authenticated admin user.
 app.include_router(admin_router)
 
 

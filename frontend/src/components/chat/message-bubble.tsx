@@ -1,33 +1,39 @@
-"use client";
-
 import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { CitationCard } from "./citation-card";
 import { PlaceCard } from "./place-card";
 import { MessageActions } from "./message-actions";
-import { AccessibilityBadge } from "@/components/reasoning/accessibility-badge";
+import { ReasoningLog } from "@/components/reasoning/reasoning-log";
 import {
   Bot,
   CheckCircle2,
+  Clock3,
   Loader2,
   UserRound,
-  ArrowRight,
+  FileText,
+  MapPinned,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
 import type { ChatStreamStatus, Citation, PlaceResult } from "@/lib/chat-api";
+import { submitFeedback } from "@/lib/chat-api";
 
 const markdownComponents: Components = {
-  p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
   strong: ({ children }) => (
     <strong className="font-semibold text-current">{children}</strong>
   ),
   em: ({ children }) => <em className="italic">{children}</em>,
   ul: ({ children }) => (
-    <ul className="my-3 list-disc space-y-1 pl-5">{children}</ul>
+    <ul className="my-3 space-y-2 pl-0">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="my-3 list-decimal space-y-1 pl-5">{children}</ol>
+    <ol className="my-3 space-y-2 pl-0">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-1">{children}</li>,
+  li: ({ children }) => (
+    <li className="list-none rounded-xl border border-[#e9e9e7] bg-[#fbfaf7] px-3 py-2 shadow-sm">
+      {children}
+    </li>
+  ),
   h1: ({ children }) => (
     <h3 className="mb-2 mt-4 text-lg font-semibold">{children}</h3>
   ),
@@ -66,6 +72,11 @@ const markdownComponents: Components = {
 
 export type MessageStatus = "submitted" | "streaming" | "complete";
 
+function normalizeStreamStatus(status: ChatStreamStatus): string {
+  if (status.startsWith("gathering:")) return status;
+  return status.split(":")[0];
+}
+
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
@@ -103,6 +114,19 @@ interface MessageBubbleProps {
     retry?: string;
   };
   onRetry?: () => void;
+  onOpenPlacesPanel?: () => void;
+  onOpenSourcesPanel?: () => void;
+  /** Unique message identifier for feedback tracking. */
+  messageId?: string;
+  /** Session ID for feedback context. */
+  sessionId?: string;
+  /** Turn index in conversation. */
+  turnIndex?: number;
+  reasoningLog?: string | null;
+  locale?: string;
+  streamStatus?: ChatStreamStatus | null;
+  responseTimeMs?: number;
+  responseTimeLabel?: string;
 }
 
 export function MessageBubble({
@@ -114,42 +138,97 @@ export function MessageBubble({
   assistantLabel = "Ham Ninh Assistant",
   userLabel = "You",
   sourcesLabel = "Sources",
-  streamStatusLabel: _streamStatusLabel,
+  streamStatusLabel,
   status = "complete",
-  guardrailStatus,
-  fallback,
-  langfuseTraceId,
-  cacheHit,
+  guardrailStatus: _guardrailStatus,
+  fallback: _fallback,
+  langfuseTraceId: _langfuseTraceId,
+  cacheHit: _cacheHit,
   statusHistory,
   streamStatusLabels,
   placeTranslations,
   actionTranslations,
   onRetry,
+  onOpenPlacesPanel,
+  onOpenSourcesPanel,
+  messageId,
+  sessionId,
+  turnIndex,
+  reasoningLog,
+  locale,
+  streamStatus,
+  responseTimeMs,
+  responseTimeLabel = "Response time",
 }: MessageBubbleProps) {
   const isUser = role === "user";
   const isPending = !content;
   const hasSources = Boolean(citations?.length);
   const showComplete = !isUser && status === "complete" && content;
-  const hasStatusHistory = !isUser && statusHistory && statusHistory.length > 0;
   const isStreaming = status === "streaming" || status === "submitted";
+  const formattedResponseTime =
+    typeof responseTimeMs === "number" && Number.isFinite(responseTimeMs) && responseTimeMs >= 0
+      ? responseTimeMs < 1000
+        ? `${Math.round(responseTimeMs)} ms`
+        : `${(responseTimeMs / 1000).toFixed(2)} s`
+      : null;
   const [showAllPlaces, setShowAllPlaces] = useState(false);
+  const [feedbackState, setFeedbackState] = useState<"like" | "dislike" | null>(null);
+  const [showReasonInput, setShowReasonInput] = useState(false);
+  const [reason, setReason] = useState("");
 
-  /** Build a compact post-response summary from status history + data signals. */
-  const postResponseSummary = (() => {
-    if (!hasStatusHistory || status !== "complete") return null;
-    const lastPhase =
-      streamStatusLabels?.[statusHistory[statusHistory.length - 1]];
-    const parts: string[] = [];
-    if (lastPhase) parts.push(lastPhase.replace(/\.\.\.$/, ""));
-    if (citations && citations.length > 0)
-      parts.push(
-        `${citations.length} ${sourcesLabel?.toLowerCase() ?? "sources"}`,
-      );
-    if (places && places.length > 0) parts.push(`${places.length} places`);
-    if (fallback) parts.push("fallback");
-    if (cacheHit) parts.push("cache");
-    return parts.length > 0 ? parts.join(" · ") : null;
-  })();
+  const handleFeedback = async (type: "like" | "dislike") => {
+    if (!messageId) return;
+    
+    // Toggle off if clicking same button
+    if (feedbackState === type) {
+      setFeedbackState(null);
+      setShowReasonInput(false);
+      return;
+    }
+    
+    // If switching to dislike, show reason input
+    if (type === "dislike") {
+      setFeedbackState("dislike");
+      setShowReasonInput(true);
+      return;
+    }
+    
+    // Submit like immediately
+    setFeedbackState("like");
+    setShowReasonInput(false);
+    
+    try {
+      await submitFeedback({
+        message_id: messageId,
+        feedback_type: "like",
+        session_id: sessionId ?? null,
+        turn_index: turnIndex ?? null,
+        message_content: content.slice(0, 200),
+      });
+    } catch (err) {
+      console.error("Failed to submit feedback:", err);
+    }
+  };
+
+  const submitReasonFeedback = async () => {
+    if (!messageId) return;
+    
+    try {
+      await submitFeedback({
+        message_id: messageId,
+        feedback_type: "dislike",
+        reason: reason || null,
+        session_id: sessionId ?? null,
+        turn_index: turnIndex ?? null,
+        message_content: content.slice(0, 200),
+      });
+    } catch (err) {
+      console.error("Failed to submit feedback:", err);
+    }
+    
+    setShowReasonInput(false);
+    setReason("");
+  };
 
   return (
     <article
@@ -198,7 +277,7 @@ export function MessageBubble({
           }`}
         >
           <div
-            className="whitespace-pre-wrap text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7"
+            className={`text-[0.9rem] leading-6 sm:text-[0.95rem] sm:leading-7 ${isUser ? "whitespace-pre-wrap" : ""}`}
           >
             {content ? (
               isUser ? (
@@ -220,85 +299,153 @@ export function MessageBubble({
             )}
           </div>
 
-          {/* Hover actions — copy, retry */}
+          {!isUser && status === "complete" && formattedResponseTime && (
+            <div className="mt-3 flex items-center gap-1.5 border-t border-[#e9e9e7] pt-2 text-[0.7rem] font-medium text-[#6b7f7e]">
+              <Clock3 className="size-3" aria-hidden="true" />
+              <span>{responseTimeLabel}: {formattedResponseTime}</span>
+            </div>
+          )}
+
+          {/* Hover actions — copy, retry, feedback */}
           {!isUser && !isPending && content && (
-            <div className="absolute -bottom-3 right-3 rounded-md border border-[#e9e9e7] bg-white shadow-sm">
+            <div className="absolute -bottom-9 right-3 flex items-center gap-2 rounded-md border border-[#e9e9e7] bg-white px-2 py-1 shadow-sm">
               <MessageActions
                 content={content}
                 onRetry={onRetry}
                 translations={actionTranslations}
               />
+              {messageId && status === "complete" && (
+                <div className="flex items-center gap-1 border-l border-[#e9e9e7] pl-2">
+                  <button
+                    type="button"
+                    onClick={() => handleFeedback("like")}
+                    className={`rounded p-1 transition-colors ${
+                      feedbackState === "like"
+                        ? "text-[#0b5f63] bg-[#0b5f63]/10"
+                        : "text-[#6b7f7e] hover:text-[#0b5f63] hover:bg-[#0b5f63]/5"
+                    }`}
+                    aria-label="Like this response"
+                    title="Phản hồi hữu ích"
+                  >
+                    <ThumbsUp className="size-3.5" fill={feedbackState === "like" ? "currentColor" : "none"} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFeedback("dislike")}
+                    className={`rounded p-1 transition-colors ${
+                      feedbackState === "dislike"
+                        ? "text-[#b45a5a] bg-[#b45a5a]/10"
+                        : "text-[#6b7f7e] hover:text-[#b45a5a] hover:bg-[#b45a5a]/5"
+                    }`}
+                    aria-label="Dislike this response"
+                    title="Phản hồi chưa tốt"
+                  >
+                    <ThumbsDown className="size-3.5" fill={feedbackState === "dislike" ? "currentColor" : "none"} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Guardrail/fallback/trace badges */}
-          {!isUser &&
-            (guardrailStatus || fallback || langfuseTraceId || cacheHit) && (
-              <AccessibilityBadge
-                guardrailStatus={guardrailStatus}
-                fallback={fallback}
-                langfuseTraceId={langfuseTraceId}
-                cacheHit={cacheHit}
+          {/* Optional reason input for dislike */}
+          {showReasonInput && (
+            <div className="absolute -bottom-20 right-3 z-10 flex items-center gap-2 rounded-md border border-[#e9e9e7] bg-white px-3 py-2 shadow-md">
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Lý do (không bắt buộc)..."
+                className="w-48 rounded border border-[#e9e9e7] px-2 py-1 text-xs focus:border-[#0b5f63] focus:outline-none"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    submitReasonFeedback();
+                  } else if (e.key === "Escape") {
+                    setShowReasonInput(false);
+                    setReason("");
+                  }
+                }}
+                autoFocus
               />
-            )}
+              <button
+                type="button"
+                onClick={submitReasonFeedback}
+                className="rounded bg-[#0b5f63] px-2 py-1 text-xs text-white hover:bg-[#0b5f63]/90"
+              >
+                Gửi
+              </button>
+            </div>
+          )}
+
+          {/* Technical badges removed for end-user view */}
         </div>
 
-        {/* Thinking timeline — useful while waiting, hidden after completion for end users. */}
-        {!isUser && isStreaming && hasStatusHistory && streamStatusLabels && (
-          <div
-            className={`mt-2 rounded-xl border px-2.5 py-1.5 text-[0.6rem] transition-colors sm:px-3 sm:py-2 ${
-              isStreaming
-                ? "border-[#0b5f63]/15 bg-[#0b5f63]/5 text-[#4d6868]"
-                : "border-slate-200/60 bg-white/50 text-[#6b7f7e]"
-            }`}
-            aria-label="Processing steps"
-          >
-            <div className="flex items-center gap-1.5">
-              {isStreaming && (
-                <Loader2 className="size-2.5 animate-spin shrink-0" />
-              )}
-              <span className="font-semibold uppercase tracking-wider opacity-70">
-                {isStreaming ? "Processing" : "Completed via"}
-              </span>
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5">
-              {statusHistory.map((s, i) => (
-                <span
-                  key={`${s}-${i}`}
-                  className="inline-flex items-center gap-1"
-                >
-                  {i > 0 && <ArrowRight className="size-2 opacity-40" />}
-                  <span>
-                    {streamStatusLabels[s]?.replace(/\.\.\.$/, "") ?? s}
-                  </span>
-                </span>
-              ))}
-            </div>
-            {postResponseSummary && (
-              <div className="mt-1.5 border-t border-current/10 pt-1.5 text-[0.55rem] opacity-70">
-                {postResponseSummary}
-              </div>
+        {!isUser && status === "complete" && (hasSources || (places && places.length > 0)) && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {places && places.length > 0 && (
+              <button
+                type="button"
+                onClick={onOpenPlacesPanel}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#2383e2]/20 bg-[#2383e2]/8 px-3 py-1.5 text-xs font-semibold text-[#0b5f63] hover:bg-[#2383e2]/12"
+              >
+                <MapPinned className="size-3.5" />
+                {placeTranslations?.placeResultsHeading ?? "Map"} ({places.length})
+              </button>
+            )}
+            {hasSources && (
+              <button
+                type="button"
+                onClick={onOpenSourcesPanel}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#2383e2]/20 bg-[#f7f7f5] px-3 py-1.5 text-xs font-semibold text-[#37352f] hover:bg-[#efefed]"
+              >
+                <FileText className="size-3.5" />
+                {sourcesLabel} ({citations!.length})
+              </button>
             )}
           </div>
         )}
 
-        {/* Citations — collapsible sources drawer */}
-        {!isUser && hasSources && (
-          <details
-            className="mt-3 max-w-full rounded-lg bg-[#f7f7f5] p-3"
-            aria-label={sourcesLabel}
+        {/* Semantic run progress. Responsible-AI controls remain implementation policy, not UI steps. */}
+        {!isUser && isStreaming && (
+          <div
+            className="mt-3 w-full rounded-xl border border-[#e9e9e7] bg-[#fbfaf7] px-4 py-3"
+            role="status"
+            aria-live="polite"
           >
-            <summary className="cursor-pointer list-none px-1 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#787774]">
-              {sourcesLabel} ({citations!.length})
-            </summary>
-            <div className="mt-2 grid max-w-full gap-2 overflow-hidden">
-              {citations!.map((citation, i) => (
-                <div key={`${citation.source}-${i}`} id={citationAnchorId(i)}>
-                  <CitationCard citation={citation} index={i + 1} />
-                </div>
-              ))}
+            <div className="flex items-center gap-2 text-sm font-medium text-[#123436]">
+              <Loader2 className="size-4 animate-spin text-[#0b5f63]" aria-hidden="true" />
+              <span>{streamStatusLabel ?? typingLabel}</span>
             </div>
-          </details>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(statusHistory ?? [])
+                .filter((item, index, items) => {
+                  const normalized = normalizeStreamStatus(item);
+                  const current = streamStatus ? normalizeStreamStatus(streamStatus) : null;
+                  return normalized !== current && items.findIndex(
+                    (candidate) => normalizeStreamStatus(candidate) === normalized,
+                  ) === index;
+                })
+                .slice(-3)
+                .map((item) => (
+                  <span
+                    key={item}
+                    className="inline-flex items-center gap-1 text-xs text-[#5d7373]"
+                  >
+                    <CheckCircle2 className="size-3 text-emerald-600" aria-hidden="true" />
+                    {streamStatusLabels?.[item] ?? item}
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* Reasoning log / Explainability for completed assistant responses */}
+        {!isUser && status === "complete" && reasoningLog && (
+          <div className="w-full max-w-none">
+            <ReasoningLog
+              reasoningLog={reasoningLog}
+              locale={locale}
+            />
+          </div>
         )}
 
         {/* Place cards — curated first, with progressive disclosure for more results. */}
@@ -358,10 +505,20 @@ function RichMessageContent({
   citations?: Citation[];
 }) {
   return (
-    <ReactMarkdown components={markdownComponents}>
-      {transformCitationMarkers(content, citations)}
-    </ReactMarkdown>
+    <div className="max-w-none text-[#37352f] [&_p:empty]:hidden">
+      <ReactMarkdown components={markdownComponents}>
+        {transformCitationMarkers(normalizeAssistantMarkdown(content), citations)}
+      </ReactMarkdown>
+    </div>
   );
+}
+
+function normalizeAssistantMarkdown(content: string) {
+  return content
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\s*[-*]\s*$/gm, "")
+    .trim();
 }
 
 function transformCitationMarkers(content: string, citations?: Citation[]) {

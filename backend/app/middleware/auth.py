@@ -10,7 +10,7 @@ can access protected endpoints.
 
 from __future__ import annotations
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.services.jwt_service import decode_access_token
 
@@ -71,6 +71,16 @@ async def get_current_user(request: Request):
             detail="Account is deactivated.",
         )
 
+    return user
+
+
+async def get_current_admin(user=Depends(get_current_user)):
+    """Require an authenticated user with admin privileges."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
     return user
 
 

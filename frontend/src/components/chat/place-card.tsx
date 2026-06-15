@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { ExternalLink, MapPin, Star, ChevronDown, ChevronUp, Navigation, Baby, Trees, Utensils } from "lucide-react";
-import type { PlaceResult } from "@/lib/chat-api";
+import type { PlaceExplanation, PlaceResult } from "@/lib/chat-api";
+import { ScoreBreakdownCard } from "./score-breakdown-card";
 
 export interface PlaceCardTranslations {
   viewOnMap: string;
@@ -75,6 +76,10 @@ function shortAddress(address?: string | null): string | null {
   return address.split(",").slice(0, 2).join(",").trim();
 }
 
+function hasVerifiedWheelchairAccess(place: PlaceResult): boolean {
+  return place.accessibility_score === 1 && !place.accessibility_warning;
+}
+
 export function PlaceCard({ place, rank, variant = "default", translations }: PlaceCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const isVi = isVietnamese(translations);
@@ -82,16 +87,18 @@ export function PlaceCard({ place, rank, variant = "default", translations }: Pl
   const CategoryIcon = category.icon;
   const categoryLabel = isVi ? category.labelVi : category.labelEn;
   const address = shortAddress(place.formatted_address);
+  const explanation: PlaceExplanation | undefined = place.explanation;
   const reason = useMemo(() => cleanReason(
-    place.explanation?.primary_reason,
+    explanation?.primary_reason,
     isVi
       ? `${place.display_name} có thể phù hợp nếu bạn cần một điểm dừng dễ sắp xếp trong chuyến đi.`
       : `${place.display_name} may work as an easy stop to fit into the trip.`,
-  ), [place.display_name, place.explanation?.primary_reason, isVi]);
+  ), [place.display_name, explanation?.primary_reason, isVi]);
   const highlights = [
     place.open_now === true ? (isVi ? "Đang mở" : "Open now") : null,
     place.rating != null && place.rating >= 4.5 ? (isVi ? "Đánh giá cao" : "Highly rated") : null,
-    place.accessibility_score != null && place.accessibility_score >= 0.7 ? (isVi ? "Dễ tiếp cận" : "Accessible") : null,
+    hasVerifiedWheelchairAccess(place) ? (isVi ? "Có lối vào xe lăn" : "Wheelchair entrance") : null,
+    place.price_level != null ? '₫'.repeat(place.price_level) : null,
   ].filter(Boolean) as string[];
 
   return (
@@ -116,6 +123,11 @@ export function PlaceCard({ place, rank, variant = "default", translations }: Pl
                 <CategoryIcon className="size-3" />
                 {categoryLabel}
               </span>
+              {place.score_breakdown?.gate_tier === "low" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-50 border border-red-200 px-2 py-1 text-[0.68rem] font-semibold text-red-700">
+                  ⚠️ {isVi ? "Chưa đủ dữ liệu, cần người dùng kiểm tra lại" : "Insufficient data, please verify"}
+                </span>
+              )}
             </div>
             <h4 className="mt-2 line-clamp-2 text-base font-semibold leading-snug text-[#123436]" title={place.display_name}>
               {place.display_name}
@@ -157,14 +169,36 @@ export function PlaceCard({ place, rank, variant = "default", translations }: Pl
       <div className="mt-4 border-t border-[#0b5f63]/10 pt-3">
         {detailsOpen && (
           <div className="mb-3 space-y-2 rounded-2xl bg-[#f5efe3] p-3 text-xs leading-5 text-[#426365]">
-            {place.explanation?.route_summary && place.explanation.route_summary !== "route metadata unavailable" && (
-              <p className="flex gap-1.5"><Navigation className="mt-0.5 size-3.5 shrink-0 text-[#0b5f63]" />{place.explanation.route_summary}</p>
+            {explanation?.route_summary && explanation.route_summary !== "route metadata unavailable" && (
+              <p className="flex gap-1.5"><Navigation className="mt-0.5 size-3.5 shrink-0 text-[#0b5f63]" />{explanation.route_summary}</p>
             )}
-            {place.explanation?.detail_highlights?.slice(0, 2).map((item) => (
+            {explanation?.local_context && explanation.local_context !== "local signal unknown" && (
+              <p>{cleanReason(explanation.local_context, explanation.local_context)}</p>
+            )}
+            {explanation?.accessibility_note && explanation.accessibility_note !== "accessibility metadata unknown" && (
+              <p>{cleanReason(explanation.accessibility_note, explanation.accessibility_note)}</p>
+            )}
+            {place.accessibility_warning && (
+              <p>{place.accessibility_warning}</p>
+            )}
+            {explanation?.fairness_note && explanation.fairness_note !== "local representation metadata limited" && (
+              <p>{cleanReason(explanation.fairness_note, explanation.fairness_note)}</p>
+            )}
+            {explanation?.detail_highlights?.slice(0, 2).map((item) => (
               <p key={item}>{cleanReason(item, item)}</p>
             ))}
+            {place.score_breakdown && (
+              <div className="mt-3 text-slate-800">
+                <ScoreBreakdownCard
+                  breakdown={place.score_breakdown}
+                  displayName={place.display_name}
+                  rank={rank}
+                  locale={isVi ? "vi" : "en"}
+                />
+              </div>
+            )}
             <p className="text-[0.68rem] opacity-75">
-              {isVi ? "Điểm và nguồn dữ liệu được dùng để sắp xếp, nhưng đã ẩn chi tiết kỹ thuật để dễ chọn." : "Scores and provider data help ranking, but technical details are hidden to keep choices readable."}
+              {isVi ? "Nguồn dữ liệu và điểm số giúp giải thích vì sao địa điểm này được ưu tiên." : "Data sources and score details explain why this place was prioritized."}
             </p>
           </div>
         )}

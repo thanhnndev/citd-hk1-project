@@ -17,7 +17,6 @@ export default async function MapPage({ params }: Props) {
   const translations = {
     title: t('title'),
     intro: t('intro'),
-    defaultQuery: t('defaultQuery'),
     queryLabel: t('queryLabel'),
     searchPlaceholder: t('searchPlaceholder'),
     submit: t('submit'),
@@ -49,10 +48,12 @@ export default async function MapPage({ params }: Props) {
     responseNote: t('responseNote'),
   };
 
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY ?? "";
+
   return (
-  <div lang={locale}>
-    <PlaceProofMap locale={locale} translations={translations} />
-    <SiteFooter locale={locale} />
-  </div>
-);
+    <div lang={locale}>
+      <PlaceProofMap locale={locale} translations={translations} apiKey={apiKey} />
+      <SiteFooter locale={locale} />
+    </div>
+  );
 }

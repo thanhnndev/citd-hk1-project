@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "postgres"
     POSTGRES_PORT: int = 5432
 
+    # ── Cohere ──────────────────────────────────────────────────
+    COHERE_API_KEY: str = ""
+
     # ── OpenAI ──────────────────────────────────────────────────
     OPENAI_API_KEY: str
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"

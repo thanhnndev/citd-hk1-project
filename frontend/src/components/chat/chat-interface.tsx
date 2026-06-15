@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, type UIEvent } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  type UIEvent,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { MessageBubble, type MessageStatus } from "./message-bubble";
 import { WelcomeScreen } from "./welcome-screen";
 import { ChatSidebar } from "./chat-sidebar";
 import { PlaceResultsPanel } from "./place-results-panel";
+import styles from "./chat-interface.module.css";
 import { sendChat, streamChat, type ChatResponse, type Citation, type PlaceResult, type ChatStreamStatus } from "@/lib/chat-api";
 import { AUTH_CHANGED_EVENT, getUser } from "@/lib/auth-store";
 import {
@@ -17,7 +24,7 @@ import {
   type ChatConversationSummary,
   type StoredChatConversation,
 } from "@/lib/chat-storage";
-import { ArrowDown, ArrowUp, AlertCircle, Loader2, MapPinned, Menu, RotateCcw, Trash2, ArrowRight } from "lucide-react";
+import { ArrowDown, ArrowUp, AlertCircle, BookOpen, Loader2, MapPinned, Menu, PanelLeftClose, PanelLeftOpen, RotateCcw, Trash2, ArrowRight } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -33,6 +40,8 @@ interface Message {
   streamStatus?: ChatStreamStatus | null;
   /** Bounded history of operational phases seen during streaming. */
   statusHistory?: ChatStreamStatus[];
+  reasoningLog?: string | null;
+  responseTimeMs?: number;
 }
 
 interface ChatInterfaceProps {
@@ -73,25 +82,46 @@ interface ChatInterfaceProps {
   };
 }
 
+type UserLocation = { lat: number; lng: number };
+type PendingLocationResult = UserLocation | { denied: true };
+
 const SOURCE_LABELS = {
   vi: { one: "nguồn", many: "nguồn", searching: "đang xử lý", inputHint: "Enter để gửi • Shift+Enter xuống dòng", scroll: "Xuống cuối", retrying: "Đang thử lại..." },
   en: { one: "source", many: "sources", searching: "working", inputHint: "Enter to send • Shift+Enter for newline", scroll: "Jump to latest", retrying: "Retrying..." },
 } as const;
 
-const STATUS_LABELS: Record<"vi" | "en", Record<ChatStreamStatus, string>> = {
+const STATUS_LABELS: Record<"vi" | "en", Record<string, string>> = {
   vi: {
-    understanding: "Đang hiểu câu hỏi...",
-    using_history: "Đang dùng ngữ cảnh cuộc trò chuyện...",
-    searching_knowledge: "Đang tìm nguồn phù hợp...",
-    checking_places: "Đang kiểm tra địa điểm/đường đi...",
-    composing: "Đang tổng hợp câu trả lời...",
+    planning: "Đang lập kế hoạch trả lời",
+    "gathering:knowledge": "Đang tìm nguồn phù hợp",
+    "gathering:places": "Đang kiểm tra địa điểm",
+    executing: "Đang thực hiện yêu cầu",
+    waiting_for_user_input: "Cần thêm thông tin từ bạn",
+    waiting_for_approval: "Đang chờ bạn xác nhận",
+    retrying: "Đang thử lại",
+    verifying: "Đang kiểm tra kết quả",
+    "failed-recoverable": "Có lỗi tạm thời, có thể thử lại",
+    "failed-terminal": "Không thể tiếp tục yêu cầu này",
+    routing: "Đang điều hướng yêu cầu",
+    dispatching: "Đang phân bổ xử lý",
+    input_flagged: "Đang kiểm duyệt an toàn câu hỏi",
+    output_flagged: "Đang kiểm duyệt an toàn câu trả lời",
   },
   en: {
-    understanding: "Understanding your question...",
-    using_history: "Using conversation context...",
-    searching_knowledge: "Searching relevant sources...",
-    checking_places: "Checking places/routes...",
-    composing: "Composing the answer...",
+    planning: "Planning the response",
+    "gathering:knowledge": "Finding relevant sources",
+    "gathering:places": "Checking places",
+    executing: "Working on the request",
+    waiting_for_user_input: "Waiting for more information",
+    waiting_for_approval: "Waiting for your confirmation",
+    retrying: "Trying again",
+    verifying: "Checking the result",
+    "failed-recoverable": "A temporary error can be retried",
+    "failed-terminal": "This request cannot continue",
+    routing: "Routing the request",
+    dispatching: "Dispatching execution",
+    input_flagged: "Reviewing input safety",
+    output_flagged: "Reviewing response safety",
   },
 };
 
@@ -107,6 +137,15 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [placesOpen, setPlacesOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [placesPanelOpen, setPlacesPanelOpen] = useState(true);
+  const [sourcesPanelOpen, setSourcesPanelOpen] = useState(true);
+  const [budgetFilter, setBudgetFilter] = useState<string | null>(null);
+  const [accessibilityRequired, setAccessibilityRequired] = useState(false);
+  const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
+  const [pendingLocationResolve, setPendingLocationResolve] = useState<
+    ((location: PendingLocationResult) => void) | null
+  >(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -184,14 +223,30 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
     });
   }, []);
 
+  const getBrowserLocation = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      throw new Error(language === "vi" ? "Trình duyệt không hỗ trợ chia sẻ vị trí." : "Browser location is unavailable.");
+    }
+    return new Promise<{ lat: number; lng: number }>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
+        () => reject(new Error(language === "vi" ? "Không lấy được vị trí. Hãy bật quyền vị trí rồi thử lại." : "Could not access location. Enable location permission and try again.")),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 },
+      );
+    });
+  }, [language]);
+
   const handleSubmit = useCallback(
     async (overrideMessage?: string) => {
       const messageText = overrideMessage ?? input.trim();
       if (!messageText || loading) return;
+      const responseStartedAt = performance.now();
 
       setError(null);
       setLoading(true);
       setIsNearBottom(true);
+
+      const requestLocation = userLocation;
 
       const userMsg: Message = { role: "user", content: messageText, status: "complete" };
       const assistantPlaceholder: Message = {
@@ -199,8 +254,8 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
         content: "",
         citations: [],
         status: "submitted",
-        streamStatus: "understanding",
-        statusHistory: ["understanding"],
+        streamStatus: "planning",
+        statusHistory: ["planning"],
       };
       setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
       setInput("");
@@ -217,7 +272,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
 
       const renderPostFallback = async () => {
         updateLastAssistant((message) => ({ ...message, status: "submitted" }));
-        const response: ChatResponse = await sendChat(messageText, sessionId, language);
+        const response: ChatResponse = await sendChat(messageText, sessionId, language, budgetFilter, accessibilityRequired, requestLocation);
         const displayText = response.message?.trim() ? response.message : translations.noEvidence;
 
         updateLastAssistant((message) => ({
@@ -226,15 +281,37 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           citations: response.citations ?? [],
           places: response.places ?? [],
           suggestions: response.suggestions ?? [],
+          reasoningLog: response.reasoning_log,
           guardrailStatus: response.guardrail_status,
           fallback: response.fallback,
           langfuseTraceId: response.langfuse_trace_id,
           cacheHit: response.cache_hit,
+          responseTimeMs: response.latency_ms,
           status: "complete",
           streamStatus: null,
           statusHistory: message.statusHistory && message.statusHistory.length > 0
             ? message.statusHistory
-            : ["composing"],
+            : ["planning", "verifying"],
+        }));
+      };
+
+      const renderGuardrailResponse = (reason: string) => {
+        const friendly = language === "vi"
+          ? "Mình chỉ hỗ trợ thông tin về Hàm Ninh / Phú Quốc. Bạn có thể hỏi về địa điểm, ăn uống, đường đi, văn hóa hoặc lịch trình ở Hàm Ninh nhé."
+          : "I only help with Ham Ninh / Phu Quoc tourism. You can ask about places, food, directions, culture, or itineraries in Ham Ninh.";
+
+        updateLastAssistant((message) => ({
+          ...message,
+          content: friendly,
+          citations: [],
+          places: [],
+          suggestions: getQuickReplyLabels("generic"),
+          guardrailStatus: reason,
+          fallback: true,
+          responseTimeMs: performance.now() - responseStartedAt,
+          status: "complete",
+          streamStatus: null,
+          statusHistory: ["planning", "failed-terminal"],
         }));
       };
 
@@ -258,19 +335,46 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onCitations: (citations) => updateLastAssistant((message) => ({ ...message, citations })),
           onPlaces: (places) => updateLastAssistant((message) => ({ ...message, places })),
           onSuggestions: (suggestions) => updateLastAssistant((message) => ({ ...message, suggestions })),
+          onReasoning: (reasoningLog) => updateLastAssistant((message) => ({ ...message, reasoningLog })),
+          onInterrupt: async (interruptData) => {
+            if (interruptData.requires_geolocation) {
+              try {
+                const location = await getBrowserLocation();
+                setUserLocation(location);
+                return location;
+              } catch {
+                return new Promise((resolve) => {
+                  setPendingLocationResolve(() => resolve);
+                });
+              }
+            }
+            
+            return null;
+          },
           onDone: () => {
-            updateLastAssistant((message) => ({ ...message, status: "complete", streamStatus: null }));
+            updateLastAssistant((message) => ({
+              ...message,
+              responseTimeMs: performance.now() - responseStartedAt,
+              status: "complete",
+              streamStatus: null,
+            }));
             setLoading(false);
           },
           onError: (err) => {
             streamFailed = true;
             streamErrorMessage = err;
           },
-        });
+        }, budgetFilter, accessibilityRequired, requestLocation);
 
         if (streamFailed) {
           try {
-            await renderPostFallback();
+            if (streamErrorMessage.includes("off_topic") || streamErrorMessage.includes("input_blocked")) {
+              renderGuardrailResponse(streamErrorMessage);
+            } else if (streamErrorMessage.trim().startsWith("{") && streamErrorMessage.trim().endsWith("}")) {
+              throw new Error(streamErrorMessage);
+            } else {
+              await renderPostFallback();
+            }
           } catch (err) {
             removeEmptyAssistantPlaceholder();
             setError(err instanceof Error ? err.message : streamErrorMessage);
@@ -279,12 +383,18 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           }
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : translations.error;
+        if (message.includes("off_topic") || message.includes("input_blocked")) {
+          renderGuardrailResponse(message);
+          setLoading(false);
+          return;
+        }
         removeEmptyAssistantPlaceholder();
-        setError(err instanceof Error ? err.message : translations.error);
+        setError(message);
         setLoading(false);
       }
     },
-    [input, loading, sessionId, language, translations, updateLastAssistant],
+    [input, loading, sessionId, language, translations, updateLastAssistant, budgetFilter, accessibilityRequired, userLocation, messages, getBrowserLocation],
   );
 
   const handleRetry = useCallback(() => {
@@ -329,6 +439,12 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       .reverse()
       .find((message) => message.role === "assistant" && message.places?.length)
       ?.places ?? [];
+  const latestCitations =
+    [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.citations?.length)
+      ?.citations ?? [];
+  const hasEvidencePanel = latestPlaces.length > 0 || latestCitations.length > 0;
   const recentQuestions = messages
     .filter((message) => message.role === "user")
     .map((message) => message.content)
@@ -348,15 +464,42 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       translations.scoreDataLimited ?? "Limited scoring data available",
     accessibilityNote:
       translations.accessibilityNote ?? "Accessibility info",
+    sourcesHeading: translations.citations ?? "Sources",
   };
   const sourceCount = lastAssistant?.citations?.length ?? 0;
-  const activeStatus = lastAssistant?.streamStatus
-    ? STATUS_LABELS[language][lastAssistant.streamStatus]
+  
+  // Normalize dynamic streamStatus keys (e.g., routing:conversational -> routing)
+  const rawStatus = lastAssistant?.streamStatus;
+  const statusKey = rawStatus
+    ? rawStatus.startsWith("processing:") || rawStatus.startsWith("gathering:")
+      ? rawStatus
+      : rawStatus.startsWith("routing:")
+        ? "routing"
+        : rawStatus.startsWith("dispatching:")
+          ? "dispatching"
+          : rawStatus
+    : null;
+
+  const activeStatus = statusKey
+    ? STATUS_LABELS[language][statusKey] ?? statusKey
     : loading
       ? labels.searching
       : sourceCount > 0
         ? `${sourceCount} ${sourceCount === 1 ? labels.one : labels.many}`
         : "";
+  const showDesktopPlaces = hasEvidencePanel && placesPanelOpen;
+  const sidebarToggleLabel = sidebarCollapsed
+    ? language === "vi" ? "Mở sidebar" : "Open sidebar"
+    : language === "vi" ? "Đóng sidebar" : "Close sidebar";
+  const sourcesToggleLabel = placesPanelOpen
+    ? language === "vi" ? "Đóng panel nguồn" : "Close sources panel"
+    : language === "vi" ? "Mở panel nguồn" : "Open sources panel";
+
+  useEffect(() => {
+    if (latestPlaces.length > 0) {
+      setPlacesPanelOpen(true);
+    }
+  }, [latestPlaces.length]);
 
   // ── Deterministic Quick Reply Chips ──────────────────────────────────────
   // Derives chip labels from local UI state only — no LLM/API calls.
@@ -464,11 +607,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
   return (
     <div className="h-[calc(100dvh-4rem)] min-h-[36rem] overflow-hidden bg-white text-[#37352f]">
       <div
-        className={`grid h-full min-h-0 ${
-          latestPlaces.length > 0
-            ? "lg:grid-cols-[240px_minmax(0,1fr)_360px]"
-            : "lg:grid-cols-[240px_minmax(0,1fr)]"
-        }`}
+        className={styles.chatLayout}
+        data-sidebar-open={!sidebarCollapsed}
+        data-panel-open={showDesktopPlaces}
+        data-testid="chat-layout"
       >
         <ChatSidebar
           locale={locale}
@@ -480,9 +622,68 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
           onSelectConversation={handleSelectConversation}
           mobileOpen={sidebarOpen}
           onMobileClose={() => setSidebarOpen(false)}
+          desktopOpen={!sidebarCollapsed}
+          onDesktopToggle={() => setSidebarCollapsed((current) => !current)}
         />
 
-        <main className="relative flex min-h-0 min-w-0 flex-col bg-white">
+        <main
+          className="relative flex min-h-0 min-w-0 flex-col bg-white"
+          data-testid="chat-main"
+        >
+      <div className="relative z-20 flex h-12 shrink-0 items-center justify-between border-b border-[#e9e9e7] bg-white px-3 lg:px-4">
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-full border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-semibold text-[#37352f] shadow-sm transition hover:bg-[#f7f7f5] lg:hidden"
+          onClick={() => setSidebarOpen(true)}
+          aria-label={language === "vi" ? "Mở menu" : "Open menu"}
+          data-testid="sidebar-toggle"
+        >
+          <PanelLeftOpen className="size-4" />
+          <span className="hidden sm:inline">
+            {language === "vi" ? "Mở lịch sử" : "Open history"}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="hidden items-center gap-2 rounded-full border border-[#e9e9e7] bg-white px-3 py-1.5 text-xs font-semibold text-[#37352f] shadow-sm transition hover:bg-[#f7f7f5] lg:inline-flex"
+          onClick={() => setSidebarCollapsed((current) => !current)}
+          aria-label={sidebarToggleLabel}
+          aria-pressed={!sidebarCollapsed}
+          data-testid="sidebar-toggle-desktop"
+        >
+          {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+          <span className="hidden sm:inline">
+            {sidebarCollapsed
+              ? language === "vi" ? "Mở lịch sử" : "Open history"
+              : language === "vi" ? "Ẩn lịch sử" : "Hide history"}
+          </span>
+        </button>
+
+        {hasEvidencePanel && (
+          <>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb] lg:hidden"
+              onClick={() => setPlacesOpen(true)}
+              aria-label={placeTranslations.placeResultsHeading}
+              data-testid="sources-toggle"
+            >
+              <BookOpen className="size-4" />
+              <span>{placeTranslations.placeResultsHeading}</span>
+            </button>
+            <button
+              type="button"
+              className="hidden items-center gap-2 rounded-full border border-[#cfe2ee] bg-[#f0f7fb] px-3 py-1.5 text-xs font-semibold text-[#005d90] shadow-sm transition hover:bg-[#e7f2fb] lg:inline-flex"
+              onClick={() => setPlacesPanelOpen((current) => !current)}
+              aria-label={sourcesToggleLabel}
+              aria-pressed={placesPanelOpen}
+            >
+              <BookOpen className="size-4" />
+              <span>{placeTranslations.placeResultsHeading}</span>
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Full-height scroll region — mobile-first with safe-area bottom padding for the composer */}
       <div
@@ -589,34 +790,256 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
                 retry: translations.retryMessage,
               }}
               placeTranslations={placeTranslations}
+              onOpenPlacesPanel={() => {
+                setPlacesPanelOpen(true);
+                setPlacesOpen(true);
+              }}
+              onOpenSourcesPanel={() => {
+                setSourcesPanelOpen(true);
+                setPlacesOpen(true);
+              }}
+              messageId={msg.role === "assistant" ? `msg-${sessionId}-${i}` : undefined}
+              sessionId={msg.role === "assistant" ? sessionId : undefined}
+              turnIndex={msg.role === "assistant" ? i : undefined}
+              reasoningLog={msg.reasoningLog}
+              locale={locale}
+              streamStatus={msg.streamStatus}
+              responseTimeMs={msg.responseTimeMs}
+              responseTimeLabel={language === "vi" ? "Thời gian phản hồi" : "Response time"}
             />
           ))}
 
-          {error && (
-            <div className="flex gap-3 animate-slideUp">
-              <div
-                className="mt-1 grid size-8 shrink-0 place-items-center rounded-full bg-[#fffaf0] text-[#0b5f63] ring-1 ring-[#0b5f63]/15 shadow-sm"
-                aria-hidden="true"
-              >
-                <AlertCircle className="size-4" />
-              </div>
-              <div className="min-w-0 max-w-[86%] items-start md:max-w-[74%]">
-                <div className="mb-1 flex items-center gap-2 text-[0.72rem] text-[#b45a5a]">
-                  <span className="font-semibold">{language === "vi" ? "Lỗi kết nối" : "Connection error"}</span>
+          {error && (() => {
+            const isConnectionOfflineError = (errStr: string): boolean => {
+              const normalized = errStr.toLowerCase();
+              if (
+                normalized.includes("fetch failed") ||
+                normalized.includes("econnrefused") ||
+                normalized.includes("failed to fetch") ||
+                normalized.includes("connection error") ||
+                normalized.includes("backend unavailable") ||
+                normalized.includes("unreachable") ||
+                normalized.includes("typeerror") ||
+                normalized.includes("stream failed") ||
+                normalized.includes("502")
+              ) {
+                return true;
+              }
+              try {
+                if (errStr.trim().startsWith("{") && errStr.trim().endsWith("}")) {
+                  const parsed = JSON.parse(errStr);
+                  return parsed.type === "connection_offline" || parsed.retryable === false;
+                }
+              } catch {
+                // The error is plain text rather than a structured payload.
+              }
+              return false;
+            };
+
+            const isOffline = isConnectionOfflineError(error);
+            let errorTitle = language === "vi" ? "Lỗi kết nối" : "Connection error";
+            let errorMessage = error;
+            let showRetry = true;
+            try {
+              if (error.trim().startsWith("{") && error.trim().endsWith("}")) {
+                const parsedDetails = JSON.parse(error) as {
+                  message_vi?: string;
+                  message_en?: string;
+                  retryable?: boolean;
+                  type?: string;
+                };
+                errorMessage =
+                  (language === "vi" ? parsedDetails.message_vi : parsedDetails.message_en) ??
+                  error;
+                showRetry = !!parsedDetails.retryable;
+                
+                if (parsedDetails.type === "timeout") {
+                  errorTitle = language === "vi" ? "Yêu cầu quá hạn" : "Request Timeout";
+                } else if (parsedDetails.type === "provider_unavailable") {
+                  errorTitle = language === "vi" ? "Dịch vụ tạm thời không khả dụng" : "Service Unavailable";
+                } else if (parsedDetails.type === "connection_offline") {
+                  errorTitle = language === "vi" ? "Hệ thống tạm ngưng hoạt động" : "System Offline";
+                } else {
+                  errorTitle = language === "vi" ? "Lỗi hệ thống" : "System Error";
+                }
+              }
+            } catch {
+              // Not a JSON error
+            }
+
+            if (isOffline) {
+              errorTitle = language === "vi" ? "Hệ thống tạm ngưng hoạt động" : "System Offline";
+              return (
+                <div className="flex gap-4 animate-slideUp border border-red-100 rounded-2xl bg-[#fffbfa]/95 p-5 shadow-lg max-w-[800px] mx-auto my-4 relative overflow-hidden backdrop-blur-sm">
+                  {/* Decorative modern side-bar indicator */}
+                  <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-red-500/80" />
+                  
+                  <div
+                    className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-full bg-red-50 text-red-600 ring-1 ring-red-500/10 shadow-sm"
+                    aria-hidden="true"
+                  >
+                    <AlertCircle className="size-5" />
+                  </div>
+                  <div className="flex-1 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-red-800 tracking-wide uppercase">
+                        {errorTitle}
+                      </h4>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-[#37352f]">
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Sự cố xảy ra" : "What Failed"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed">
+                          {language === "vi"
+                            ? "Trợ lý du lịch Hàm Ninh hiện không thể kết nối đến hệ thống máy chủ thông tin."
+                            : "The Ham Ninh travel assistant currently cannot establish a connection to the server."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Trạng thái dữ liệu" : "Data Safety"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed">
+                          {language === "vi"
+                            ? "Mọi lịch trình và thông tin đã nhập của bạn vẫn được lưu giữ an toàn trên thiết bị này."
+                            : "Your entered preferences and itinerary details remain saved safely on this device."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Khuyên dùng gửi lại" : "Retry Status"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed font-semibold text-amber-700">
+                          {language === "vi"
+                            ? "Yêu cầu lúc này không khả dụng. Bạn vui lòng không tiếp tục bấm gửi hoặc thử lại."
+                            : "Resending queries is currently disabled to prevent unnecessary network load."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                          {language === "vi" ? "Giải pháp thay thế" : "Alternatives"}
+                        </span>
+                        <p className="text-slate-600 leading-relaxed">
+                          {language === "vi"
+                            ? "Vui lòng tải lại trang sau ít phút, hoặc tra cứu trực tiếp thông tin/bản đồ ngoại tuyến."
+                            : "Try reloading the page in a few minutes, or refer directly to local maps/guides."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-red-50 text-[11px] text-slate-500 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+                      <span>
+                        {language === "vi"
+                          ? "Sự cố mạng tạm thời • Dịch vụ bảo trì"
+                          : "Temporary network interruption • Maintenance mode"}
+                      </span>
+                      <span className="font-medium text-[#0b5f63]">
+                        {language === "vi"
+                          ? "Hỗ trợ khẩn cấp: Trung tâm du khách Phú Quốc"
+                          : "Emergency support: Phu Quoc Visitor Center"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="group relative rounded-[1.45rem] rounded-tl-md border border-destructive/20 bg-white/85 px-4 py-3 shadow-lg shadow-destructive/5">
-                  <p className="text-sm text-destructive">{error}</p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3 rounded-full border-destructive/20 text-destructive hover:bg-destructive/5"
-                  onClick={handleRetry}
-                  disabled={loading}
+              );
+            }
+
+            return (
+              <div className="flex gap-3 animate-slideUp">
+                <div
+                  className="mt-1 grid size-8 shrink-0 place-items-center rounded-full bg-[#fffaf0] text-[#0b5f63] ring-1 ring-[#0b5f63]/15 shadow-sm"
+                  aria-hidden="true"
                 >
-                  <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                  {translations.retry}
-                </Button>
+                  <AlertCircle className="size-4" />
+                </div>
+                <div className="min-w-0 max-w-[86%] items-start md:max-w-[74%]">
+                  <div className="mb-1 flex items-center gap-2 text-[0.72rem] text-[#b45a5a]">
+                    <span className="font-semibold">{errorTitle}</span>
+                  </div>
+                  <div className="group relative rounded-[1.45rem] rounded-tl-md border border-destructive/20 bg-white/85 px-4 py-3 shadow-lg shadow-destructive/5">
+                    <p className="text-sm text-destructive">{errorMessage}</p>
+                  </div>
+                  {showRetry && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 rounded-full border-destructive/20 text-destructive hover:bg-destructive/5"
+                      onClick={handleRetry}
+                      disabled={loading}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                      {translations.retry}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {pendingLocationResolve && (
+            <div className="my-4 rounded-xl border border-amber-200/50 bg-amber-50/50 p-4 backdrop-blur-md dark:border-amber-900/30 dark:bg-amber-950/20">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-full bg-amber-100 p-1.5 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+                  <MapPinned className="size-4" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                    {language === "vi" ? "Không thể truy cập vị trí" : "Location Access Failed"}
+                  </h4>
+                  <p className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
+                    {language === "vi"
+                      ? "Chúng tôi không thể lấy vị trí hiện tại của bạn. Bạn muốn xem gợi ý theo khu vực nào ở Phú Quốc?"
+                      : "We could not access your current location. Which area would you like to explore?"}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ lat: 10.1812, lng: 104.0492 });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-white dark:bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-slate-50 transition-colors border border-slate-200"
+                    >
+                      {language === "vi" ? "Làng chài Hàm Ninh" : "Ham Ninh Village"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ lat: 10.2155, lng: 103.9607 });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-white dark:bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-slate-50 transition-colors border border-slate-200"
+                    >
+                      {language === "vi" ? "Thị trấn Dương Đông" : "Duong Dong Town"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ lat: 10.0094, lng: 104.0119 });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-white dark:bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-[#0b5f63] shadow-sm hover:bg-slate-50 transition-colors border border-slate-200"
+                    >
+                      {language === "vi" ? "Phường An Thới" : "An Thoi Ward"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        pendingLocationResolve({ denied: true });
+                        setPendingLocationResolve(null);
+                      }}
+                      className="rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 px-3.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 transition-colors"
+                    >
+                      {language === "vi" ? "Bỏ qua" : "Skip"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -666,6 +1089,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
       {/* Sticky bottom composer — mobile-first with safe-area padding */}
       <footer className="relative z-10 shrink-0 border-t border-[#e9e9e7] bg-white px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:px-8">
         <div className="mx-auto max-w-4xl">
+          {/* Header row for mobile controls and input hint */}
           <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 px-1 text-[0.7rem] text-[#5d7373]">
             <div className="flex flex-wrap items-center gap-1.5">
               <button
@@ -676,7 +1100,7 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               >
                 <Menu className="size-4" />
               </button>
-              {latestPlaces.length > 0 && (
+              {hasEvidencePanel && (
                 <button
                   type="button"
                   className="mr-1 rounded-md p-1 text-[#2383e2] hover:bg-[#f7f7f5] lg:hidden"
@@ -691,7 +1115,10 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
             </div>
             <span className="hidden sm:inline">{labels.inputHint}</span>
           </div>
-          <div className="flex items-end gap-1.5 rounded-2xl border border-[#e9e9e7] bg-white p-1.5 shadow-sm focus-within:border-[#2383e2] focus-within:ring-2 focus-within:ring-[#2383e2]/10 sm:gap-2 sm:p-2">
+
+          {/* Premium consolidated input area */}
+          <div className="flex flex-col rounded-2xl border border-[#e9e9e7] bg-white p-2.5 shadow-sm focus-within:border-[#0b5f63] focus-within:ring-2 focus-within:ring-[#0b5f63]/10">
+            {/* Top row: text editor */}
             <textarea
               ref={textareaRef}
               value={input}
@@ -700,43 +1127,105 @@ export function ChatInterface({ locale, translations }: ChatInterfaceProps) {
               placeholder={translations.placeholder}
               disabled={loading}
               rows={1}
-              className="max-h-36 min-h-10 flex-1 resize-none rounded-xl border-0 bg-transparent px-3 py-2 text-sm leading-6 text-[#37352f] placeholder:text-[#91918e] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:px-3 sm:py-2.5"
+              className="max-h-36 min-h-10 w-full resize-none border-0 bg-transparent px-3 py-1.5 text-sm leading-6 text-[#37352f] placeholder:text-[#91918e] focus-visible:outline-none focus-visible:ring-0 disabled:opacity-50 sm:min-h-11 sm:px-3"
               aria-label={translations.placeholder}
             />
-            {messages.length > 0 && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-xl text-[#787774] hover:bg-destructive/10 hover:text-destructive sm:h-11 sm:w-11"
-                onClick={handleClearConversation}
-                disabled={loading}
-                aria-label={translations.newConversation ?? "New conversation"}
-                title={translations.newConversation ?? "New conversation"}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-            <Button
-              onClick={() => handleSubmit()}
-              disabled={loading || !input.trim()}
-              size="icon"
-              className="h-10 w-10 shrink-0 rounded-xl bg-[#2383e2] shadow-sm hover:bg-[#1d6dc3] sm:h-11 sm:w-11"
-              aria-label={translations.send}
-              title={translations.send}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-            </Button>
+
+            {/* Bottom row: Filter selectors and action buttons */}
+            <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2 px-1">
+              {/* Left: Toggles & Filters */}
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                {/* Budget selection dropdown styled as a premium button */}
+                <div className="relative inline-flex items-center">
+                  <select
+                    value={budgetFilter || ""}
+                    onChange={(e) => setBudgetFilter(e.target.value || null)}
+                    disabled={loading}
+                    className="appearance-none rounded-full border border-slate-200/80 bg-slate-50/50 hover:bg-slate-50 py-1 pl-7 pr-4 text-xs font-semibold text-[#0b5f63] focus:outline-none focus:ring-1 focus:ring-[#0b5f63]/30 cursor-pointer transition-colors disabled:opacity-50"
+                  >
+                    <option value="">{language === "vi" ? "Bất kỳ ngân sách" : "Any budget"}</option>
+                    <option value="free">{language === "vi" ? "Miễn phí" : "Free"}</option>
+                    <option value="inexpensive">{language === "vi" ? "Giá rẻ" : "Inexpensive"}</option>
+                    <option value="moderate">{language === "vi" ? "Bình dân" : "Moderate"}</option>
+                    <option value="expensive">{language === "vi" ? "Sang trọng" : "Premium"}</option>
+                  </select>
+                  <div className="pointer-events-none absolute left-2.5 text-[#0b5f63] opacity-85">
+                    <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect width="20" height="14" x="2" y="5" rx="2" />
+                      <line x1="2" x2="22" y1="10" y2="10" />
+                    </svg>
+                  </div>
+                </div>
+
+                {/* Accessibility Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setAccessibilityRequired((prev) => !prev)}
+                  disabled={loading}
+                  className={`inline-flex items-center gap-1.5 rounded-full border py-1 px-3 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                    accessibilityRequired
+                      ? "bg-[#0b5f63]/10 border-[#0b5f63]/25 text-[#0b5f63] hover:bg-[#0b5f63]/15"
+                      : "bg-slate-50/50 border-slate-200/80 text-slate-500 hover:bg-slate-50"
+                  }`}
+                  title={language === "vi" ? "Ưu tiên lối đi xe lăn" : "Prefer wheelchair access"}
+                >
+                  <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="16" cy="4" r="1" />
+                    <path d="m18 19 1-7-6 1" />
+                    <path d="m5 8 3-3 5.5 2-2.36 4.57-3.64-1.31" />
+                    <path d="M12 8v5" />
+                    <path d="M9.5 13.5h2.5" />
+                    <path d="M14 19a5 5 0 0 1-5-5H7a7 7 0 0 0 7 7Z" />
+                  </svg>
+                  <span>{language === "vi" ? "Tiếp cận xe lăn" : "Wheelchair access"}</span>
+                </button>
+              </div>
+
+              {/* Right: Reset and Send */}
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                {messages.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500"
+                    onClick={handleClearConversation}
+                    disabled={loading}
+                    aria-label={translations.newConversation ?? "New conversation"}
+                    title={translations.newConversation ?? "New conversation"}
+                  >
+                    <Trash2 className="h-4.5 w-4.5" />
+                  </Button>
+                )}
+                <Button
+                  onClick={() => handleSubmit()}
+                  disabled={loading || !input.trim()}
+                  size="icon"
+                  className="h-8 w-8 rounded-lg bg-[#0b5f63] text-white shadow-sm hover:bg-[#084d50] disabled:opacity-40"
+                  aria-label={translations.send}
+                  title={translations.send}
+                >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </footer>
         </main>
 
-        {latestPlaces.length > 0 && (
+        {hasEvidencePanel && (
           <PlaceResultsPanel
             places={latestPlaces}
+            citations={latestCitations}
             translations={placeTranslations}
             mobileOpen={placesOpen}
+            placesOpen={placesPanelOpen}
+            sourcesOpen={sourcesPanelOpen}
             onMobileClose={() => setPlacesOpen(false)}
+            onTogglePlaces={() => setPlacesPanelOpen((open) => !open)}
+            onToggleSources={() => setSourcesPanelOpen((open) => !open)}
+            desktopOpen={placesPanelOpen}
+            onDesktopClose={() => setPlacesPanelOpen(false)}
           />
         )}
       </div>

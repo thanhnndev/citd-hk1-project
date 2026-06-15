@@ -172,6 +172,8 @@ class PlaceCache:
             f"{loc.lat:.6f}",
             f"{loc.lng:.6f}",
             str(request.radius_meters),
+            request.included_type or "any",
+            "strict" if request.strict_type_filtering else "broad",
         ]
         return ":".join(key_parts)
 

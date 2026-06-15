@@ -1,7 +1,7 @@
 """User service — registration, authentication, and lookup.
 
 Uses asyncpg directly (matching the project's existing pattern in
-agent_service.py) to avoid adding SQLAlchemy as a dependency.
+the agent runtime) to avoid adding SQLAlchemy as a dependency.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class UserRecord:
 
     __slots__ = (
         "id", "username", "email", "hashed_password",
-        "is_active", "is_verified", "created_at",
+        "is_active", "is_verified", "is_admin", "created_at",
     )
 
     def __init__(
@@ -38,6 +38,7 @@ class UserRecord:
         hashed_password: str,
         is_active: bool = True,
         is_verified: bool = False,
+        is_admin: bool = False,
         created_at: datetime | None = None,
     ) -> None:
         self.id = id
@@ -46,6 +47,7 @@ class UserRecord:
         self.hashed_password = hashed_password
         self.is_active = is_active
         self.is_verified = is_verified
+        self.is_admin = is_admin
         self.created_at = created_at or datetime.now(timezone.utc)
 
 
@@ -95,9 +97,28 @@ class UserService:
                     hashed_password VARCHAR(255) NOT NULL,
                     is_active BOOLEAN NOT NULL DEFAULT TRUE,
                     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            await conn.execute("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
+            """)
+
+    @staticmethod
+    def _from_row(row: asyncpg.Record) -> UserRecord:
+        """Convert an asyncpg user row into a UserRecord."""
+        return UserRecord(
+            id=str(row["id"]),
+            username=row["username"],
+            email=row["email"],
+            hashed_password=row["hashed_password"],
+            is_active=row["is_active"],
+            is_verified=row["is_verified"],
+            is_admin=row["is_admin"],
+            created_at=row["created_at"],
+        )
 
     async def register(self, username: str, email: str, password: str) -> UserRecord:
         """Register a new user.
@@ -137,6 +158,88 @@ class UserService:
             hashed_password=hashed,
         )
 
+    async def seed_user(
+        self,
+        *,
+        username: str,
+        email: str,
+        password: str,
+        is_admin: bool,
+    ) -> UserRecord:
+        """Create or update a verified development account.
+
+        Re-running the seed updates the password and account flags without
+        creating duplicate users.
+        """
+        normalized_email = email.lower()
+        hashed = hash_password(password)
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                by_email = await conn.fetchrow(
+                    "SELECT id FROM users WHERE email = $1",
+                    normalized_email,
+                )
+                by_username = await conn.fetchrow(
+                    "SELECT id FROM users WHERE username = $1",
+                    username,
+                )
+
+                if (
+                    by_email is not None
+                    and by_username is not None
+                    and by_email["id"] != by_username["id"]
+                ):
+                    raise ValueError(
+                        "Seed email and username belong to different existing users."
+                    )
+
+                existing = by_email or by_username
+                if existing is None:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO users (
+                            id, username, email, hashed_password,
+                            is_active, is_verified, is_admin
+                        )
+                        VALUES ($1, $2, $3, $4, TRUE, TRUE, $5)
+                        RETURNING *
+                        """,
+                        str(uuid.uuid4()),
+                        username,
+                        normalized_email,
+                        hashed,
+                        is_admin,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        """
+                        UPDATE users
+                        SET username = $2,
+                            email = $3,
+                            hashed_password = $4,
+                            is_active = TRUE,
+                            is_verified = TRUE,
+                            is_admin = $5
+                        WHERE id = $1
+                        RETURNING *
+                        """,
+                        existing["id"],
+                        username,
+                        normalized_email,
+                        hashed,
+                        is_admin,
+                    )
+
+        logger.info(
+            "user.seeded",
+            user_id=str(row["id"]),
+            username=username,
+            email=normalized_email,
+            is_admin=is_admin,
+        )
+        return self._from_row(row)
+
     async def authenticate(self, email: str, password: str) -> UserRecord | None:
         """Authenticate by email + password.
 
@@ -155,15 +258,7 @@ class UserService:
         if not verify_password(password, row["hashed_password"]):
             return None
 
-        return UserRecord(
-            id=str(row["id"]),
-            username=row["username"],
-            email=row["email"],
-            hashed_password=row["hashed_password"],
-            is_active=row["is_active"],
-            is_verified=row["is_verified"],
-            created_at=row["created_at"],
-        )
+        return self._from_row(row)
 
     async def get_by_id(self, user_id: str) -> UserRecord | None:
         """Fetch a user by UUID."""
@@ -176,15 +271,7 @@ class UserService:
         if row is None:
             return None
 
-        return UserRecord(
-            id=str(row["id"]),
-            username=row["username"],
-            email=row["email"],
-            hashed_password=row["hashed_password"],
-            is_active=row["is_active"],
-            is_verified=row["is_verified"],
-            created_at=row["created_at"],
-        )
+        return self._from_row(row)
 
     async def get_by_email(self, email: str) -> UserRecord | None:
         """Fetch a user by email address."""
@@ -197,15 +284,7 @@ class UserService:
         if row is None:
             return None
 
-        return UserRecord(
-            id=str(row["id"]),
-            username=row["username"],
-            email=row["email"],
-            hashed_password=row["hashed_password"],
-            is_active=row["is_active"],
-            is_verified=row["is_verified"],
-            created_at=row["created_at"],
-        )
+        return self._from_row(row)
 
     async def verify_email(self, email: str) -> bool:
         """Mark a user's email as verified.

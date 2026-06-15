@@ -2,8 +2,8 @@
  * S04: Frontend explainability and thinking UI contract tests.
  *
  * Static inspection (no network, browser, or backend) that proves:
- * - R053: PlaceExplanation type with all 11 backend fields, ScoreBreakdown
- *   axis rendering, provider/evidence labels, and missing-data fallbacks.
+ * - R053: PlaceExplanation type with all backend fields, ScoreBreakdown
+ *   signal rendering, provider/evidence labels, and missing-data fallbacks.
  * - R054: Live streaming status labels and post-response status summaries.
  *
  * Designed to FAIL against the current minimal card (pre-S04) and PASS
@@ -27,6 +27,7 @@ const frontendDir = path.resolve(import.meta.dirname, '..');
 const paths = {
   chatApi: path.join(frontendDir, 'src/lib/chat-api.ts'),
   placeCard: path.join(frontendDir, 'src/components/chat/place-card.tsx'),
+  scoreBreakdownCard: path.join(frontendDir, 'src/components/chat/score-breakdown-card.tsx'),
   messageBubble: path.join(frontendDir, 'src/components/chat/message-bubble.tsx'),
   chatInterface: path.join(frontendDir, 'src/components/chat/chat-interface.tsx'),
   enMessages: path.join(frontendDir, 'messages/en.json'),
@@ -59,22 +60,25 @@ const PLACE_EXPLANATION_FIELDS = [
 ];
 
 const SCORE_BREAKDOWN_AXES = [
-  'tree1_locality',
-  'tree2_proximity',
-  'tree3_quality',
-  's_bag',
-  'delta1_fairness',
-  'delta2_access',
+  'relevance',
+  'proximity',
+  'quality',
+  'geo_locality',
+  'popularity_damping',
+  'weights',
+  'gate_passed',
   'final_score',
   'rank',
 ];
 
 const CHAT_STREAM_STATUSES = [
-  'understanding',
-  'using_history',
-  'searching_knowledge',
-  'checking_places',
-  'composing',
+  'planning',
+  'gathering:knowledge',
+  'gathering:places',
+  'waiting_for_user_input',
+  'verifying',
+  'failed-recoverable',
+  'failed-terminal',
 ];
 
 const PROVIDER_SOURCES = ['google_places', 'goong_places', 'mock', 'cache'];
@@ -112,7 +116,7 @@ test('R053: PlaceResult includes explanation?: PlaceExplanation', () => {
   );
 });
 
-test('R053: ScoreBreakdown declares all 8 ensemble scoring fields', () => {
+test('R053: ScoreBreakdown declares all deterministic scoring fields', () => {
   const source = read(paths.chatApi);
 
   assert.ok(
@@ -130,31 +134,32 @@ test('R053: ScoreBreakdown declares all 8 ensemble scoring fields', () => {
 
 // ── R053: Score Breakdown Rendering (T03) ────────────────────────────────────
 
-test('R053: PlaceCard component renders score breakdown axes', () => {
-  const source = read(paths.placeCard);
+test('R053: PlaceCard component renders score breakdown signals', () => {
+  const placeCard = read(paths.placeCard);
+  const scoreBreakdownCard = read(paths.scoreBreakdownCard);
 
   // Must reference score_breakdown on the place object
   assert.ok(
-    /place\.score_breakdown\b/.test(source),
-    'PlaceCard must access place.score_breakdown for axis rendering'
+    /place\.score_breakdown\b/.test(placeCard),
+    'PlaceCard must access place.score_breakdown for signal rendering'
   );
 
-  // At least 3 of the 5 user-facing axes must be rendered
-  const userFacingAxes = ['tree1_locality', 'tree2_proximity', 'tree3_quality', 'delta1_fairness', 'delta2_access'];
-  const renderedAxes = userFacingAxes.filter((axis) =>
-    new RegExp(`score_breakdown\\.${axis}\\b`).test(source)
+  // At least 3 user-facing scoring signals must be rendered.
+  const userFacingSignals = ['relevance', 'proximity', 'quality', 'geo_locality', 'popularity_damping'];
+  const renderedSignals = userFacingSignals.filter((signal) =>
+    new RegExp(`\\b${signal}\\b`).test(scoreBreakdownCard)
   );
   assert.ok(
-    renderedAxes.length >= 3,
-    `PlaceCard must render at least 3 of 5 user-facing score axes (found ${renderedAxes.length}: ${renderedAxes.join(', ')})`
+    renderedSignals.length >= 3,
+    `PlaceCard must render at least 3 user-facing score signals (found ${renderedSignals.length}: ${renderedSignals.join(', ')})`
   );
 });
 
 test('R053: PlaceCard renders final_score and rank from score_breakdown', () => {
-  const source = read(paths.placeCard);
+  const source = `${read(paths.placeCard)}\n${read(paths.scoreBreakdownCard)}`;
 
   assert.ok(
-    /score_breakdown\.(?:final_score|rank)\b/.test(source),
+    /\b(?:final_score|rank)\b/.test(source),
     'PlaceCard must render final_score or rank from score_breakdown'
   );
 });
@@ -180,9 +185,8 @@ test('R053: PlaceCard renders explanation fields from place.explanation', () => 
 
   // At least 3 explanation fields must be rendered
   const explanationFields = [
-    'primary_reason', 'matched_preferences', 'local_context', 'score_factors',
-    'fairness_note', 'accessibility_note', 'route_summary',
-    'provider_source', 'provider_status', 'evidence_fields_used',
+    'primary_reason', 'local_context', 'fairness_note', 'accessibility_note',
+    'route_summary', 'detail_highlights',
   ];
   const renderedFields = explanationFields.filter((field) =>
     new RegExp(`explanation\\.${field}\\b`).test(source)
@@ -347,6 +351,32 @@ test('R054: ChatInterface footer status bar shows active processing state', () =
   assert.ok(
     /activeStatus/.test(source),
     'ChatInterface must compute and display activeStatus in footer'
+  );
+});
+
+test('R054: streamChat handles full message marker separately from raw tokens', () => {
+  const source = read(paths.chatApi);
+
+  assert.ok(
+    /\[MESSAGE\]\s/.test(source),
+    'streamChat must parse [MESSAGE] full-response events'
+  );
+  assert.ok(
+    /data\.startsWith\(\s*["']\[MESSAGE\]\s["']\s*\)/.test(source),
+    '[MESSAGE] must be handled before falling back to raw token handling'
+  );
+});
+
+test('R053: PlaceCard does not label accessibility from a loose score threshold', () => {
+  const source = read(paths.placeCard);
+
+  assert.ok(
+    /hasVerifiedWheelchairAccess/.test(source),
+    'PlaceCard must require a verified wheelchair-access helper before showing accessibility labels'
+  );
+  assert.ok(
+    !/accessibility_score\s*!=\s*null\s*&&\s*place\.accessibility_score\s*>=\s*0\.7/.test(source),
+    'PlaceCard must not convert accessibility_score >= 0.7 into an accessibility claim'
   );
 });
 

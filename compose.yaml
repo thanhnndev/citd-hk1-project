@@ -265,6 +265,26 @@ services:
     networks:
       - ham_ninh
 
+  # ── One-shot development account seeder ────────────────────────────────
+  seed-users:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ham_ninh}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ham_ninh}
+    command: ["python", "-m", "app.scripts.seed_users"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app:ro
+    restart: no
+    networks:
+      - ham_ninh
+
 networks:
   ham_ninh:
     driver: bridge

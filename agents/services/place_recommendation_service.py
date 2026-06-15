@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from app.models.places import (
     DEFAULT_SEARCH_RADIUS_METERS,
     HAM_NINH_CENTER,
+    MAX_DISTANCE_FROM_CENTER_METERS,
     FairnessAudit,
     FairnessWarningType,
     PlaceAuditEvent,
@@ -299,9 +300,27 @@ class PlaceRecommendationService:
         # This is not intent routing: the LLM already chose search_places.
         # Here we protect end-user quality by suppressing provider candidates
         # that are places data but not useful travel recommendations.
+
+        # Geographic boundary filter: hard-remove candidates outside Ham Ninh area
+        pre_geo_count = len(candidates)
+        candidates, geo_filtered = _apply_geographic_boundary_filter(candidates)
+        if geo_filtered > 0:
+            logger.info(
+                "geographic_boundary_filter",
+                extra={"removed": geo_filtered, "remaining": len(candidates)},
+            )
+
         pre_filter_count = len(candidates)
         candidates, filtered_count = _apply_preference_filters(candidates, request)
-        frame = _build_recommendation_frame(request.query)
+        frame = _build_recommendation_frame(query)
+        if request.wheelchair_accessible_preference is True and "accessibility" not in frame.constraints:
+            frame = RecommendationFrame(
+                goal=frame.goal,
+                audience="accessibility",
+                desired_roles=frame.desired_roles,
+                disallowed_roles=frame.disallowed_roles,
+                constraints=frozenset({*frame.constraints, "accessibility"}),
+            )
         candidates, product_filtered_count = _apply_product_quality_filters(candidates, frame)
         filtered_count += product_filtered_count
 
@@ -317,31 +336,32 @@ class PlaceRecommendationService:
         else:
             tracer.emit("preference_filter_skipped", PlaceAuditPhase.FILTER)
 
-        ensemble_ok = True
+        reranking_ok = True
         provider_source_val = tool_response.source.value
         provider_status_val = tool_response.status.value
         try:
             places = _reranked_results(
-                candidates, request.query,
+                candidates, query,
                 provider_source=provider_source_val,
                 provider_status=provider_status_val,
                 request=request,
                 language=language,
             )
-            tracer.emit("reranking_ensemble", PlaceAuditPhase.RERANK, detail={
+            tracer.emit("reranking_completed", PlaceAuditPhase.RERANK, detail={
                 "candidate_count": len(candidates),
                 "result_count": len(places),
             })
-        except Exception as exc:  # noqa: BLE001 - ensemble pipeline fails closed.
-            logger.warning("ensemble_reranking_failed", extra={"error_type": type(exc).__name__})
+        except Exception as exc:  # noqa: BLE001 - ranking pipeline fails closed.
+            logger.warning("fairness_reranking_failed", extra={"error_type": type(exc).__name__})
             places = _grounded_results(
                 candidates,
                 provider_source=provider_source_val,
                 provider_status=provider_status_val,
                 request=request,
+                original_query=query,
                 language=language,
             )
-            ensemble_ok = False
+            reranking_ok = False
             tracer.emit("reranking_fallback", PlaceAuditPhase.RERANK, detail={
                 "error_type": type(exc).__name__,
                 "candidate_count": len(candidates),
@@ -360,7 +380,7 @@ class PlaceRecommendationService:
             results=places,
             provider_status=tool_response.status,
             route_enrichment_ok=route_enrichment_ok,
-            ensemble_ok=ensemble_ok,
+            reranking_ok=reranking_ok,
         )
 
         # Composition: deterministic result assembly
@@ -455,11 +475,15 @@ class PlaceRecommendationService:
             except (TypeError, ValueError, AttributeError):
                 user_loc = None
 
+        included_type = _infer_included_type(query)
+        provider_query = _provider_search_query(query, included_type)
         return PlaceSearchRequest(
-            query=query,
+            query=provider_query,
             language_code=language_code,
             location_bias=HAM_NINH_CENTER.model_copy(),
             radius_meters=DEFAULT_SEARCH_RADIUS_METERS,
+            included_type=included_type,
+            strict_type_filtering=included_type is not None,
             max_result_count=self._max_result_count,
             budget_filter=budget_filter,
             wheelchair_accessible_preference=accessibility,
@@ -522,10 +546,10 @@ def _reranked_results(
     request: PlaceSearchRequest | None = None,
     language: str = "vi",
 ) -> list[PlaceResult]:
-    """Run candidates through FeatureExtractor → FairnessReranker pipeline."""
+    frame = _build_recommendation_frame(query)
     extractor = FeatureExtractor()
     feature_dicts = [
-        extractor.extract(candidate, query, user_location=None)
+        extractor.extract(candidate, query, user_location=request.user_location if request else None, frame=frame)
         for candidate in candidates
     ]
 
@@ -539,11 +563,7 @@ def _reranked_results(
 
     results: list[PlaceResult] = []
     for candidate, breakdown in zip(sorted_candidates, score_breakdowns):
-        accessibility_score = candidate.accessibility_score
-        if accessibility_score is None and candidate.accessibility_options:
-            accessibility_score = (
-                1.0 if any(candidate.accessibility_options.values()) else 0.0
-            )
+        accessibility_score = _accessibility_score(candidate)
 
         # Budget match: candidate price_level within requested budget range
         budget_matched = False
@@ -553,8 +573,7 @@ def _reranked_results(
         # Accessibility match: candidate has positive options AND user requested it
         accessibility_matched = (
             accessibility_pref is True
-            and bool(candidate.accessibility_options)
-            and any(candidate.accessibility_options.values())
+            and _has_verified_wheelchair_access(candidate)
         )
 
         results.append(
@@ -587,6 +606,14 @@ def _reranked_results(
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
                 accessibility_warning=candidate.accessibility_warning,
+                route_distance_meters=(
+                    candidate.route_context.distance_meters
+                    if candidate.route_context else None
+                ),
+                route_duration_seconds=(
+                    candidate.route_context.duration_seconds
+                    if candidate.route_context else None
+                ),
                 map_uri=candidate.map_uri
                 or _maps_url(candidate.place_id),
                 explanation=_build_place_explanation(
@@ -612,19 +639,16 @@ def _grounded_results(
     provider_source: str | None = None,
     provider_status: str | None = None,
     request: PlaceSearchRequest | None = None,
+    original_query: str | None = None,
     language: str = "vi",
 ) -> list[PlaceResult]:
-    """Fallback path: return candidates with default ensemble ScoreBreakdown."""
+    """Fallback path: return candidates with a neutral ScoreBreakdown."""
     numeric_levels = request.numeric_price_levels if request else None
     accessibility_pref = request.wheelchair_accessible_preference if request else None
 
     results: list[PlaceResult] = []
     for i, candidate in enumerate(candidates):
-        accessibility_score = candidate.accessibility_score
-        if accessibility_score is None and candidate.accessibility_options:
-            accessibility_score = (
-                1.0 if any(candidate.accessibility_options.values()) else 0.0
-            )
+        accessibility_score = _accessibility_score(candidate)
 
         # Budget match: candidate price_level within requested budget range
         budget_matched = False
@@ -634,17 +658,22 @@ def _grounded_results(
         # Accessibility match: candidate has positive options AND user requested it
         accessibility_matched = (
             accessibility_pref is True
-            and bool(candidate.accessibility_options)
-            and any(candidate.accessibility_options.values())
+            and _has_verified_wheelchair_access(candidate)
         )
 
         breakdown = ScoreBreakdown(
-            tree1_locality=0.5,
-            tree2_proximity=0.5,
-            tree3_quality=0.5,
-            s_bag=0.5,
-            delta1_fairness=0.0,
-            delta2_access=0.0,
+            relevance=0.5,
+            proximity=0.5,
+            quality=0.5,
+            geo_locality=candidate.geo_locality or 0.0,
+            popularity_damping=0.0,
+            weights={
+                "relevance": 0.4,
+                "proximity": 0.25,
+                "quality": 0.2,
+                "geo_locality": 0.15,
+            },
+            gate_passed=True,
             final_score=0.5,
             rank=i + 1,
         )
@@ -678,6 +707,14 @@ def _grounded_results(
                 score_breakdown=breakdown,
                 accessibility_score=accessibility_score,
                 accessibility_warning=candidate.accessibility_warning,
+                route_distance_meters=(
+                    candidate.route_context.distance_meters
+                    if candidate.route_context else None
+                ),
+                route_duration_seconds=(
+                    candidate.route_context.duration_seconds
+                    if candidate.route_context else None
+                ),
                 map_uri=candidate.map_uri
                 or _maps_url(candidate.place_id),
                 explanation=_build_place_explanation(
@@ -690,7 +727,10 @@ def _grounded_results(
                     budget_matched=budget_matched,
                     accessibility_matched=accessibility_matched,
                     language=language,
-                    frame=_build_recommendation_frame(request.query) if request else None,
+                    frame=(
+                        _build_recommendation_frame(original_query or request.query)
+                        if request else None
+                    ),
                 ),
             )
         )
@@ -795,6 +835,11 @@ _EAT_TYPES = frozenset({"restaurant", "seafood_restaurant", "vietnamese_restaura
 _STAY_TYPES = frozenset({"lodging", "hotel", "resort", "guest_house", "bed_and_breakfast", "homestay"})
 _SHOP_TYPES = frozenset({"store", "shopping_mall", "clothing_store", "supermarket", "pharmacy"})
 _SERVICE_TYPES = frozenset({"child_care_agency", "day_care_center", "preschool", "school", "doctor", "hospital", "local_government_office", "real_estate_agency", "bank", "atm"})
+_CAFE_TYPES = frozenset({"cafe", "coffee_shop"})
+
+_DANGEROUS_FAMILY_TYPES = frozenset({"waterfall", "canyon", "cave", "mountain"})
+_DANGEROUS_FAMILY_KEYWORDS_VI = ("thác", "thac", "suối", "suoi", "hang", "đèo", "deo", "vực", "vuc", "núi", "nui")
+_DANGEROUS_FAMILY_KEYWORDS_EN = ("waterfall", "stream", "canyon", "cave", "pass", "mountain")
 
 _GOAL_TERMS = {
     "itinerary": ("lịch trình", "lich trinh", "ghé đâu", "ghe dau", "đi đâu", "di dau", "visit", "where should", "plan"),
@@ -806,6 +851,23 @@ _AUDIENCE_TERMS = {
     "accessibility": ("xe lăn", "xe lan", "wheelchair", "accessible", "tiếp cận", "tiep can", "người già", "nguoi gia", "elderly"),
 }
 
+def _infer_included_type(query: str) -> str | None:
+    text = _norm_query(query)
+    if any(term in text for term in ("cà phê", "cafe", "coffee", "quán cf", "quan cf")):
+        return "cafe"
+    return None
+
+def _provider_search_query(query: str, included_type: str | None) -> str:
+    """Return a stable provider query while keeping preferences out of Text Search.
+
+    Terms like "view đẹp" are user preferences, not reliable provider search
+    constraints. Sending them verbatim tends to broaden results across Phu Quoc,
+    after which the Ham Ninh boundary filter removes every candidate.
+    """
+    if included_type == "cafe":
+        return "quán cà phê Hàm Ninh"
+    return query
+
 def _build_recommendation_frame(query: str) -> RecommendationFrame:
     text = _norm_query(query)
     goal = "visit"
@@ -815,6 +877,8 @@ def _build_recommendation_frame(query: str) -> RecommendationFrame:
         goal = "stay"
     if any(term in text for term in _GOAL_TERMS["itinerary"]):
         goal = "itinerary"
+    if _infer_included_type(query) == "cafe":
+        goal = "cafe"
 
     audience = "general"
     if any(term in text for term in _AUDIENCE_TERMS["family"]):
@@ -823,6 +887,7 @@ def _build_recommendation_frame(query: str) -> RecommendationFrame:
         audience = "accessibility"
 
     desired_by_goal = {
+        "cafe": frozenset({"eat"}),
         "food": frozenset({"eat"}),
         "stay": frozenset({"stay"}),
         "itinerary": frozenset({"visit", "eat", "rest"}),
@@ -857,9 +922,58 @@ def _candidate_role(candidate: PlaceCandidate) -> str:
         return "visit"
     return "unknown"
 
+_WHEELCHAIR_ENTRANCE_KEYS = frozenset({
+    "wheelchairAccessibleEntrance",
+    "wheelchair_accessible_entrance",
+})
+
+def _wheelchair_entrance_value(candidate: PlaceCandidate) -> bool | None:
+    """Return provider evidence for wheelchair entrance access only.
+
+    Other accessibility options, such as seating/restroom/parking, are partial
+    facilities. They must not be converted into a general wheelchair-access claim.
+    """
+    for key in _WHEELCHAIR_ENTRANCE_KEYS:
+        value = candidate.accessibility_options.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+def _has_verified_wheelchair_access(candidate: PlaceCandidate) -> bool:
+    return _wheelchair_entrance_value(candidate) is True
+
+def _accessibility_score(candidate: PlaceCandidate) -> float | None:
+    entrance = _wheelchair_entrance_value(candidate)
+    if entrance is True:
+        return 1.0
+    if entrance is False:
+        return 0.0
+    return None
+
 def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: RecommendationFrame) -> CandidateSuitability:
     role = _candidate_role(candidate)
-    disqualified = role in frame.disallowed_roles or (role not in frame.desired_roles and frame.goal in {"food", "stay", "itinerary"})
+    accessibility_required = "accessibility" in frame.constraints
+    accessibility_verified = _has_verified_wheelchair_access(candidate)
+    required_types = _CAFE_TYPES if frame.goal == "cafe" else frozenset()
+
+    # Dangerous places check for family/kids audience
+    is_dangerous_for_kids = False
+    if frame.audience == "family":
+        candidate_types = _candidate_type_set(candidate)
+        if candidate_types & _DANGEROUS_FAMILY_TYPES:
+            is_dangerous_for_kids = True
+        else:
+            name_lower = (candidate.display_name or "").lower()
+            if any(kw in name_lower for kw in _DANGEROUS_FAMILY_KEYWORDS_VI + _DANGEROUS_FAMILY_KEYWORDS_EN):
+                is_dangerous_for_kids = True
+
+    disqualified = (
+        role in frame.disallowed_roles
+        or (role not in frame.desired_roles and frame.goal in {"food", "stay", "itinerary"})
+        or (required_types and not (_candidate_type_set(candidate) & required_types))
+        or (accessibility_required and not accessibility_verified)
+        or is_dangerous_for_kids
+    )
     score = 0.0
     if role in frame.desired_roles:
         score += 4.0
@@ -873,7 +987,7 @@ def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: Recommenda
         score += min(candidate.user_rating_count, 1000) / 1500.0
     if candidate.open_now is True:
         score += 0.2
-    if "accessibility" in frame.constraints and candidate.accessibility_options and any(candidate.accessibility_options.values()):
+    if accessibility_required and accessibility_verified:
         score += 1.0
     if "low_friction" in frame.constraints and candidate.route_context and candidate.route_context.duration_seconds is not None:
         score -= min(candidate.route_context.duration_seconds / 5400.0, 1.0)
@@ -881,6 +995,45 @@ def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: Recommenda
     role_vi = {"visit": "điểm tham quan", "eat": "điểm ăn uống", "stay": "nơi lưu trú", "shop": "cửa hàng", "service": "dịch vụ", "unknown": "địa điểm"}.get(role, "địa điểm")
     role_en = {"visit": "visit stop", "eat": "food stop", "stay": "place to stay", "shop": "shop", "service": "service", "unknown": "place"}.get(role, "place")
     if disqualified:
+        if is_dangerous_for_kids:
+            reason_vi = f"{candidate.display_name} không phù hợp cho nhóm đi cùng trẻ em vì địa điểm này (suối, thác, hang động, núi) có thể gây nguy hiểm cho trẻ nhỏ."
+            reason_en = f"{candidate.display_name} is not suitable for groups with children as this location (waterfall, stream, cave, mountain) can be hazardous for kids."
+            return CandidateSuitability(
+                role=role,
+                score=score,
+                primary_reason_vi=reason_vi,
+                primary_reason_en=reason_en,
+                disqualified=True,
+                caveats_vi=(reason_vi,),
+                caveats_en=(reason_en,),
+            )
+        if required_types and not (_candidate_type_set(candidate) & required_types):
+            reason_vi = f"{candidate.display_name} không có loại cafe/coffee shop trong metadata nhà cung cấp."
+            reason_en = f"{candidate.display_name} is not typed as a cafe or coffee shop in provider metadata."
+            return CandidateSuitability(
+                role=role,
+                score=score,
+                primary_reason_vi=reason_vi,
+                primary_reason_en=reason_en,
+                disqualified=True,
+            )
+        if accessibility_required and not accessibility_verified:
+            entrance = _wheelchair_entrance_value(candidate)
+            if entrance is False:
+                reason_vi = f"{candidate.display_name} không được xác nhận hỗ trợ xe lăn vì nhà cung cấp báo không có lối vào cho xe lăn."
+                reason_en = f"{candidate.display_name} is not treated as wheelchair-accessible because provider metadata says there is no wheelchair-accessible entrance."
+            else:
+                reason_vi = f"{candidate.display_name} chưa có bằng chứng provider đủ rõ về lối vào cho xe lăn."
+                reason_en = f"{candidate.display_name} lacks clear provider evidence for a wheelchair-accessible entrance."
+            return CandidateSuitability(
+                role=role,
+                score=score,
+                primary_reason_vi=reason_vi,
+                primary_reason_en=reason_en,
+                disqualified=True,
+                caveats_vi=(reason_vi,),
+                caveats_en=(reason_en,),
+            )
         return CandidateSuitability(
             role=role,
             score=score,
@@ -888,11 +1041,11 @@ def _evaluate_candidate_suitability(candidate: PlaceCandidate, frame: Recommenda
             primary_reason_en=f"{candidate.display_name} looks more like a {role_en} than a direct fit for this request.",
             disqualified=True,
         )
-    reason_vi = f"{candidate.display_name} phù hợp như một {role_vi} cho mục tiêu chuyến đi."
-    reason_en = f"{candidate.display_name} fits as a {role_en} for this travel goal."
+    reason_vi = f"{candidate.display_name} được giữ lại vì metadata nhà cung cấp cho thấy vai trò chính là {role_vi}."
+    reason_en = f"{candidate.display_name} is kept because provider metadata shows it functions as a {role_en}."
     if frame.audience == "family":
-        reason_vi = f"{candidate.display_name} đáng cân nhắc cho nhóm đi cùng trẻ em vì vai trò chính là {role_vi}, không phải dịch vụ/cửa hàng ngoài mục đích tham quan."
-        reason_en = f"{candidate.display_name} is worth considering for a group with children because it functions as a {role_en}, not an unrelated shop or service."
+        reason_vi = f"{candidate.display_name} có thể cân nhắc cho nhóm đi cùng trẻ em vì metadata cho thấy vai trò chính là {role_vi}, không phải dịch vụ/cửa hàng ngoài mục đích tham quan."
+        reason_en = f"{candidate.display_name} can be considered for a group with children because provider metadata shows it functions as a {role_en}, not an unrelated shop or service."
     return CandidateSuitability(role=role, score=score, primary_reason_vi=reason_vi, primary_reason_en=reason_en)
 
 def _apply_product_quality_filters(candidates: list[PlaceCandidate], frame: RecommendationFrame) -> tuple[list[PlaceCandidate], int]:
@@ -964,97 +1117,6 @@ def _redact_text(value: str, *, max_length: int = 240) -> str:
     return value[:max_length]
 
 
-def _make_friendly_reason(matched: list[str], fallback: bool, language: str) -> str:
-    # Extract type, rating, open status, budget, accessibility
-    place_type = None
-    rating_ok = False
-    open_now = False
-    budget_ok = False
-    access_ok = False
-
-    for m in matched:
-        if m.startswith("type:"):
-            place_type = m.split(":", 1)[1]
-        elif m == "provider_rating_available":
-            rating_ok = True
-        elif m == "open_now":
-            open_now = True
-        elif m == "budget_preference_matched":
-            budget_ok = True
-        elif m == "accessibility_preference_matched":
-            access_ok = True
-
-    if language == "vi":
-        type_map = {
-            "coffee_shop": "quán cà phê",
-            "cafe": "quán cà phê",
-            "restaurant": "nhà hàng",
-            "tourist_attraction": "điểm tham quan",
-            "lodging": "khách sạn/nơi lưu trú",
-            "hotel": "khách sạn",
-            "bar": "quán bar/bistro",
-            "food": "địa điểm ăn uống",
-            "park": "công viên",
-            "museum": "bảo tàng",
-        }
-        type_str = type_map.get(place_type, "địa điểm") if place_type else "địa điểm"
-        
-        parts = []
-        if budget_ok:
-            parts.append("phù hợp ngân sách")
-        if rating_ok:
-            parts.append("có dữ liệu đánh giá từ nhà cung cấp")
-        if open_now:
-            parts.append("đang mở cửa")
-        if access_ok:
-            parts.append("hỗ trợ lối xe lăn")
-            
-        if not parts:
-            if fallback:
-                return f"Gợi ý {type_str} phù hợp dựa trên các tiêu chí tìm kiếm cơ bản (fallback, recommended)."
-            return f"Gợi ý {type_str} chất lượng được đề xuất dựa trên các tiêu chí tối ưu (recommended)."
-            
-        # Join parts naturally
-        if len(parts) == 1:
-            desc = parts[0]
-        elif len(parts) == 2:
-            desc = f"{parts[0]} và {parts[1]}"
-        else:
-            desc = ", ".join(parts[:-1]) + f" và {parts[-1]}"
-            
-        capitalized_type = type_str.capitalize()
-        if fallback:
-            return f"{capitalized_type} được gợi ý dựa trên tiêu chí cơ bản vì {desc} (fallback, recommended)."
-        return f"{capitalized_type} được gợi ý vì {desc} (recommended)."
-    else:
-        type_str = place_type.replace("_", " ") if place_type else "place"
-        parts = []
-        if budget_ok:
-            parts.append("fits your budget")
-        if rating_ok:
-            parts.append("has provider rating data")
-        if open_now:
-            parts.append("is open now")
-        if access_ok:
-            parts.append("offers wheelchair access")
-            
-        if not parts:
-            if fallback:
-                return f"Recommended using fallback grounded place fields (fallback)."
-            return f"Recommended by reranking grounded place fields (recommended)."
-            
-        if len(parts) == 1:
-            desc = parts[0]
-        elif len(parts) == 2:
-            desc = f"{parts[0]} and {parts[1]}"
-        else:
-            desc = ", ".join(parts[:-1]) + f", and {parts[-1]}"
-            
-        if fallback:
-            return f"Recommended using fallback grounded place fields because it {desc} (fallback)."
-        return f"Recommended by reranking grounded place fields. It {desc} (recommended)."
-
-
 def _build_place_explanation(
     *,
     candidate: PlaceCandidate,
@@ -1120,7 +1182,18 @@ def _build_place_explanation(
         fairness_note = "included without overstating local ownership"
         evidence.append("geo_locality")
 
-    if accessibility_score is None and not candidate.accessibility_warning and not candidate.accessibility_options:
+    entrance = _wheelchair_entrance_value(candidate)
+    if entrance is True:
+        accessibility_note = (
+            "provider metadata verifies a wheelchair-accessible entrance"
+        )
+        evidence.append("accessibility_options")
+    elif entrance is False:
+        accessibility_note = (
+            "provider metadata reports no wheelchair-accessible entrance; verify before visiting"
+        )
+        evidence.append("accessibility_options")
+    elif accessibility_score is None and not candidate.accessibility_warning and not candidate.accessibility_options:
         accessibility_note = "accessibility metadata unknown"
     elif candidate.accessibility_warning:
         accessibility_note = _redact_text(candidate.accessibility_warning)
@@ -1129,7 +1202,7 @@ def _build_place_explanation(
         accessibility_note = f"accessibility score {accessibility_score:.2f}"
         evidence.append("accessibility_score")
     else:
-        accessibility_note = "accessibility options available"
+        accessibility_note = "partial accessibility metadata available; not enough to confirm a wheelchair-accessible entrance"
         evidence.append("accessibility_options")
 
     route_summary = "route metadata unavailable"
@@ -1145,13 +1218,19 @@ def _build_place_explanation(
         route_summary = "route " + ", ".join(parts) if parts else "route metadata limited"
 
     suitability = _evaluate_candidate_suitability(candidate, frame) if frame is not None else None
-    primary_reason = _make_place_specific_reason(
-        candidate=candidate,
-        detail_highlights=detail_highlights,
-        fallback=fallback,
-        language=language,
-        frame=frame,
-    )
+    if getattr(breakdown, "gate_tier", None) == "low":
+        if language == "vi":
+            primary_reason = f"Chưa đủ dữ liệu về {candidate.display_name}, cần người dùng kiểm tra thêm thông tin chi tiết."
+        else:
+            primary_reason = f"Insufficient data for {candidate.display_name}, user verification of details is recommended."
+    else:
+        primary_reason = _make_place_specific_reason(
+            candidate=candidate,
+            detail_highlights=detail_highlights,
+            fallback=fallback,
+            language=language,
+            frame=frame,
+        )
     primary_reason = _redact_text(primary_reason)
 
     score_factors: dict[str, float | int | str | None] = {
@@ -1198,6 +1277,58 @@ def _preference_flags(
     return " ".join(parts) if parts else ""
 
 
+def _apply_geographic_boundary_filter(
+    candidates: list["PlaceCandidate"],
+) -> tuple[list["PlaceCandidate"], int]:
+    """Hard-remove candidates beyond MAX_DISTANCE_FROM_CENTER_METERS from Ham Ninh center.
+
+    Google Places API locationBias is a hint, not a restriction — the provider
+    may return places hundreds of kilometres away when it finds them textually
+    relevant. This filter enforces the product boundary: only places within the
+    Ham Ninh / Phú Quốc area are eligible for recommendation.
+
+    Returns (filtered_candidates, count_of_removed).
+    """
+    if not candidates:
+        return candidates, 0
+
+    from agents.ranking.feature_extractor import haversine
+
+    kept: list[PlaceCandidate] = []
+    removed = 0
+    for candidate in candidates:
+        if candidate.location is None:
+            # A hard geographic boundary cannot be verified without coordinates.
+            removed += 1
+            logger.debug(
+                "geographic_boundary_rejected",
+                extra={
+                    "place_id": candidate.place_id,
+                    "display_name": candidate.display_name,
+                    "reason": "missing_location",
+                },
+            )
+            continue
+        dist = haversine(
+            HAM_NINH_CENTER.lat, HAM_NINH_CENTER.lng,
+            candidate.location.lat, candidate.location.lng,
+        )
+        if dist <= MAX_DISTANCE_FROM_CENTER_METERS:
+            kept.append(candidate)
+        else:
+            removed += 1
+            logger.debug(
+                "geographic_boundary_rejected",
+                extra={
+                    "place_id": candidate.place_id,
+                    "display_name": candidate.display_name,
+                    "distance_m": round(dist),
+                },
+            )
+
+    return kept, removed
+
+
 def _apply_preference_filters(
     candidates: list["PlaceCandidate"],
     request: "PlaceSearchRequest",
@@ -1206,11 +1337,9 @@ def _apply_preference_filters(
 
     - Budget: exclude candidates whose price_level falls outside the requested
       budget_filter numeric range.
-    - Accessibility: boost candidates with wheelchair_accessible options by
-      increasing their geo_locality (so fairness balancing and reranking will tend
-      to promote them) — no hard filter because accessibility metadata is often
-      missing.  Candidates with unknown accessibility metadata are retained without
-      hiding their unknown status.
+    - Accessibility: for explicit wheelchair-access requests, retain only
+      candidates with provider-verified wheelchair entrance access. Partial or
+      unknown accessibility metadata is not enough to claim support.
     - User location: already used in _build_request for origin; proximity scoring
       is handled downstream by FeatureExtractor.
 
@@ -1241,20 +1370,16 @@ def _apply_preference_filters(
     else:
         excluded_by_budget = 0
 
-    # Accessibility boosting: when wheelchair_accessible_preference is True,
-    # promote candidates that have positive accessibility options by slightly
-    # increasing their geo_locality.  This is a soft boost — accessible
-    # candidates stay ahead in fairness/re-ranking but we do NOT filter out
-    # candidates whose accessibility metadata is unknown.
+    # Accessibility preference: only provider-verified wheelchair entrance
+    # access can be promoted. Partial accessibility fields must not imply a
+    # wheelchair-accessible venue.
     if request.wheelchair_accessible_preference is True:
         boosted = 0
         for c in result:
-            if c.accessibility_options and any(c.accessibility_options.values()):
+            if _has_verified_wheelchair_access(c):
                 # Boost geo_locality by 0.1, capped at 1.0
                 c.geo_locality = min(1.0, (c.geo_locality or 0.5) + 0.1)
                 boosted += 1
-            # Candidates with no accessibility_options dict or all-False values
-            # are left unchanged — unknown metadata is preserved, not hidden.
         if boosted > 0:
             # Sort by updated geo_locality descending so accessibility-aware
             # candidates surface higher before fairness/reranking.
@@ -1315,6 +1440,12 @@ def _cultural_preface(language_code: str) -> str:
     return _HAM_NINH_CULTURAL_PREFACE_VI
 
 
+def _provider_limits_note(language_code: str) -> str:
+    if language_code == "en":
+        return " Provider data can miss price, accessibility, terrain, or safety details, so check the card and current conditions before deciding."
+    return " Dữ liệu nhà cung cấp có thể thiếu giá, khả năng tiếp cận, địa hình hoặc mức độ an toàn, nên hãy mở thẻ và kiểm tra điều kiện thực tế trước khi quyết định."
+
+
 def _message_for_status(
     status: PlaceToolStatus,
     *,
@@ -1327,30 +1458,34 @@ def _message_for_status(
     if status == PlaceToolStatus.OK:
         names = [name.strip() for name in (display_names or []) if name.strip()]
         top_names = names[:3]
+        if frame and "accessibility" in frame.constraints and result_count == 0:
+            if language_code == "en":
+                return "I did not find any places with provider-verified wheelchair-accessible entrance metadata for this request. I will not label venues as wheelchair-accessible without that evidence."
+            return "Mình chưa tìm thấy địa điểm nào có metadata từ nhà cung cấp xác nhận có lối vào cho xe lăn cho yêu cầu này. Mình sẽ không gắn nhãn hỗ trợ xe lăn nếu chưa có bằng chứng đó."
         if frame and frame.goal == "itinerary":
             if language_code == "en":
                 if top_names:
                     joined = "; ".join(top_names)
-                    return f"For this trip goal, I would start with these easier options: {joined}. I kept the list short so you can compare quickly; open the cards for map and practical details."
-                return "I found a few possible stops for this trip goal. Open the cards to compare map and practical details."
+                    return f"For this trip goal, I found these related provider results to compare first: {joined}. I kept the list short so you can inspect the cards for map and practical details." + _provider_limits_note(language_code)
+                return "I found a few related provider results for this trip goal. Open the cards to compare map and practical details." + _provider_limits_note(language_code)
             if top_names:
                 joined = "; ".join(top_names)
-                return f"Với mục tiêu chuyến đi này, mình ưu tiên vài điểm dễ cân nhắc trước: {joined}. Mình rút gọn danh sách để bạn so sánh nhanh; mở từng thẻ để xem bản đồ và chi tiết thực tế."
-            return "Mình tìm được vài điểm có thể cân nhắc cho mục tiêu chuyến đi này. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+                return f"Với mục tiêu chuyến đi này, mình tìm được vài kết quả liên quan từ nhà cung cấp để bạn so sánh trước: {joined}. Mình rút gọn danh sách để bạn kiểm tra nhanh; mở từng thẻ để xem bản đồ và chi tiết thực tế." + _provider_limits_note(language_code)
+            return "Mình tìm được vài kết quả liên quan từ nhà cung cấp cho mục tiêu chuyến đi này. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế." + _provider_limits_note(language_code)
         if language_code == "en":
             if top_names:
                 joined = "; ".join(top_names)
-                base = f"I found {result_count} relevant places around Ham Ninh. Start with: {joined}. Open the cards for map and practical details."
+                base = f"I found {result_count} related places around Ham Ninh from provider results. Compare: {joined}. Open the cards for map and practical details."
             else:
-                base = f"I found {result_count} relevant places around Ham Ninh. Open the cards for map and practical details."
+                base = f"I found {result_count} related places around Ham Ninh from provider results. Open the cards for map and practical details."
         elif top_names:
             joined = "; ".join(top_names)
-            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Nên bắt đầu với: {joined}. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+            base = f"Mình tìm được {result_count} địa điểm liên quan quanh Hàm Ninh từ dữ liệu nhà cung cấp. Bạn có thể so sánh: {joined}. Mở từng thẻ để xem bản đồ và chi tiết thực tế."
         else:
-            base = f"Mình tìm được {result_count} địa điểm phù hợp quanh Hàm Ninh. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
+            base = f"Mình tìm được {result_count} địa điểm liên quan quanh Hàm Ninh từ dữ liệu nhà cung cấp. Bạn mở từng thẻ để xem bản đồ và chi tiết thực tế."
         if is_commercial:
-            return _cultural_preface(language_code) + base
-        return base
+            return _cultural_preface(language_code) + base + _provider_limits_note(language_code)
+        return base + _provider_limits_note(language_code)
     if status == PlaceToolStatus.EMPTY:
         return "Mình chưa tìm thấy địa điểm phù hợp quanh Hàm Ninh cho yêu cầu này. Bạn thử nói rõ loại địa điểm, ngân sách hoặc khu vực gần đâu nhé."
     if status == PlaceToolStatus.CREDENTIALS_BLOCKED:
@@ -1446,7 +1581,7 @@ def _compute_fairness_audit(
     results: list[PlaceResult],
     provider_status: PlaceToolStatus,
     route_enrichment_ok: bool = True,
-    ensemble_ok: bool = True,
+    reranking_ok: bool = True,
 ) -> FairnessAudit:
     """Compute a structured fairness audit snapshot from candidate/result data.
 
@@ -1477,8 +1612,8 @@ def _compute_fairness_audit(
         warnings.append(FairnessWarningType.PROVIDER_NON_OK.value)
     if not route_enrichment_ok:
         warnings.append(FairnessWarningType.ROUTE_ENRICHMENT_FALLBACK.value)
-    if not ensemble_ok:
-        warnings.append(FairnessWarningType.ENSEMBLE_FALLBACK.value)
+    if not reranking_ok:
+        warnings.append(FairnessWarningType.RERANKING_FALLBACK.value)
     if missing_geo_locality_count > 0:
         warnings.append(FairnessWarningType.MISSING_LOCAL_FACTOR_METADATA.value)
 

@@ -29,7 +29,7 @@ from app.models.response import (
     TracesStatusResponse,
     FairnessSummaryResponse,
 )
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_admin
 from agents.tools.corpus_loader import load_proposition_corpus
 from agents.tools.embedding_service import EmbeddingService, EmbeddingValidationError
 from agents.tools.hybrid_retriever import BM25Vectorizer
@@ -49,7 +49,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 @router.post("/embed", response_model=EmbedResponse, status_code=status.HTTP_200_OK)
 async def embed_corpus(
     request: Request,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> EmbedResponse:
     """Trigger full corpus ingestion into Qdrant.
 
@@ -221,6 +221,50 @@ def _resolve_eval_dataset_path(requested: str | None) -> str:
     return _DEFAULT_EVAL_DATASET
 
 
+def _check_thresholds(aggregate_scores: dict) -> tuple[dict, bool]:
+    """Check each metric against its threshold.
+
+    Thresholds:
+        - Faithfulness ≥ 0.85
+        - Answer Relevance ≥ 0.80
+        - Context Precision ≥ 0.80
+        - Context Recall ≥ 0.75
+
+    Returns:
+        Tuple of (threshold_results dict, all_passed bool).
+        threshold_results maps metric names to {score, threshold, passed}.
+        all_passed is True only when all evaluated metrics meet their thresholds.
+    """
+    thresholds = {
+        "faithfulness": 0.85,
+        "answer_relevancy": 0.80,
+        "context_precision": 0.80,
+        "context_recall": 0.75,
+    }
+
+    threshold_results = {}
+    all_passed = False
+
+    if not aggregate_scores:
+        return threshold_results, all_passed
+
+    for metric_name, threshold_value in thresholds.items():
+        if metric_name in aggregate_scores:
+            score = aggregate_scores[metric_name]
+            passed = score >= threshold_value
+            threshold_results[metric_name] = {
+                "score": score,
+                "threshold": threshold_value,
+                "passed": passed,
+            }
+
+    # all_passed is True only if we have results and all passed
+    if threshold_results:
+        all_passed = all(r["passed"] for r in threshold_results.values())
+
+    return threshold_results, all_passed
+
+
 @router.post(
     "/eval/trigger",
     response_model=EvalResultResponse,
@@ -229,23 +273,27 @@ def _resolve_eval_dataset_path(requested: str | None) -> str:
 async def trigger_eval(
     body: EvalTriggerRequest | None = None,
     request: Request = None,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> EvalResultResponse:
     """Run RAGAS evaluation against eval_dataset.jsonl.
 
     Requires JWT auth. Returns credential_blocked verdict if OPENAI_API_KEY
     is not configured. Synchronous call — may block ~30s for 10-15 questions.
 
+    When Langfuse is configured, evaluation scores are logged to Langfuse
+    for centralized observability alongside agent traces.
+
     Returns:
         EvalResultResponse with verdict, metrics, timestamp, and result path.
     """
-    from agents.ml.ragas_evaluator import RAGASEvaluator
+    from agents.eval.ragas_runner import RAGASEvaluator
 
     openai_key = os.environ.get("OPENAI_API_KEY")
     dataset_path = _resolve_eval_dataset_path(
         body.dataset_path if body else None
     )
     metrics = body.metrics if body else None
+    langfuse_client = getattr(request.app.state, "langfuse_client", None) if request else None
 
     logger.info(
         "eval.trigger",
@@ -260,20 +308,29 @@ async def trigger_eval(
         corpus_path=_resolve_eval_dataset_path(None).replace(
             "eval_dataset.jsonl", "tourism_documents.jsonl"
         ),
+        langfuse_client=langfuse_client,
     )
     result = evaluator.evaluate(dataset_path)
 
     latency_ms = result.get("latency_seconds", 0) * 1000
 
+    # Extract aggregate scores and enforce thresholds
+    aggregate_scores = result.get("aggregate_scores", {})
+    threshold_results, all_passed = _check_thresholds(aggregate_scores)
+
     logger.info(
         "eval.completed",
         verdict=result.get("verdict"),
         latency_ms=round(latency_ms, 2),
+        threshold_results=threshold_results,
+        all_passed=all_passed,
     )
 
     return EvalResultResponse(
         verdict=result.get("verdict", "unknown"),
-        metrics=result.get("metrics", {}),
+        metrics=aggregate_scores,
+        threshold_results=threshold_results,
+        all_passed=all_passed,
         timestamp=result.get("timestamp", ""),
         dataset_size=result.get("dataset_size", 0),
         latency_ms=round(latency_ms, 2),
@@ -283,7 +340,7 @@ async def trigger_eval(
 
 @router.get("/eval/results", response_model=list[EvalFileListing])
 async def list_eval_results(
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> list[EvalFileListing]:
     """List recent evaluation results from data/eval_results/.
 
@@ -315,21 +372,34 @@ async def list_eval_results(
 @router.get("/traces", response_model=TracesStatusResponse)
 async def get_traces(
     request: Request,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> TracesStatusResponse:
-    """Return Langfuse tracing status for observability diagnostics.
+    """Return Langfuse tracing status and recent trace data.
 
     Checks whether the Langfuse client was successfully initialized
-    during app startup. Returns host and enabled flag.
+    during app startup. When active, fetches the 10 most recent traces
+    from the Langfuse API and returns summary metadata (trace_id,
+    session_id, name, timestamp, latency_ms, total_cost).
+
+    Gracefully degrades: if the Langfuse API call fails (network
+    error, auth error, timeout), the endpoint still returns 200 with
+    recent_traces=None and a warning message.
     """
     settings = get_settings()
     langfuse_client = getattr(request.app.state, "langfuse_client", None)
 
     if langfuse_client is not None:
+        recent_traces = _fetch_recent_traces(langfuse_client)
+        message = "Langfuse tracing is active."
+        if recent_traces is None:
+            message = (
+                "Langfuse tracing is active, but recent trace fetch failed."
+            )
         return TracesStatusResponse(
             langfuse_enabled=True,
             host=settings.LANGFUSE_HOST,
-            message="Langfuse tracing is active.",
+            message=message,
+            recent_traces=recent_traces,
         )
 
     return TracesStatusResponse(
@@ -339,9 +409,55 @@ async def get_traces(
     )
 
 
+def _fetch_recent_traces(
+    langfuse_client: object,
+    limit: int = 10,
+) -> list[dict] | None:
+    """Fetch recent traces from the Langfuse API.
+
+    Args:
+        langfuse_client: Initialized Langfuse client instance.
+        limit: Maximum number of traces to return.
+
+    Returns:
+        List of trace summary dicts, or None if the API call fails.
+    """
+    try:
+        result = langfuse_client.api.trace.list(
+            limit=limit,
+            order_by="timestamp",
+        )
+
+        traces: list[dict] = []
+        for trace in result.data:
+            trace_summary = {
+                "trace_id": trace.id,
+                "session_id": trace.session_id,
+                "name": trace.name,
+                "timestamp": trace.timestamp.isoformat() if trace.timestamp else None,
+                "latency_ms": round(trace.latency * 1000, 2) if trace.latency is not None else None,
+                "total_cost": trace.total_cost,
+            }
+            traces.append(trace_summary)
+
+        logger.info(
+            "traces.fetched",
+            count=len(traces),
+            limit=limit,
+        )
+        return traces
+
+    except Exception:
+        logger.warning(
+            "traces.fetch_failed",
+            exc_info=True,
+        )
+        return None
+
+
 @router.get("/fairness", response_model=FairnessSummaryResponse)
 async def get_fairness(
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> FairnessSummaryResponse:
     """Return fairness audit summary for social impact diagnostics.
 
@@ -450,7 +566,7 @@ def _bucket_local_factors_aggregate(local_factors: list[float]) -> dict[str, int
 @router.get("/stats", response_model=AdminStatsResponse)
 async def get_stats(
     request: Request,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_admin),
 ) -> AdminStatsResponse:
     """Return corpus operational stats for admin dashboard visibility.
 

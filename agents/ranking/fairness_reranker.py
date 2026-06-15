@@ -64,6 +64,7 @@ class FairnessReranker:
                 popularity_damping=round(damping, 4),
                 weights=weights,
                 gate_passed=gate_passed,
+                gate_tier="high" if gate_passed else "low",
                 final_score=round(final_score, 4),
                 rank=0
             )

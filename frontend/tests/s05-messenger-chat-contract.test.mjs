@@ -35,7 +35,25 @@ const paths = {
   enMessages: path.join(frontendDir, 'messages/en.json'),
   viMessages: path.join(frontendDir, 'messages/vi.json'),
   s04Contract: path.join(frontendDir, 'tests/s04-explainability-contract.test.mjs'),
+  resumeRoute: path.join(frontendDir, 'src/app/api/chat/resume/route.ts'),
 };
+
+test('chat resume proxy uses the same backend host contract as chat and stream', () => {
+  const source = read(paths.resumeRoute);
+
+  assert.match(source, /HN_BACKEND_HOST_PORT/);
+  assert.match(source, /http:\/\/localhost/);
+  assert.doesNotMatch(source, /http:\/\/backend:8000/);
+});
+
+test('ChatInterface resumes geolocation interrupts instead of interpreting confirmation text', () => {
+  const source = read(paths.chatInterface);
+
+  assert.match(source, /onInterrupt/);
+  assert.match(source, /getBrowserLocation/);
+  assert.doesNotMatch(source, /confirmsLocation/);
+  assert.doesNotMatch(source, /pendingLocation\s*=\s*Boolean/);
+});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -88,7 +106,7 @@ test('R055: MessageBubble uses distinct bubble styles for user vs assistant', ()
   const source = read(paths.messageBubble);
 
   assert.ok(
-    /isUser/.test(source) && /rounded-tr-md/.test(source) && /rounded-tl-md/.test(source),
+    /isUser/.test(source) && /rounded-tr-sm/.test(source) && /rounded-xl/.test(source),
     'MessageBubble must render different rounded corners for user vs assistant bubbles'
   );
 });
@@ -155,7 +173,7 @@ test('R055: MessageBubble uses responsive max-width for messages', () => {
   const source = read(paths.messageBubble);
 
   assert.ok(
-    /md:max-w-\[74%\]/.test(source),
+    /max-w-\[88%\]/.test(source) && /md:max-w-\[82%\]/.test(source),
     'MessageBubble must use different max-width on mobile vs desktop'
   );
 });
@@ -260,13 +278,14 @@ test('R055: MessageBubble still renders streamStatusLabel (S04 preserved)', () =
   );
 });
 
-test('R055: MessageBubble still renders statusHistory timeline (S04 preserved)', () => {
+test('R055: MessageBubble renders semantic run progress from statusHistory', () => {
   const source = read(paths.messageBubble);
 
   assert.ok(
-    /statusHistory/.test(source),
-    'MessageBubble must still render statusHistory timeline for S04 thinking surface'
+    /statusHistory/.test(source) && /Semantic run progress/.test(source),
+    'MessageBubble must render semantic agent progress without exposing policy axes'
   );
+  assert.doesNotMatch(source, /policy axes|decorative checklist/i);
 });
 
 test('R055: MessageBubble still renders PlaceCard for places (S04 preserved)', () => {
@@ -298,12 +317,12 @@ test('R055: ChatInterface still passes placeTranslations to MessageBubble (S04 p
 
 // ── R055: Preserved S04 Explainability Wiring ────────────────────────────────
 
-test('R055: PlaceCard still imports PlaceExplanation type (S04 preserved)', () => {
+test('R055: PlaceCard consumes typed PlaceResult explanation data (S04 preserved)', () => {
   const source = read(paths.placeCard);
 
   assert.ok(
-    /PlaceExplanation/.test(source),
-    'PlaceCard must still import or reference PlaceExplanation type'
+    /PlaceResult/.test(source) && /place\.explanation\b/.test(source),
+    'PlaceCard must consume explanation data through the typed PlaceResult contract'
   );
 });
 
@@ -464,13 +483,13 @@ test('R055: ChatInterface defines status labels for both English and Vietnamese'
     'STATUS_LABELS must have both Vietnamese and English status labels'
   );
 
-  // Must reference all 5 streaming phases
+  // Must reference semantic streaming phases, not legacy internal labels.
   const statuses = [
-    'understanding',
-    'using_history',
-    'searching_knowledge',
-    'checking_places',
-    'composing',
+    'planning',
+    'gathering:knowledge',
+    'gathering:places',
+    'waiting_for_user_input',
+    'verifying',
   ];
 
   for (const status of statuses) {

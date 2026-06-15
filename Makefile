@@ -18,8 +18,9 @@ PYTEST_FLAGS ?= -v --tb=short
 export PYTHONPATH := .:backend
 
 .PHONY: setup up down test test-all test-backend test-agents \
-        test-unit test-integration logs restart clean status help \
-        install install-backend install-agents lint format infra-test
+        test-unit test-integration verify-runtime logs restart clean status help \
+        install install-backend install-agents lint format infra-test \
+        seed seed-admin seed-user
 
 # ── Default target ──────────────────────────────────────────
 help: ## Show available targets with descriptions
@@ -100,6 +101,15 @@ infra-test: ## Run HTTP health checks against running services
 	@echo "Running health checks..."
 	./scripts/check-health.sh
 
+seed: ## Create or update development admin and user accounts
+	docker compose --profile tools run --rm seed-users
+
+seed-admin: ## Create or update only the development admin account
+	docker compose --profile tools run --rm seed-users --only admin
+
+seed-user: ## Create or update only the development user account
+	docker compose --profile tools run --rm seed-users --only user
+
 # ── Dependencies ────────────────────────────────────────────
 install-backend: ## Install backend Python dependencies
 	$(PYTHON) -m pip install -r backend/requirements.txt
@@ -123,6 +133,10 @@ test-unit: test-backend test-agents ## Run all unit tests (offline, no infra)
 test-integration: ## Run integration tests (requires live services)
 	@echo "Running integration tests..."
 	$(PYTHON) -m pytest backend/tests/ -m integration $(PYTEST_FLAGS)
+
+verify-runtime: ## Run full runtime verification suite (integration + operational + UAT)
+	@echo "Running runtime verification suite..."
+	$(PYTHON) scripts/integration_test.py --base-url $(BACKEND_URL)
 
 test-all: test-unit infra-test ## Run unit tests + infra health checks
 

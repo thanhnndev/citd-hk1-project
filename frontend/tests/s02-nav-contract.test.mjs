@@ -117,11 +117,11 @@ test('/vi footer contains copyright text', () => {
   );
 });
 
-test('/vi footer contains responsible AI tagline', () => {
+test('/vi footer contains community-first tagline', () => {
   const html = readBuildHtml('vi');
   assert.ok(
-    /AI có trách nhiệm/.test(html),
-    '/vi HTML must contain responsible AI tagline "AI có trách nhiệm"'
+    /bối cảnh địa phương/.test(html),
+    '/vi HTML must contain the community-first local-context tagline'
   );
 });
 

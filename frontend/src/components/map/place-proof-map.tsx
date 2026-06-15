@@ -1,19 +1,18 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
 import { ExternalLink, Loader2, Navigation, Search, ShieldAlert, Star } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { GoongPlaceMap } from "@/components/map/goong-place-map";
+import { GooglePlaceMap } from "@/components/map/google-place-map";
 import { sendChat, type ChatResponse, type PlaceResult } from "@/lib/chat-api";
 import { cn } from "@/lib/utils";
 
 type MapProofTranslations = Readonly<{
   title: string;
   intro: string;
-  defaultQuery: string;
   queryLabel: string;
   searchPlaceholder: string;
   submit: string;
@@ -48,6 +47,7 @@ type MapProofTranslations = Readonly<{
 type PlaceProofMapProps = Readonly<{
   locale: string;
   translations: MapProofTranslations;
+  apiKey: string;
 }>;
 
 type RequestState = "idle" | "loading" | "ready" | "error";
@@ -70,21 +70,24 @@ function normalizePercent(value: number | null | undefined) {
   return Math.round(Math.max(0, Math.min(1, value)) * 100);
 }
 
-export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
+export function PlaceProofMap({ locale, translations, apiKey }: PlaceProofMapProps) {
   const language = locale === "en" ? "en" : "vi";
-  const [query, setQuery] = useState(translations.defaultQuery);
+  const [query, setQuery] = useState("");
   const [response, setResponse] = useState<ChatResponse | null>(null);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [requestState, setRequestState] = useState<RequestState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sessionId] = useState(() => crypto.randomUUID());
+  const inFlightRef = useRef(false);
 
   const places = response?.places ?? [];
   const selectedPlace = places.find((place) => place.place_id === selectedPlaceId) ?? places[0] ?? null;
   const pinnedPlaces = useMemo(() => places.filter(hasLocation), [places]);
 
   const runSearch = useCallback(async (nextQuery: string) => {
-    const prompt = nextQuery.trim() || translations.defaultQuery;
+    const prompt = nextQuery.trim();
+    if (!prompt || inFlightRef.current) return;
+    inFlightRef.current = true;
     setRequestState("loading");
     setErrorMessage(null);
 
@@ -98,12 +101,10 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
       setSelectedPlaceId(null);
       setErrorMessage(error instanceof Error ? error.message : translations.error);
       setRequestState("error");
+    } finally {
+      inFlightRef.current = false;
     }
-  }, [language, sessionId, translations.defaultQuery, translations.error]);
-
-  useEffect(() => {
-    void runSearch(translations.defaultQuery);
-  }, [runSearch, translations.defaultQuery]);
+  }, [language, sessionId, translations.error]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -118,7 +119,7 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-6">
         <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr] lg:items-end">
           <div className="space-y-5">
-            <Badge className="w-fit bg-primary/10 text-primary shadow-none">/api/chat proof</Badge>
+            <Badge className="w-fit bg-primary/10 text-primary shadow-none">{locale === "vi" ? "Bản đồ tương tác" : "Interactive Map"}</Badge>
             <div className="space-y-3">
               <h1 className="max-w-3xl text-4xl font-semibold tracking-tight md:text-6xl">{translations.title}</h1>
               <p className="max-w-2xl text-base leading-7 text-muted-foreground md:text-lg">{translations.intro}</p>
@@ -170,27 +171,16 @@ export function PlaceProofMap({ locale, translations }: PlaceProofMapProps) {
           </div>
 
           <div className="space-y-4">
-            <Card className="overflow-hidden bg-card/90 shadow-xl shadow-primary/10">
-              <GoongPlaceMap
-                places={places}
-                selectedPlaceId={selectedPlaceId}
-                onMarkerSelect={setSelectedPlaceId}
-                missingTokenLabel={translations.missingMapToken}
-                unavailableLabel={translations.mapUnavailable}
-                emptyLabel={translations.noPins}
-                selectPlaceLabel={translations.selectPlace}
-              />
-              <CardContent className="p-5">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {places.map((place, index) => (
-                    <div key={place.place_id} className="rounded-2xl border bg-background/70 p-3 text-sm">
-                      <span className="font-semibold">#{index + 1} {place.display_name}</span>
-                      <p className="mt-1 text-xs text-muted-foreground">{hasLocation(place) ? `${translations.coordinates}: ${formatNumber(place.location.lat)}, ${formatNumber(place.location.lng)}` : translations.pinUnavailable}</p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <GooglePlaceMap
+              places={places}
+              selectedPlaceId={selectedPlaceId}
+              onMarkerSelect={setSelectedPlaceId}
+              missingTokenLabel={translations.missingMapToken}
+              unavailableLabel={translations.mapUnavailable}
+              emptyLabel={translations.noPins}
+              selectPlaceLabel={translations.selectPlace}
+              apiKey={apiKey}
+            />
 
             {selectedPlace && <PlaceDetail place={selectedPlace} translations={translations} />}
           </div>
@@ -238,7 +228,7 @@ function PlaceDetail({ place, translations }: { place: PlaceResult; translations
           <Detail label={translations.rating} value={place.rating?.toFixed(1) ?? translations.unknown} />
           <Detail label={translations.reviews} value={place.user_rating_count?.toString() ?? translations.unknown} />
           <Detail label={translations.businessStatus} value={place.business_status ?? translations.unknown} />
-          <Detail label={translations.openNow} value={place.open_now === true ? translations.openNow : place.open_now === false ? translations.closedNow : translations.openUnknown} />
+          <Detail label={translations.openNow === "Đang mở cửa" ? "Giờ hoạt động" : "Opening hours"} value={place.open_now === true ? translations.openNow : place.open_now === false ? translations.closedNow : translations.openUnknown} />
           <Detail label={translations.type} value={place.primary_type ?? (place.types.join(", ") || translations.unknown)} />
           <Detail label={translations.accessibility} value={accessibility === null ? (place.accessibility_warning ?? translations.unknown) : `${accessibility}%`} />
         </dl>

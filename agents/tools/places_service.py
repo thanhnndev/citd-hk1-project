@@ -207,7 +207,8 @@ class GooglePlacesService:
             "textQuery": request.query,
             "maxResultCount": request.max_result_count,
         }
-        # Optional location bias
+        # Text Search (New) accepts a circular location bias for soft ranking.
+        # Nearby Search still uses locationRestriction below.
         if request.location_bias:
             body["locationBias"] = {
                 "circle": {
@@ -220,6 +221,7 @@ class GooglePlacesService:
             }
         if request.included_type:
             body["includedType"] = request.included_type
+            body["strictTypeFiltering"] = request.strict_type_filtering
 
         return await self._execute_search(
             operation="text_search",
@@ -959,8 +961,8 @@ def _location(value: Any) -> LatLng | None:
     """Extract lat/lng from Google location object."""
     if not isinstance(value, dict):
         return None
-    lat = value.get("lat")
-    lng = value.get("lng")
+    lat = value.get("lat", value.get("latitude"))
+    lng = value.get("lng", value.get("longitude"))
     if lat is None or lng is None:
         return None
     return LatLng(lat=float(lat), lng=float(lng))

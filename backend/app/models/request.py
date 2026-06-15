@@ -80,6 +80,6 @@ class ChatRequest(BaseModel):
         description="User's current GPS coordinates for proximity scoring.",
     )
     accessibility_required: bool = Field(
-        default=True,
-        description="When true, prefer wheelchair-accessible venues in ranking.",
+        default=False,
+        description="When true, require provider-verified wheelchair entrance access.",
     )

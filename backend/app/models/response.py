@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.places import FairnessAudit, PlaceDecisionTrace
@@ -18,6 +20,7 @@ class ScoreBreakdown(BaseModel):
     popularity_damping: float = Field(description="Applied popularity damping penalty.")
     weights: dict[str, float] = Field(description="Weights applied to each component.")
     gate_passed: bool = Field(description="Whether the place passed the relevance/quality gate.")
+    gate_tier: str | None = Field(default=None, description="Tier level for the candidate: 'high' (gate passed) or 'low' (gate failed).")
     final_score: float = Field(description="Clipped final score, bounded to [0, 1].")
     rank: int = Field(description="1-based rank after stable sort by final_score descending.")
 
@@ -172,6 +175,16 @@ class PlaceResult(BaseModel):
         default=None,
         description="Specific accessibility caveat if known.",
     )
+    route_distance_meters: int | None = Field(
+        default=None,
+        ge=0,
+        description="Provider or route-service distance from the active origin.",
+    )
+    route_duration_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        description="Provider or route-service duration from the active origin.",
+    )
     map_uri: str = Field(
         description="Deep link to open the place in a provider map.",
     )
@@ -259,6 +272,20 @@ class EvalResultResponse(BaseModel):
         default_factory=dict,
         description="Evaluation metrics dict (empty when blocked).",
     )
+    threshold_results: dict = Field(
+        default_factory=dict,
+        description=(
+            "Per-metric threshold check results. Each key maps to a dict with "
+            "'score', 'threshold', and 'passed' fields."
+        ),
+    )
+    all_passed: bool = Field(
+        default=False,
+        description=(
+            "True when every evaluated metric meets or exceeds its threshold. "
+            "False when any metric falls below threshold or no metrics were evaluated."
+        ),
+    )
     timestamp: str = Field(
         description="ISO-8601 timestamp of the evaluation.",
     )
@@ -297,6 +324,13 @@ class TracesStatusResponse(BaseModel):
     )
     message: str = Field(
         description="Human-readable status message.",
+    )
+    recent_traces: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Recent trace summaries from Langfuse (trace_id, session_id, name, "
+            "timestamp, latency_ms, total_cost). None when disabled or unavailable."
+        ),
     )
 
 

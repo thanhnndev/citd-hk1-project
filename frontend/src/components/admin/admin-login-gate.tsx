@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getToken } from "@/lib/auth-store";
+import { getToken, getUser } from "@/lib/auth-store";
 import { Link } from "@/i18n/routing";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,7 @@ export function AdminLoginGate({
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setAuthenticated(getToken() !== null);
+    setAuthenticated(getToken() !== null && getUser()?.is_admin === true);
   }, []);
 
   // Still checking — render nothing to avoid flash

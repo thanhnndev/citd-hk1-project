@@ -3,11 +3,11 @@
  *
  * Tests cover:
  * - Successful proxied response (200)
- * - Backend 500 error passthrough
- * - Backend 400 error passthrough
- * - Backend unreachable (network error) → 502
- * - Malformed / empty body → 502 (catch-all)
- * - Fetch timeout → 502
+ * - Backend 500 error mapped to structured JSON
+ * - Backend 400 error mapped to structured JSON
+ * - Backend unreachable (network error) → 502 with structured JSON
+ * - Malformed / empty body → 502 (catch-all) with structured JSON
+ * - Fetch timeout → 502 with structured JSON
  *
  * Since `next/server` cannot be loaded outside the Next.js runtime,
  * the route handler's core logic is reproduced inline (identical to
@@ -58,12 +58,39 @@ async function routeHandlerPost(req: MockRequest): Promise<MockResponse> {
       body: JSON.stringify(body),
     });
 
+    if (!backendRes.ok) {
+      const errData = {
+        type: "provider_unavailable",
+        retryable: true,
+        message_vi: `Máy chủ AI trả về lỗi (${backendRes.status}). Vui lòng thử lại sau.`,
+        message_en: `AI server returned an error (${backendRes.status}). Please try again later.`,
+        next_action: "retry"
+      };
+      return mockNextResponseJson(
+        {
+          error: "provider_unavailable",
+          message: JSON.stringify(errData)
+        },
+        { status: backendRes.status }
+      );
+    }
+
     const data = await backendRes.json();
 
     return mockNextResponseJson(data, { status: backendRes.status });
   } catch {
+    const errData = {
+      type: "connection_offline",
+      retryable: false,
+      message_vi: "Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối. Yêu cầu của bạn chưa được thực hiện.",
+      message_en: "The Ham Ninh travel assistant is currently unreachable. Your request was not processed.",
+      next_action: "none"
+    };
     return mockNextResponseJson(
-      { error: "Backend unavailable" },
+      {
+        error: "connection_offline",
+        message: JSON.stringify(errData)
+      },
       { status: 502 },
     );
   }
@@ -129,7 +156,7 @@ describe("POST /api/chat — negative & edge-case tests", () => {
     assert.equal(res.headers["content-type"], "application/json");
   });
 
-  it("passes through backend 500 error as 500", async () => {
+  it("maps backend 500 error to structured JSON with 500 status", async () => {
     const errorPayload = { error: "Internal backend failure" };
 
     globalThis.fetch = async () =>
@@ -142,10 +169,15 @@ describe("POST /api/chat — negative & edge-case tests", () => {
     const res = await routeHandlerPost(validReq());
 
     assert.equal(res.status, 500);
-    assert.deepEqual(res.body, errorPayload);
+    const body = res.body as { error: string; message: string };
+    assert.equal(body.error, "provider_unavailable");
+    const parsed = JSON.parse(body.message);
+    assert.equal(parsed.type, "provider_unavailable");
+    assert.equal(parsed.retryable, true);
+    assert.match(parsed.message_vi, /lỗi \(500\)/);
   });
 
-  it("passes through backend 400 error as 400", async () => {
+  it("maps backend 400 error to structured JSON with 400 status", async () => {
     const errorPayload = {
       error: "validation_error",
       detail: "message field is required",
@@ -161,10 +193,15 @@ describe("POST /api/chat — negative & edge-case tests", () => {
     const res = await routeHandlerPost(validReq());
 
     assert.equal(res.status, 400);
-    assert.deepEqual(res.body, errorPayload);
+    const body = res.body as { error: string; message: string };
+    assert.equal(body.error, "provider_unavailable");
+    const parsed = JSON.parse(body.message);
+    assert.equal(parsed.type, "provider_unavailable");
+    assert.equal(parsed.retryable, true);
+    assert.match(parsed.message_vi, /lỗi \(400\)/);
   });
 
-  it("returns 502 when backend is unreachable (network error)", async () => {
+  it("returns 502 with structured offline JSON when backend is unreachable", async () => {
     globalThis.fetch = async () => {
       const err = new Error("fetch failed: ECONNREFUSED");
       err.name = "TypeError";
@@ -174,10 +211,15 @@ describe("POST /api/chat — negative & edge-case tests", () => {
     const res = await routeHandlerPost(validReq());
 
     assert.equal(res.status, 502);
-    assert.deepEqual(res.body, { error: "Backend unavailable" });
+    const body = res.body as { error: string; message: string };
+    assert.equal(body.error, "connection_offline");
+    const parsed = JSON.parse(body.message);
+    assert.equal(parsed.type, "connection_offline");
+    assert.equal(parsed.retryable, false);
+    assert.match(parsed.message_vi, /Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối/);
   });
 
-  it("returns 502 when fetch throws a timeout error", async () => {
+  it("returns 502 with structured offline JSON when fetch throws a timeout error", async () => {
     globalThis.fetch = async () => {
       const err = new Error("The operation was aborted due to timeout");
       err.name = "TimeoutError";
@@ -187,10 +229,15 @@ describe("POST /api/chat — negative & edge-case tests", () => {
     const res = await routeHandlerPost(validReq());
 
     assert.equal(res.status, 502);
-    assert.deepEqual(res.body, { error: "Backend unavailable" });
+    const body = res.body as { error: string; message: string };
+    assert.equal(body.error, "connection_offline");
+    const parsed = JSON.parse(body.message);
+    assert.equal(parsed.type, "connection_offline");
+    assert.equal(parsed.retryable, false);
+    assert.match(parsed.message_vi, /Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối/);
   });
 
-  it("returns 502 when request body is not valid JSON (empty/malformed body)", async () => {
+  it("returns 502 with structured offline JSON when request body is not valid JSON (empty/malformed body)", async () => {
     const badReq: MockRequest = {
       jsonBody: null,
       jsonError: new SyntaxError("Unexpected end of JSON input"),
@@ -207,12 +254,16 @@ describe("POST /api/chat — negative & edge-case tests", () => {
 
     const res = await routeHandlerPost(badReq);
 
-    // The catch-all handler returns 502 for any error, including JSON parse
     assert.equal(res.status, 502);
-    assert.deepEqual(res.body, { error: "Backend unavailable" });
+    const body = res.body as { error: string; message: string };
+    assert.equal(body.error, "connection_offline");
+    const parsed = JSON.parse(body.message);
+    assert.equal(parsed.type, "connection_offline");
+    assert.equal(parsed.retryable, false);
+    assert.match(parsed.message_vi, /Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối/);
   });
 
-  it("returns 502 when backend response is not valid JSON", async () => {
+  it("returns 502 with structured offline JSON when backend response is not valid JSON", async () => {
     globalThis.fetch = async () =>
       ({
         status: 200,
@@ -225,7 +276,12 @@ describe("POST /api/chat — negative & edge-case tests", () => {
     const res = await routeHandlerPost(validReq());
 
     assert.equal(res.status, 502);
-    assert.deepEqual(res.body, { error: "Backend unavailable" });
+    const body = res.body as { error: string; message: string };
+    assert.equal(body.error, "connection_offline");
+    const parsed = JSON.parse(body.message);
+    assert.equal(parsed.type, "connection_offline");
+    assert.equal(parsed.retryable, false);
+    assert.match(parsed.message_vi, /Hệ thống trợ lý du lịch Hàm Ninh hiện tại không thể kết nối/);
   });
 });
 

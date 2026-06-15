@@ -1,170 +1,81 @@
-# 🦀 Hàm Ninh AI Guide
+# Ham Ninh AI Guide
 
-> Trợ lý AI du lịch bền vững cho làng chài Hàm Ninh, Phú Quốc.
+AI travel assistant for Ham Ninh fishing village, Phu Quoc.
 
----
+The product combines grounded cultural answers, place search, deterministic fairness re-ranking, maps, and explicit agent run-state so users can inspect progress and evidence instead of reading a generic chatbot transcript.
 
-## 👥 Thành viên nhóm
+## Core Product Principles
 
-| MSSV | Họ và tên |
-|---|---|
-| 26410127 | Dương Quốc Thương |
-| 26410115 | Nông Nguyễn Thành |
-| 26410146 | Hoàng Võ Minh Tuấn |
-| 26410118 | Bùi Quốc Thịnh |
-| 26410024 | Trần Tiến Dũng |
+- The UI is an execution console: conversation, run state, evidence, artifacts, and recovery controls are separate concerns.
+- Responsible AI is enforced through retrieval grounding, guardrails, fairness audit metadata, score explanations, and evals. It is implemented as behavior, receipts, and quality gates, not as decorative marketing UI.
+- Place providers return candidates, not final recommendations. The backend filters and ranks candidates before presentation.
+- Recommendation scoring is deterministic and auditable. The project does not use hidden or trained ranking models.
 
----
+## Architecture
 
-## 📖 Giới thiệu
-
-Hàm Ninh AI Guide là hệ thống trợ lý AI du lịch bền vững kết hợp LangGraph-style agent orchestration, RAG, Places tooling và product-level recommendation suitability để hỗ trợ người dùng cuối khám phá làng chài Hàm Ninh, Phú Quốc, Kiên Giang.
-
-Hệ thống giải quyết 2 vấn đề cốt lõi:
-- Các nền tảng lớn ưu tiên cơ sở có ngân sách marketing → tiểu thương địa phương bị thiệt thòi
-- Thiếu thông tin văn hóa, lịch sử chính xác về làng chài Hàm Ninh
-
----
-
-## 🤖 Kiến trúc hệ thống
-
-### Agentic Chat System
-Hệ thống phối hợp LLM/tool-calling theo LangGraph-style StateGraph. LLM quyết định gọi tool hay trả lời trực tiếp; conditional edge chỉ kiểm tra tool calls. Các domain intent như văn hóa, địa điểm, hỏi đường không bị hard-route bằng keyword trước LLM.
-
-| Thành phần | Vai trò | File |
+| Area | Runtime role | Key files |
 |---|---|---|
-| **AgentService** | LangGraph orchestration: build graph, chạy LLM/tool loop, stream response | `agents/graph/agent_service.py` |
-| **Graph State & Tool Contract** | `AgentState`, timeout, tool schema, system prompt, optional LangGraph imports | `agents/graph/state.py` |
-| **Follow-up Context** | Lưu/khôi phục context hội thoại, resolve câu hỏi nối tiếp trước khi gọi tool | `agents/graph/followup.py` |
-| **Checkpointing** | In-memory/Postgres history + structured follow-up context persistence | `agents/graph/checkpointing.py` |
-| **Routing Helpers** | Safe conversational fallbacks, status/suggestion helpers; không hard-route domain intent | `agents/graph/routing.py` |
-| **GroundedAnswer** | Intent detection + grounded answers | `agents/guardrails/grounded_answer.py` |
-| **EnsembleReranker** | 3-tree Bagging + 2-step Boosting fairness | `agents/ml/ensemble_reranker.py` |
-| **PlaceRecommendationService** | Places provider candidates → recommendation frame → suitability → curated place results | `agents/services/place_recommendation_service.py` |
+| Agent state and tools | Typed state, tool contracts, prompt, timeouts | `agents/graph/state.py` |
+| Graph execution | LangGraph-style run, streaming, checkpointing | `agents/graph/ham_ninh_graph.py`, `agents/graph/streaming.py` |
+| Chat API | REST/SSE chat endpoints and resume/feedback routes | `backend/app/routers/chat.py` |
+| Retrieval | Hybrid/local corpus retrieval for cultural answers | `agents/tools/hybrid_retriever.py`, `agents/tools/retriever.py` |
+| Places | Provider search, normalization, routes, cache fallback | `agents/tools/places_service.py`, `agents/tools/routes_service.py` |
+| Recommendations | Suitability filtering, fairness re-ranking, explanation | `agents/services/place_recommendation_service.py`, `agents/ranking/fairness_reranker.py` |
+| Frontend | Next.js App Router chat, map, architecture, auth | `frontend/src/app`, `frontend/src/components` |
 
-### RAG Pipeline
-1. Câu hỏi → embedding (OpenAI text-embedding-3-small)
-2. Tìm tài liệu tương tự trong Qdrant (BM25 + dense hybrid)
-3. LLM sinh câu trả lời với strict grounding (gpt-4o-mini)
-4. Trả về kèm citation nguồn
+## Agent Run-State Contract
 
-### Places Recommendation Pipeline
-Provider Places chỉ trả candidates khớp truy vấn; hệ thống không xem đó là recommendation cuối cùng. `PlaceRecommendationService` xây `RecommendationFrame`, đánh giá `CandidateSuitability`, lọc các candidate không phù hợp vai trò chuyến đi, chạy ensemble reranking/fairness balancing, rồi tạo lý do gợi ý bằng ngôn ngữ người dùng cuối.
+The frontend consumes semantic status events, not internal node names:
 
-### Ensemble Re-ranking
-Kết hợp Bagging (3 Decision Trees song song) và Boosting (hiệu chỉnh tuần tự) để hỗ trợ xếp hạng địa điểm theo rating, khoảng cách, giá cả, giờ mở cửa, local_factor, độ khớp và các tín hiệu đã được chuẩn hóa. Tầng suitability/product curation đứng trước presentation để tránh trả raw provider dump cho người dùng.
+- `planning`
+- `gathering:knowledge`
+- `gathering:places`
+- `executing`
+- `waiting_for_user_input`
+- `waiting_for_approval`
+- `retrying`
+- `verifying`
+- `completed`
+- `failed-recoverable`
+- `failed-terminal`
 
----
+The UI should translate these into useful progress messages and receipts. Do not expose internal policy axes as progress steps.
 
-## 🔄 Data Pipeline
+## SSE Streaming Contract
 
-```
-data/cleaned/documents/*.md + data/entities/*.json
-        ↓ (PropositionChunker)
-data/tourism_documents.jsonl
-        ↓ (corpus_loader.py)
-Retriever (keyword) / Qdrant (hybrid dense+sparse)
-        ↓ (RAG via LLMAnswerService)
-Grounded answer with citations
-```
+`GET /chat/stream` is event streaming. Raw SSE data without a marker is reserved for real LLM token chunks emitted through LangGraph custom `token` events. Completed node responses from deterministic/tool paths are sent as `[MESSAGE] ...`, followed by structured markers such as `[PLACES]`, `[CITATIONS]`, `[SUGGESTIONS]`, `[REASONING]`, and `[DONE]`.
 
----
+Do not split completed `response_text` into fake token chunks. If a path cannot stream from the underlying model/provider, emit semantic status events and one `[MESSAGE]` receipt.
 
-## 🛠️ Tech Stack
+## Recommendation Pipeline
 
-| Lớp | Công nghệ |
-|---|---|
-| Frontend | Next.js 16, Tailwind CSS v4, next-intl |
-| Backend API | FastAPI 0.136, Python 3.12 |
-| AI Agents | LangGraph 1.2 (trong `agents/` package) |
-| LLM | OpenAI gpt-4o-mini, text-embedding-3-small |
-| Vector DB | Qdrant v1.13.6 (HNSW index) |
-| Database | PostgreSQL 17, Redis 8.0 |
-| Places/Routes | Goong REST API V2 Places + Distance Matrix |
-| Observability | Langfuse 4.6.1 |
+1. Provider tooling returns normalized place candidates.
+2. Preference and product-suitability filters remove candidates that do not fit the travel task.
+3. The deterministic fairness re-ranker scores relevance, proximity, quality, geo-locality, popularity damping, and accessibility signals.
+4. Fairness balancing and audit metadata record local representation, missing metadata, provider status, and fallback warnings.
+5. The frontend shows place cards, score explanations, provider evidence, and map links.
 
----
-
-## 🚀 Cài đặt & Chạy
+## Development
 
 ```bash
-# Clone project
-git clone https://github.com/thanhnndev/citd-hk1-project.git
-cd citd-hk1-project
-
-# Tạo file .env
 cp .env.example .env
-# Điền các API key vào file .env
-
-# Chạy toàn bộ hệ thống bằng Docker
 docker compose up
 ```
 
-## 📁 Cấu trúc project
+Useful checks:
 
-```
-citd-hk1-project/
-├── agents/                    # LangGraph-style Multi-Agent Orchestration
-│   ├── graph/
-│   │   ├── agent_service.py   # AgentService: graph build, LLM/tool loop, streaming
-│   │   ├── state.py           # AgentState, tool schemas, system prompt, timeouts
-│   │   ├── followup.py        # Structured follow-up context + pre-tool routing
-│   │   ├── checkpointing.py   # In-memory/Postgres conversation checkpointing
-│   │   └── routing.py         # Deterministic routing, fallbacks, suggestions
-│   ├── tools/
-│   │   ├── hybrid_retriever.py  # BM25 + Qdrant dense + keyword fallback
-│   │   ├── retriever.py         # In-memory keyword search
-│   │   ├── qdrant_service.py    # Qdrant vector DB
-│   │   ├── embedding_service.py # OpenAI embeddings
-│   │   ├── places_service.py    # Goong Places API V2
-│   │   ├── routes_service.py    # Goong Distance Matrix API
-│   │   ├── corpus_loader.py     # JSONL document ingestion
-│   │   └── proposition_chunker.py
-│   ├── guardrails/
-│   │   └── grounded_answer.py   # Intent detection + grounded answers
-│   ├── ml/
-│   │   ├── ensemble_reranker.py # 3-tree Bagging + Boosting
-│   │   └── feature_extractor.py # Feature engineering (6 features)
-│   ├── services/
-│   │   ├── llm_answer_service.py       # OpenAI LLM answers
-│   │   └── place_recommendation_service.py  # Places → Ensemble → rank
-│   └── requirements.txt
-│
-├── backend/                     # FastAPI API Gateway (thin wrapper)
-│   ├── app/
-│   │   ├── main.py              # Lifespan, router wiring, service init
-│   │   ├── routers/             # chat, health, admin, auth
-│   │   ├── models/              # Pydantic schemas
-│   │   ├── services/            # Backend-only: langfuse, jwt, email, user
-│   │   ├── middleware/          # auth, cors, rate_limiter, correlation
-│   │   └── core/                # config, logging
-│   ├── tests/
-│   ├── Dockerfile
-│   └── requirements.txt
-│
-├── frontend/                    # Next.js 16 UI
-│   ├── src/
-│   │   ├── app/                 # App Router (landing, chat, map, auth)
-│   │   ├── components/          # landing, chat, map, ui
-│   │   ├── lib/                 # api clients, auth store
-│   │   └── i18n/                # next-intl (vi, en)
-│   └── tests/
-│
-├── data/                        # Knowledge base
-│   ├── cleaned/documents/       # Source markdown files
-│   ├── tourism_documents.jsonl  # Ingested corpus
-│   └── reports/
-│
-├── docs/                        # Project documentation
-├── scripts/                     # Verification and ingestion scripts
-└── compose.yaml                 # Docker Compose (postgres, redis, qdrant, backend)
+```bash
+cd frontend
+npm run type-check
+npm run build
+node --test tests/s01-landing-contract.test.mjs tests/s05-messenger-chat-contract.test.mjs tests/s13-chat-redesign-contract.test.mjs
 ```
 
-## 📄 Tài liệu
+```bash
+PYTHONPATH=backend:. .venv/bin/pytest -q agents/graph/test_streaming.py
+```
+
+## Documentation
 
 - [Requirements](docs/REQUIREMENTS.md)
-- [Agentic Recommendation Architecture](docs/AGENTIC-RECOMMENDATION-ARCHITECTURE.md)
-
----
-
-*Đồ án môn học — Xây dựng ứng dụng AI có trách nhiệm cho cộng đồng địa phương.*
+- [Agent orchestration](backend/docs/agent_orchestration.md)

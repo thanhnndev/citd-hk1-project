@@ -24,12 +24,14 @@ export interface ChatRequest {
 /* ── Response shapes (backend: ChatResponse, Citation, PlaceResult) ── */
 
 export interface ScoreBreakdown {
-  tree1_locality: number;
-  tree2_proximity: number;
-  tree3_quality: number;
-  s_bag: number;
-  delta1_fairness: number;
-  delta2_access: number;
+  relevance: number;
+  proximity: number;
+  quality: number;
+  geo_locality: number;
+  popularity_damping: number;
+  weights?: Record<string, number>;
+  gate_passed?: boolean;
+  gate_tier?: string | null;
   final_score: number;
   rank: number;
 }
@@ -93,6 +95,8 @@ export interface PlaceResult {
   score_breakdown: ScoreBreakdown;
   accessibility_score?: number | null;
   accessibility_warning?: string | null;
+  route_distance_meters?: number | null;
+  route_duration_seconds?: number | null;
   map_uri: string;
   /** Structured why-this-recommendation data from backend. Never fabricated. */
   explanation?: PlaceExplanation;
@@ -120,11 +124,16 @@ export interface ChatResponse {
 }
 
 export type ChatStreamStatus =
-  | "understanding"
-  | "using_history"
-  | "searching_knowledge"
-  | "checking_places"
-  | "composing";
+  | "planning"
+  | "gathering:knowledge"
+  | "gathering:places"
+  | "executing"
+  | "waiting_for_user_input"
+  | "waiting_for_approval"
+  | "retrying"
+  | "verifying"
+  | "failed-recoverable"
+  | "failed-terminal";
 
 /**
  * Provider source vocabulary — reflects which provider actually served results.
@@ -139,21 +148,41 @@ export type ProviderSource = "google_places" | "goong_places" | "mock" | "cache"
  */
 export type ProviderStatus = "ok" | "empty" | "credentials_blocked" | "upstream_error" | "unavailable";
 
+export interface ChatHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface StreamChatCallbacks {
   onToken: (token: string) => void;
   onCitations: (citations: Citation[]) => void;
   onPlaces?: (places: PlaceResult[]) => void;
   onStatus?: (status: ChatStreamStatus) => void;
   onSuggestions?: (suggestions: string[]) => void;
+  onInterrupt?: (interruptData: InterruptData) => Promise<unknown | null>;
   onDone: () => void;
   onOpen?: () => void;
   onError: (error: string) => void;
+  onReasoning?: (reasoning: string) => void;
+}
+
+export interface InterruptData {
+  type: string;
+  message?: string;
+  requires_geolocation?: boolean;
+  [key: string]: any;
 }
 
 /* ── Error shape returned by the route handler on 502 ──────────────── */
 
 export interface ChatError {
-  error: string;
+  error?: string;
+  message?: string;
+  detail?: {
+    error?: string;
+    message?: string;
+    session_id?: string;
+  } | string;
 }
 
 /* ── Public API ────────────────────────────────────────────────────── */
@@ -172,12 +201,17 @@ export async function sendChat(
   message: string,
   sessionId?: string,
   language: "vi" | "en" = "vi",
+  budgetFilter?: string | null,
+  accessibilityRequired?: boolean,
+  userLocation?: LatLng | null,
 ): Promise<ChatResponse> {
   const body: ChatRequest = {
     session_id: sessionId ?? crypto.randomUUID(),
     message,
     language,
-    accessibility_required: true,
+    budget_filter: budgetFilter,
+    accessibility_required: accessibilityRequired ?? false,
+    user_location: userLocation ?? null,
   };
 
   const res = await fetch("/api/chat", {
@@ -188,7 +222,29 @@ export async function sendChat(
 
   if (!res.ok) {
     const data = (await res.json().catch(() => null)) as ChatError | null;
-    throw new Error(data?.error ?? `Chat request failed (${res.status})`);
+    const detail = typeof data?.detail === "object" ? data.detail : null;
+    throw new Error(
+      detail?.message ?? data?.message ?? data?.error ?? `Chat request failed (${res.status})`,
+    );
+  }
+
+  return (await res.json()) as ChatResponse;
+}
+
+export async function resumeChat(
+  sessionId: string,
+  resumeValue: unknown,
+): Promise<ChatResponse> {
+  const res = await fetch("/api/chat/resume", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, resume_value: resumeValue }),
+  });
+
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as ChatError | null;
+    const detail = typeof data?.detail === "object" ? data.detail : null;
+    throw new Error(detail?.message ?? data?.message ?? data?.error ?? `Resume failed (${res.status})`);
   }
 
   return (await res.json()) as ChatResponse;
@@ -199,12 +255,26 @@ export async function streamChat(
   sessionId: string,
   language: "vi" | "en",
   callbacks: StreamChatCallbacks,
+  budgetFilter?: string | null,
+  accessibilityRequired?: boolean,
+  userLocation?: LatLng | null,
 ): Promise<void> {
   const params = new URLSearchParams({
     message,
     session_id: sessionId,
     language,
   });
+
+  if (budgetFilter) {
+    params.set('budget', budgetFilter);
+  }
+  if (accessibilityRequired !== undefined) {
+    params.set('accessibility', String(accessibilityRequired));
+  }
+  if (userLocation) {
+    params.set('lat', String(userLocation.lat));
+    params.set('lng', String(userLocation.lng));
+  }
 
   const res = await fetch(`/api/chat/stream?${params.toString()}`, {
     headers: { Accept: "text/event-stream" },
@@ -249,7 +319,13 @@ export async function streamChat(
       }
 
       if (data.startsWith("[STATUS] ")) {
-        callbacks.onStatus?.(data.slice(9) as ChatStreamStatus);
+        const rawStatus = data.slice(9);
+        callbacks.onStatus?.(rawStatus as ChatStreamStatus);
+        continue;
+      }
+
+      if (data.startsWith("[MESSAGE] ")) {
+        callbacks.onToken(data.slice(10));
         continue;
       }
 
@@ -282,13 +358,71 @@ export async function streamChat(
         }
         continue;
       }
+      if (data.startsWith("[REASONING] ")) {
+        callbacks.onReasoning?.(data.slice(12));
+        continue;
+      }
 
       if (data.startsWith("[ERROR] ")) {
         callbacks.onError(data.slice(8));
         return;
       }
 
+      if (data.startsWith("[INTERRUPT] ")) {
+        try {
+          const interruptData = JSON.parse(data.slice(12)) as InterruptData;
+          if (callbacks.onInterrupt) {
+            const resumeValue = await callbacks.onInterrupt(interruptData);
+            if (resumeValue) {
+              const resumed = await resumeChat(sessionId, resumeValue);
+              callbacks.onCitations(resumed.citations ?? []);
+              callbacks.onPlaces?.(resumed.places ?? []);
+              if (resumed.suggestions?.length) {
+                callbacks.onSuggestions?.(resumed.suggestions);
+              }
+              if (resumed.message) {
+                callbacks.onToken(resumed.message);
+              }
+              callbacks.onDone();
+              return;
+            }
+          }
+          if (interruptData.message) {
+            callbacks.onToken(interruptData.message);
+          }
+          callbacks.onDone();
+          return;
+        } catch {
+          callbacks.onError("Invalid interrupt payload");
+          return;
+        }
+        continue;
+      }
+
       callbacks.onToken(data);
     }
+  }
+}
+
+/* ── Feedback API ─────────────────────────────────────────────────── */
+
+export interface FeedbackRequest {
+  message_id: string;
+  feedback_type: "like" | "dislike";
+  reason?: string | null;
+  session_id?: string | null;
+  turn_index?: number | null;
+  message_content?: string | null;
+}
+
+export async function submitFeedback(feedback: FeedbackRequest): Promise<void> {
+  const res = await fetch("/api/chat/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(feedback),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Feedback submission failed (${res.status})`);
   }
 }

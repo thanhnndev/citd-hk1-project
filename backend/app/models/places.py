@@ -13,6 +13,7 @@ from app.models.request import LatLng
 HAM_NINH_CENTER = LatLng(lat=10.1835208, lng=104.0496843)
 DEFAULT_SEARCH_RADIUS_METERS = 5_000
 MAX_SEARCH_RADIUS_METERS = 50_000
+MAX_DISTANCE_FROM_CENTER_METERS = 8_000  # Hard geographic boundary — candidates beyond this are filtered out
 
 
 class PlaceToolStatus(StrEnum):
@@ -87,6 +88,10 @@ class PlaceSearchRequest(BaseModel):
     location_bias: LatLng = Field(default_factory=lambda: HAM_NINH_CENTER.model_copy())
     radius_meters: int = Field(default=DEFAULT_SEARCH_RADIUS_METERS, ge=1, le=MAX_SEARCH_RADIUS_METERS)
     included_type: str | None = Field(default=None, min_length=1, max_length=80)
+    strict_type_filtering: bool = Field(
+        default=False,
+        description="When true, provider and post-provider filtering must enforce included_type.",
+    )
     max_result_count: int = Field(default=10, ge=1, le=20)
 
     # -- Preference contract (R043) --
@@ -259,7 +264,7 @@ class FairnessWarningType(StrEnum):
     MISSING_LOCAL_FACTOR_METADATA = "missing_geo_locality_metadata"
     PROVIDER_NON_OK = "provider_non_ok"
     ROUTE_ENRICHMENT_FALLBACK = "route_enrichment_fallback"
-    ENSEMBLE_FALLBACK = "ensemble_fallback"
+    RERANKING_FALLBACK = "reranking_fallback"
 
 
 class FairnessAudit(BaseModel):
@@ -329,7 +334,7 @@ PLACE_AUDIT_EVENTS = frozenset({
     "preference_filter_applied",
     "preference_filter_skipped",
     # Rerank phase
-    "reranking_ensemble",
+    "reranking_completed",
     "reranking_fallback",
     # Fairness phase
     "fairness_balanced",

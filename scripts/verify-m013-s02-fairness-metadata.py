@@ -80,7 +80,7 @@ def check_model_imports() -> int:
             "missing_local_factor_metadata",
             "provider_non_ok",
             "route_enrichment_fallback",
-            "ensemble_fallback",
+            "reranking_fallback",
         }
         actual_warnings = {w.value for w in FairnessWarningType}
         if actual_warnings != expected_warnings:

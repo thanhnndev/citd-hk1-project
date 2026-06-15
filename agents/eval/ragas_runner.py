@@ -10,6 +10,8 @@ Observability:
         - ragas.eval.blocked (reason=credential_missing)
         - ragas.eval.failed (error_type)
     Results persisted to data/eval_results/ as timestamped JSON.
+    When a Langfuse client is provided, scores are logged to Langfuse for
+    centralized observability alongside agent traces.
 """
 
 import json
@@ -94,6 +96,9 @@ class RAGASEvaluator:
         Metric names to compute. Defaults to all four.
     corpus_path : str | Path | None
         Path to tourism_documents.jsonl for context look-up.
+    langfuse_client : Any | None
+        Langfuse client instance. When provided, evaluation scores are
+        logged to Langfuse for centralized observability.
     """
 
     def __init__(
@@ -101,10 +106,12 @@ class RAGASEvaluator:
         openai_api_key: str | None = None,
         metrics: list[str] | None = None,
         corpus_path: str | Path | None = None,
+        langfuse_client: Any | None = None,
     ) -> None:
         self.openai_api_key = openai_api_key
         self.metric_names = metrics or _ALL_METRIC_NAMES
         self.corpus_path = corpus_path
+        self.langfuse_client = langfuse_client
 
     # -- public ----------------------------------------------------------------
 
@@ -197,6 +204,13 @@ class RAGASEvaluator:
             # Persist to disk
             saved_path = self._save_results(result_dict)
             result_dict["saved_to"] = str(saved_path)
+
+            # Log scores to Langfuse for centralized observability
+            self._log_to_langfuse(
+                scores=scores,
+                dataset_size=dataset_size,
+                latency_seconds=latency,
+            )
 
             logger.info(
                 "ragas.eval.completed",
@@ -388,3 +402,97 @@ class RAGASEvaluator:
     def _log_blocked(self, reason: str) -> None:
         """Log credential-blocked event."""
         logger.info("ragas.eval.blocked", reason=reason)
+
+    def _log_to_langfuse(
+        self,
+        scores: dict,
+        dataset_size: int,
+        latency_seconds: float,
+    ) -> None:
+        """Log RAGAS evaluation scores to Langfuse.
+
+        Creates a trace for the evaluation run and logs each aggregate
+        metric as a Langfuse score. Per-question scores are logged as
+        individual scores with question index metadata.
+        """
+        if self.langfuse_client is None:
+            logger.info("ragas.langfuse.skipped", reason="langfuse_client is None")
+            return
+
+        try:
+            aggregate = scores.get("aggregate", {})
+            per_question = scores.get("per_question", [])
+
+            logger.info(
+                "ragas.langfuse.sending",
+                aggregate_scores=aggregate,
+                per_question_count=len(per_question),
+            )
+
+            # Create a trace for this evaluation run
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            with self.langfuse_client.start_as_current_observation(
+                name="ragas-evaluation",
+                as_type="agent",
+                input={
+                    "dataset_size": dataset_size,
+                    "metrics_requested": self.metric_names,
+                },
+                metadata={
+                    "pipeline": "ragas",
+                    "timestamp": ts,
+                },
+            ) as observation:
+                observation.set_trace_io(
+                    input={
+                        "dataset_size": dataset_size,
+                        "metrics_requested": self.metric_names,
+                    },
+                    output={
+                        "aggregate_scores": aggregate,
+                        "per_question_count": len(per_question),
+                    },
+                )
+
+                # Log aggregate scores to the trace
+                for metric_name, score_value in aggregate.items():
+                    observation.score_trace(
+                        name=f"ragas.{metric_name}",
+                        value=score_value,
+                        data_type="NUMERIC",
+                        comment=f"RAGAS {metric_name} (aggregate, n={dataset_size})",
+                    )
+
+                # Log per-question scores to the observation
+                for idx, q_scores in enumerate(per_question):
+                    for metric_name, score_value in q_scores.items():
+                        if score_value is not None:
+                            observation.score(
+                                name=f"ragas.{metric_name}.q{idx}",
+                                value=score_value,
+                                data_type="NUMERIC",
+                                comment=f"RAGAS {metric_name} (question {idx + 1}/{len(per_question)})",
+                            )
+
+                observation.update(
+                    output={
+                        "aggregate_scores": aggregate,
+                        "per_question_count": len(per_question),
+                        "latency_seconds": round(latency_seconds, 2),
+                    },
+                )
+
+            # Flush to ensure all buffered events are sent to Langfuse
+            self.langfuse_client.flush()
+
+            logger.info(
+                "ragas.langfuse.logged",
+                aggregate_scores=aggregate,
+                per_question_count=len(per_question),
+            )
+        except Exception as exc:
+            logger.warning(
+                "ragas.langfuse.failed",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )

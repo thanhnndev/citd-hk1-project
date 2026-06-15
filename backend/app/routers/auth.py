@@ -84,6 +84,7 @@ async def register(body: RegisterRequest, request: Request) -> UserResponse:
         email=user.email,
         is_active=user.is_active,
         is_verified=user.is_verified,
+        is_admin=user.is_admin,
         created_at=user.created_at,
     )
 
@@ -215,5 +216,6 @@ async def me(request: Request) -> UserResponse:
         email=user.email,
         is_active=user.is_active,
         is_verified=user.is_verified,
+        is_admin=user.is_admin,
         created_at=user.created_at,
     )

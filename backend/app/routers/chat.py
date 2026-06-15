@@ -1,52 +1,73 @@
-"""Chat endpoints - primary user-facing API for the assistant.
+"""Chat transport for the single HamNinhGraph runtime."""
 
-Routes both POST and SSE chat transports through the shared AgentService while
-preserving the established response and stream wire contracts.
-"""
+from __future__ import annotations
 
+import datetime
+import json
 import time
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.middleware.rate_limiter import get_limiter
 from app.models.request import ChatRequest
 from app.models.response import ChatResponse
 
-# Guardrails — input screening and output grounding
-try:
-    from agents.guardrails.input_guardrails import (
-        block_injection,
-        reject_off_topic,
-    )
-    from agents.guardrails.output_guardrails import verify_grounding
-    _GUARDRAILS_AVAILABLE = True
-except Exception:
-    _GUARDRAILS_AVAILABLE = False
-
 logger = structlog.get_logger(__name__)
-
 router = APIRouter(prefix="/chat")
 limiter = get_limiter()
 chat_rate_limit = get_settings().RATE_LIMIT_CHAT
+FEEDBACK_LOG_PATH = Path("/tmp/chat_feedback.jsonl")
 
 
+class FeedbackRequest(BaseModel):
+    message_id: str
+    feedback_type: str
+    reason: str | None = None
+    session_id: str | None = None
+    turn_index: int | None = None
+    message_content: str | None = None
 
-def _error_stream(reason: str) -> StreamingResponse:
-    async def event_generator() -> AsyncGenerator[str, None]:
-        yield f"data: [ERROR] {reason}\n\n"
-        yield "data: [DONE]\n\n"
 
-    return _streaming_response(event_generator())
+class ResumeRequest(BaseModel):
+    session_id: str
+    resume_value: dict = Field(description="JSON value returned from the pending interrupt")
+
+
+def _graph(request: Request):
+    graph = getattr(request.app.state, "ham_ninh_graph", None)
+    if graph is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "service_unavailable",
+                "message": "The agent graph is not available.",
+            },
+        )
+    return graph
+
+
+def _chat_response(session_id: str, graph_result, started: float) -> ChatResponse:
+    return ChatResponse(
+        session_id=session_id,
+        message=graph_result.response_text or "Mình chưa thể tạo câu trả lời.",
+        intent=graph_result.intent or "unknown",
+        citations=graph_result.citations or [],
+        places=graph_result.places or [],
+        suggestions=graph_result.suggestions or [],
+        reasoning_log=graph_result.reasoning_log,
+        fallback=graph_result.blocked,
+        latency_ms=round((time.perf_counter() - started) * 1000, 3),
+        langfuse_trace_id=graph_result.langfuse_trace_id,
+    )
 
 
 def _sse_payload(value: str) -> str:
-    # SSE data payloads cannot contain raw newlines in a single data line.
-    # Emit multi-line payloads using repeated data: fields so clients can
-    # reconstruct assistant messages with paragraphs/lists intact.
     lines = str(value).splitlines() or [""]
     return "".join(f"data: {line}\n" for line in lines) + "\n"
 
@@ -59,132 +80,98 @@ def _streaming_response(generator: AsyncGenerator[str, None]) -> StreamingRespon
     )
 
 
-def _agent_service_available(request: Request) -> bool:
-    """Preserve legacy unavailable behavior when startup loaded no corpus."""
-    return (
-        getattr(request.app.state, "agent_service", None) is not None
-        and (
-            getattr(request.app.state, "retriever", None) is not None
-            or getattr(request.app.state, "hybrid_retriever", None) is not None
+def _error_stream(error_type: str, message: str, retryable: bool) -> StreamingResponse:
+    async def events() -> AsyncGenerator[str, None]:
+        payload = {
+            "type": error_type,
+            "message": message,
+            "retryable": retryable,
+            "next_action": "retry" if retryable else "check_service",
+        }
+        yield _sse_payload("[STATUS] failed-recoverable" if retryable else "[STATUS] failed-terminal")
+        yield _sse_payload(f"[ERROR] {json.dumps(payload, ensure_ascii=False)}")
+        yield _sse_payload("[DONE]")
+
+    return _streaming_response(events())
+
+
+@router.post("/feedback")
+async def submit_feedback(feedback: FeedbackRequest) -> dict[str, str]:
+    data = {
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+        "message_id": feedback.message_id,
+        "feedback_type": feedback.feedback_type,
+        "reason": feedback.reason,
+        "session_id": feedback.session_id,
+        "turn_index": feedback.turn_index,
+        "message_content": feedback.message_content[:200] if feedback.message_content else None,
+    }
+    try:
+        FEEDBACK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with FEEDBACK_LOG_PATH.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(data, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        logger.error("feedback.log_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to log feedback") from exc
+    return {"status": "ok", "message_id": feedback.message_id}
+
+
+@router.post("/resume", response_model=ChatResponse)
+async def resume_graph(body: ResumeRequest, request: Request) -> ChatResponse:
+    started = time.perf_counter()
+    try:
+        result = await _graph(request).resume(
+            session_id=body.session_id,
+            resume_value=body.resume_value,
         )
-    )
+        return _chat_response(body.session_id, result, started)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("chat.resume_failed", session_id=body.session_id)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "resume_failed",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+
 
 @router.post("", response_model=ChatResponse)
 @limiter.limit(chat_rate_limit)
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
-    """Answer a user query through the shared agent service."""
-    t0 = time.perf_counter()
-    agent_service = getattr(request.app.state, "agent_service", None)
-
-    if not _agent_service_available(request):
-        logger.error("chat.agent_unavailable", session_id=body.session_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error": "service_unavailable",
-                "message": "Corpus not loaded. The assistant is initializing or failed to load its knowledge base.",
-                "session_id": body.session_id,
-            },
+    started = time.perf_counter()
+    try:
+        user_location = None
+        if body.user_location is not None:
+            user_location = {
+                "lat": body.user_location.lat,
+                "lng": body.user_location.lng,
+            }
+        result = await _graph(request).answer(
+            session_id=body.session_id,
+            message=body.message,
+            language=body.language,
+            user_location=user_location,
+            budget_filter=body.budget_filter,
+            accessibility_required=body.accessibility_required,
         )
+        return _chat_response(body.session_id, result, started)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("chat.graph_failed", session_id=body.session_id)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "agent_failed",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
 
-    # --- Input guardrails ---
-    if _GUARDRAILS_AVAILABLE:
-        try:
-            injection_result = block_injection(body.message)
-            if injection_result.verdict == "blocked":
-                logger.warning(
-                    "guardrail.input_blocked_endpoint",
-                    session_id=body.session_id,
-                    reason=injection_result.reason,
-                    details=injection_result.details,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "input_blocked",
-                        "message": injection_result.reason or "Input blocked by security guardrails.",
-                        "session_id": body.session_id,
-                    },
-                )
-
-            topic_result = reject_off_topic(body.message)
-            if topic_result.verdict == "blocked":
-                logger.warning(
-                    "guardrail.topic_rejected_endpoint",
-                    session_id=body.session_id,
-                    reason=topic_result.reason,
-                    details=topic_result.details,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "off_topic",
-                        "message": (
-                            "This query is outside the scope of the tourism assistant. "
-                        "Please ask about travel, dining, or attractions."
-                    ),
-                    "session_id": body.session_id,
-                },
-            )
-        except HTTPException:
-            raise  # re-raise intentional guardrail blocks
-        except Exception as exc:
-            logger.warning(
-                "guardrail.degraded",
-                session_id=body.session_id,
-                error=str(exc),
-                reason="input_guardrail_crash",
-            )
-            # Fail-open: continue to agent service
-
-    if hasattr(agent_service, "_llm_service"):
-        agent_service._llm_service = getattr(request.app.state, "llm_service", None)
-
-    response = await agent_service.answer(
-        session_id=body.session_id,
-        message=body.message,
-        language=body.language,
-    )
-
-    # --- Output grounding check ---
-    if _GUARDRAILS_AVAILABLE:
-        try:
-            grounding_result = verify_grounding(response.message, response.citations)
-            if grounding_result.verdict == "flagged":
-                response.guardrail_status = "output_flagged"
-                response.guardrail_reason = grounding_result.reason
-                logger.warning(
-                    "guardrail.output_flagged_endpoint",
-                    session_id=body.session_id,
-                    reason=grounding_result.reason,
-                    details=grounding_result.details,
-                )
-            else:
-                response.guardrail_status = "pass"
-        except Exception as exc:
-            logger.warning(
-                "guardrail.degraded",
-                session_id=body.session_id,
-                error=str(exc),
-                reason="grounding_check_crash",
-            )
-            # Fail-open: request still passes through
-    else:
-        logger.debug("guardrail.degraded", reason="guardrails_not_available")
-
-    elapsed = (time.perf_counter() - t0) * 1000
-    logger.info(
-        "chat.response",
-        session_id=body.session_id,
-        intent=response.intent,
-        latency_ms=response.latency_ms,
-        total_ms=round(elapsed, 3),
-        has_citations=len(response.citations) > 0,
-        checkpoint_mode=getattr(agent_service, "checkpoint_mode", None),
-        fallback=response.fallback,
-    )
-
-    return response
 
 @router.get("/stream")
 @limiter.limit(chat_rate_limit)
@@ -193,95 +180,44 @@ async def chat_stream(
     message: str = Query(...),
     session_id: str = Query(...),
     language: str = Query("vi"),
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
+    budget: str | None = Query(None),
+    accessibility: bool = Query(False),
 ) -> StreamingResponse:
-    """Stream a grounded assistant answer as Server-Sent Events."""
     query = message.strip()
     sid = session_id.strip()
     if not query or not sid:
-        return _error_stream("invalid_request")
+        return _error_stream("invalid_request", "Message and session_id are required.", False)
 
-    # --- Input guardrails (before stream starts) ---
-    if _GUARDRAILS_AVAILABLE:
+    try:
+        graph = _graph(request)
+    except HTTPException:
+        return _error_stream("service_unavailable", "The agent graph is not available.", True)
+
+    user_location = {"lat": lat, "lng": lng} if lat is not None and lng is not None else None
+
+    async def events() -> AsyncGenerator[str, None]:
         try:
-            injection_result = block_injection(query)
-            if injection_result.verdict == "blocked":
-                logger.warning(
-                    "guardrail.input_blocked_stream",
-                    session_id=sid,
-                    reason=injection_result.reason,
-                )
-                return _error_stream(f"input_blocked: {injection_result.reason}")
-
-            topic_result = reject_off_topic(query)
-            if topic_result.verdict == "blocked":
-                logger.warning(
-                    "guardrail.topic_rejected_stream",
-                    session_id=sid,
-                    reason=topic_result.reason,
-                )
-                return _error_stream(
-                    "off_topic: This query is outside the scope of the tourism assistant."
-                )
-        except Exception as exc:
-            logger.warning(
-                "guardrail.degraded",
-                session_id=sid,
-                error=str(exc),
-                reason="input_guardrail_crash_stream",
-            )
-            # Fail-open: continue to stream
-
-    agent_service = getattr(request.app.state, "agent_service", None)
-    can_answer_without_corpus = bool(
-        agent_service is not None
-        and hasattr(agent_service, "can_answer_without_corpus")
-        and agent_service.can_answer_without_corpus(query)
-    )
-    if not _agent_service_available(request) and not can_answer_without_corpus:
-        logger.error("sse.stream_error", reason="service_unavailable", session_id=sid)
-        return _error_stream("service_unavailable")
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        logger.info(
-            "sse.stream_start",
-            language=language,
-            session_id=sid,
-            checkpoint_mode=getattr(agent_service, "checkpoint_mode", None),
-        )
-        try:
-            async for event in agent_service.answer_stream(
+            async for marker in graph.stream_sse(
                 session_id=sid,
                 message=query,
                 language=language,
+                user_location=user_location,
+                budget_filter=budget,
+                accessibility_required=accessibility,
             ):
-                yield _sse_payload(event)
+                yield _sse_payload(marker)
         except Exception as exc:
-            reason = type(exc).__name__
-            logger.error("sse.stream_error", error=str(exc), reason=reason, session_id=sid)
-            yield _sse_payload(f"[ERROR] {reason}")
-            yield _sse_payload("[DONE]")
-            return
-
-        # --- Output guardrails (post-stream, cannot block — tokens already sent) ---
-        if _GUARDRAILS_AVAILABLE:
-            try:
-                # Output guardrails need the full message and citations;
-                # in stream mode we log a degraded notice since we can't
-                # reconstruct the full response from SSE events here.
-                logger.info(
-                    "guardrail.degraded",
-                    session_id=sid,
-                    reason="output_guardrail_not_applicable_stream",
-                    details="Streaming responses cannot be re-validated after tokens are sent.",
-                )
-            except Exception as exc:
-                logger.warning(
-                    "guardrail.degraded",
-                    session_id=sid,
-                    error=str(exc),
-                )
-
-        logger.info("sse.stream_complete", session_id=sid)
+            logger.exception("chat.stream_failed", session_id=sid)
+            payload = {
+                "type": type(exc).__name__,
+                "message": "Agent execution failed. It is safe to retry.",
+                "retryable": True,
+                "next_action": "retry",
+            }
+            yield _sse_payload("[STATUS] failed-recoverable")
+            yield _sse_payload(f"[ERROR] {json.dumps(payload)}")
         yield _sse_payload("[DONE]")
 
-    return _streaming_response(event_generator())
+    return _streaming_response(events())

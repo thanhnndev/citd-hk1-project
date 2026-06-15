@@ -168,7 +168,7 @@ async function installChatMocks(page, seenRequests) {
     const body = JSON.parse(route.request().postData() ?? '{}');
     seenRequests.push({ ...body, kind: 'post' });
 
-    // Place intent: return 2 re-ranked PlaceResult cards with full ensemble score_breakdown
+    // Place intent: return 2 re-ranked PlaceResult cards with full score_breakdown
     if (body.message === PLACE_QUESTION) {
       return route.fulfill({
         status: 200,
@@ -192,12 +192,13 @@ async function installChatMocks(page, seenRequests) {
               local_factor: 0.92,
               final_score: 0.87,
               score_breakdown: {
-                tree1_locality: 0.95,
-                tree2_proximity: 0.88,
-                tree3_quality: 0.85,
-                s_bag: 0.80,
-                delta1_fairness: 0.90,
-                delta2_access: 0.82,
+                relevance: 0.95,
+                proximity: 0.88,
+                quality: 0.85,
+                geo_locality: 0.92,
+                popularity_damping: 0.04,
+                weights: { relevance: 0.4, proximity: 0.25, quality: 0.2, geo_locality: 0.15 },
+                gate_passed: true,
                 final_score: 0.87,
                 rank: 1,
               },
@@ -217,12 +218,13 @@ async function installChatMocks(page, seenRequests) {
               local_factor: 0.85,
               final_score: 0.79,
               score_breakdown: {
-                tree1_locality: 0.90,
-                tree2_proximity: 0.82,
-                tree3_quality: 0.78,
-                s_bag: 0.75,
-                delta1_fairness: 0.80,
-                delta2_access: 0.76,
+                relevance: 0.9,
+                proximity: 0.82,
+                quality: 0.78,
+                geo_locality: 0.85,
+                popularity_damping: 0.05,
+                weights: { relevance: 0.4, proximity: 0.25, quality: 0.2, geo_locality: 0.15 },
+                gate_passed: true,
                 final_score: 0.79,
                 rank: 2,
               },
